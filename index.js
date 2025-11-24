@@ -71,11 +71,28 @@ app.post("/ghl/form-webhook", async (req, res) => {
     tags: contact.tags,
   });
 
-  const cf = contact.customField || contact.customFields || {};
-  const howSoonValue =
-    cf["how_soon_is_client_deciding"] ||
-    cf["howSoonIsClientDeciding"] ||
-    null;
+    // 🔹 Extract how_soon_is_client_deciding in a robust way
+  const cfRaw = contact.customField || contact.customFields || {};
+  console.log("Contact customField raw:", JSON.stringify(cfRaw, null, 2));
+
+  let howSoonValue = null;
+
+  if (Array.isArray(cfRaw)) {
+    // If GHL returns an array of { id/key, value }
+    const match = cfRaw.find((f) =>
+      f &&
+      (f.key === "how_soon_is_client_deciding" ||
+       f.id === "how_soon_is_client_deciding" ||
+       f.customFieldId === "how_soon_is_client_deciding")
+    );
+    howSoonValue = match?.value || null;
+  } else {
+    // If GHL returns an object map
+    howSoonValue =
+      cfRaw["how_soon_is_client_deciding"] ||
+      cfRaw["howSoonIsClientDeciding"] ||
+      null;
+  }
 
   const leadTemperature = decideLeadTemperature(howSoonValue);
   const aiPhase = initialPhaseForNewIntake();
@@ -86,6 +103,13 @@ app.post("/ghl/form-webhook", async (req, res) => {
     aiPhase,
     howSoonValue,
   });
+
+  await updateSystemFields(contactId, {
+    ai_phase: aiPhase,
+    lead_temperature: leadTemperature,
+    last_phase_update_at: nowIso,
+  });
+
 
   await updateSystemFields(contactId, {
     ai_phase: aiPhase,
