@@ -1,11 +1,26 @@
 require("dotenv").config();
 
 const express = require("express");
-const { getContact, upsertContactFromWidget } = require("./ghlClient"); // ⬅️ add upsert
+const cors = require("cors");
+const { getContact, upsertContactFromWidget } = require("./ghlClient");
 const app = express();
 
 app.use(express.json());
 
+// 🔹 Allow your widget to call this API from the browser
+app.use(
+  cors({
+    origin: "*", // for now allow all; we can tighten this later
+    methods: ["GET", "POST", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Authorization"],
+  })
+);
+
+// (Optional but nice): log every request method + path
+app.use((req, res, next) => {
+  console.log(`${req.method} ${req.url}`);
+  next();
+});
 
 // Temporary test route (you can keep this)
 app.get("/", (req, res) => {
