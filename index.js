@@ -71,7 +71,6 @@ app.post("/ghl/form-webhook", async (req, res) => {
     tags: contact.tags,
   });
 
-  // 🔹 Extract how_soon_is_client_deciding from contact.customField
   const cf = contact.customField || contact.customFields || {};
   const howSoonValue =
     cf["how_soon_is_client_deciding"] ||
@@ -96,29 +95,6 @@ app.post("/ghl/form-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for form webhook");
 
-  res.status(200).send("OK");
-});
-
-
-  // Fetch contact from GHL
-  const contact = await getContact(contactId);
-
-  if (!contact) {
-    console.warn("⚠️ Could not load contact from GHL for id:", contactId);
-    return res.status(200).send("OK");
-  }
-
-  // Log a cleaner summary we’ll use later
-  console.log("✅ Loaded Contact from GHL (form webhook):", {
-    id: contact.id || contact._id,
-    firstName: contact.firstName || contact.first_name,
-    lastName: contact.lastName || contact.last_name,
-    email: contact.email,
-    phone: contact.phone,
-    tags: contact.tags,
-  });
-
-  // In future: we’ll derive ai_phase & lead_temperature here.
   res.status(200).send("OK");
 });
 
@@ -179,22 +155,6 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for message webhook");
 
-  res.status(200).send("OK");
-});
-
-  console.log("✅ Loaded Contact from GHL (message webhook):", {
-    id: contact.id || contact._id,
-    firstName: contact.firstName || contact.first_name,
-    lastName: contact.lastName || contact.last_name,
-    email: contact.email,
-    phone: contact.phone,
-    tags: contact.tags,
-  });
-
-  // Later we’ll also:
-  // - Fetch the latest message text & attachments
-  // - Decide ai_phase & lead_temperature
-  // - Call the AI Setter
   res.status(200).send("OK");
 });
 
