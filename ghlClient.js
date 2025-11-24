@@ -15,19 +15,19 @@ const ghl = axios.create({
 // 🔹 Map widget custom field keys -> actual GHL custom field IDs
 // TODO: replace EACH "CF_xxx_FILL_ME" with the real ID from Settings → Custom Fields
 const CUSTOM_FIELD_MAP = {
-  language_preference: "{{contact.language_preference}}",
-  inquired_technician: "{{contact.inquired_technician}}",
-  whatsapp_user: "{{contact.whatsapp_user}}",
-  tattoo_title: "{{contact.tattoo_title}}",
-  tattoo_summary: "{{contact.tattoo_summary}}",
-  tattoo_placement: "{{contact.tattoo_placement}}",
-  tattoo_style: "{{contact.tattoo_style}}",
-  size_of_tattoo: "{{contact.size_of_tattoo}}",
-  tattoo_color_preference: "{{contact.tattoo_color_preference}}",
-  how_soon_is_client_deciding: "{{contact.how_soon_is_client_deciding}}",
-  first_tattoo: "{{contact.first_tattoo}}",
-  tattoo_concerns: "{{contact.tattoo_concerns}}",
-  tattoo_photo_description: "{{contact.tattoo_photo_description}}",
+  language_preference: "language_preference",
+  inquired_technician: "inquired_technician",
+  whatsapp_user: "whatsapp_user",
+  tattoo_title: "tattoo_title",
+  tattoo_summary: "tattoo_summary",
+  tattoo_placement: "tattoo_placement",
+  tattoo_style: "tattoo_style",
+  size_of_tattoo: "size_of_tattoo",
+  tattoo_color_preference: "tattoo_color_preference}}",
+  how_soon_is_client_deciding: "how_soon_is_client_deciding",
+  first_tattoo: "first_tattoo",
+  tattoo_concerns: "tattoo_concerns",
+  tattoo_photo_description: "tattoo_photo_description",
 };
 
 // Convert widget customFields → GHL v1 customField object
