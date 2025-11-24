@@ -130,7 +130,7 @@ app.post("/ghl/form-webhook", async (req, res) => {
   console.log("✅ System fields updated for form webhook");
 
   res.status(200).send("OK");
-
+});
 
 
 // Webhook to receive conversation messages from GoHighLevel
