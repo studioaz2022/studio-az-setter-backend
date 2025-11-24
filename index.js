@@ -71,27 +71,44 @@ app.post("/ghl/form-webhook", async (req, res) => {
     tags: contact.tags,
   });
 
-    // 🔹 Extract how_soon_is_client_deciding in a robust way
+      // 🔹 Extract how_soon_is_client_deciding in a robust way
   const cfRaw = contact.customField || contact.customFields || {};
   console.log("Contact customField raw:", JSON.stringify(cfRaw, null, 2));
 
   let howSoonValue = null;
 
+  // 1) Try from contact.customField (object or array)
   if (Array.isArray(cfRaw)) {
-    // If GHL returns an array of { id/key, value }
-    const match = cfRaw.find((f) =>
-      f &&
-      (f.key === "how_soon_is_client_deciding" ||
-       f.id === "how_soon_is_client_deciding" ||
-       f.customFieldId === "how_soon_is_client_deciding")
+    const match = cfRaw.find(
+      (f) =>
+        f &&
+        (
+          f.key === "how_soon_is_client_deciding" ||
+          f.id === "how_soon_is_client_deciding" ||
+          f.customFieldId === "how_soon_is_client_deciding"
+        )
     );
     howSoonValue = match?.value || null;
   } else {
-    // If GHL returns an object map
     howSoonValue =
       cfRaw["how_soon_is_client_deciding"] ||
       cfRaw["howSoonIsClientDeciding"] ||
       null;
+  }
+
+  // 2) If still null, FALL BACK to the webhook body (what GHL just sent us)
+  if (!howSoonValue) {
+    const rawBody = req.body || {};
+    // Your log shows "How Soon Is Client Deciding?" as the label
+    for (const [key, value] of Object.entries(rawBody)) {
+      if (
+        typeof key === "string" &&
+        key.toLowerCase().includes("how soon is client deciding")
+      ) {
+        howSoonValue = value;
+        break;
+      }
+    }
   }
 
   const leadTemperature = decideLeadTemperature(howSoonValue);
@@ -110,17 +127,10 @@ app.post("/ghl/form-webhook", async (req, res) => {
     last_phase_update_at: nowIso,
   });
 
-
-  await updateSystemFields(contactId, {
-    ai_phase: aiPhase,
-    lead_temperature: leadTemperature,
-    last_phase_update_at: nowIso,
-  });
-
   console.log("✅ System fields updated for form webhook");
 
   res.status(200).send("OK");
-});
+
 
 
 // Webhook to receive conversation messages from GoHighLevel
