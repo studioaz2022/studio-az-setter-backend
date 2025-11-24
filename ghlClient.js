@@ -1,26 +1,83 @@
 require("dotenv").config();
 
-const express = require("express");
-const { getContact } = require("./ghlClient"); // 👈 new
-const app = express();
-
-app.use(express.json());
+// ghlClient.js
 const axios = require("axios");
 
-// Base URL & headers for GHL API (v1 contacts)
+// Axios client for GHL v1 API
 const ghl = axios.create({
-  baseURL: "https://rest.gohighlevel.com", // v1 base URL for contacts :contentReference[oaicite:0]{index=0}
+  baseURL: "https://rest.gohighlevel.com", // v1 base
   headers: {
     Authorization: `Bearer ${process.env.GHL_API_KEY}`,
     "Content-Type": "application/json",
-    Version: "2021-07-28", // required header for many GHL endpoints :contentReference[oaicite:1]{index=1}
   },
 });
 
+// 🔹 Map widget custom field keys -> actual GHL custom field IDs
+// TODO: replace EACH "CF_xxx_FILL_ME" with the real ID from Settings → Custom Fields
+const CUSTOM_FIELD_MAP = {
+  language_preference: "{{language_preference}}",
+  inquired_technician: "{{inquired_technician}}",
+  whatsapp_user: "{{whatsapp_user}}",
+  tattoo_title: "{{tattoo_title}}",
+  tattoo_summary: "{{tattoo_summary}}",
+  tattoo_placement: "{{tattoo_placement}}",
+  tattoo_style: "{{tattoo_style}}",
+  size_of_tattoo: "{{size_of_tattoo}}",
+  tattoo_color_preference: "{{tattoo_color_preference}}",
+  how_soon_is_client_deciding: "{{how_soon_is_client_deciding}}",
+  first_tattoo: "{{first_tattoo}}",
+  tattoo_concerns: "{{tattoo_concerns}}",
+  tattoo_photo_description: "{{tattoo_photo_description}}",
+};
+
+// Convert widget customFields → GHL v1 customField object
+function mapCustomFields(widgetFields = {}) {
+  const customField = {};
+
+  Object.entries(widgetFields).forEach(([key, value]) => {
+    if (value == null || value === "") return;
+    const fieldId = CUSTOM_FIELD_MAP[key];
+    if (!fieldId) return; // no mapping yet
+
+    customField[fieldId] = value;
+  });
+
+  return customField;
+}
+
+// Normalize tags & control when "consultation request" appears
+function normalizeTags(rawTags = [], mode = "partial") {
+  const tags = (Array.isArray(rawTags) ? rawTags : [])
+    .filter(Boolean)
+    .map((t) => String(t).trim());
+
+  const lowerTarget = "consultation request";
+
+  let result = [...tags];
+
+  if (mode === "partial") {
+    // For partial submission, strip the consultation tag so we don't trigger Workflow 1 yet
+    result = result.filter((t) => t.toLowerCase() !== lowerTarget);
+  } else if (mode === "final") {
+    // For final submission, ensure the consultation tag is present
+    const has = result.some((t) => t.toLowerCase() === lowerTarget);
+    if (!has) {
+      result.push("consultation request");
+    }
+  }
+
+  // Ensure "Source: Web Widget" is present
+  if (!result.some((t) => t.toLowerCase().includes("source: web widget"))) {
+    result.push("Source: Web Widget");
+  }
+
+  // De-dupe
+  return Array.from(new Set(result));
+}
+
 /**
  * Fetch a contact by ID from GoHighLevel
- * @param {string} contactId
- * @returns {Promise<object|null>}
+ * (Used by your /ghl/* webhooks)
  */
 async function getContact(contactId) {
   if (!contactId) {
@@ -30,14 +87,139 @@ async function getContact(contactId) {
 
   try {
     const res = await ghl.get(`/v1/contacts/${contactId}`);
-    // Depending on docs, contact is usually in res.data
     return res.data;
   } catch (err) {
-    console.error("❌ Error fetching contact from GHL:", err.response?.status, err.response?.data || err.message);
+    console.error(
+      "❌ Error fetching contact from GHL:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
     return null;
+  }
+}
+
+/**
+ * Lookup a contact by email or phone using v1 lookup endpoint
+ * https://rest.gohighlevel.com/v1/contacts/lookup?email=john@doe.com
+ */
+async function lookupContactIdByEmailOrPhone(email, phone) {
+  try {
+    if (email) {
+      const res = await ghl.get("/v1/contacts/lookup", {
+        params: { email },
+      });
+
+      const data = res.data || {};
+      if (Array.isArray(data.contacts) && data.contacts.length > 0) {
+        return data.contacts[0].id || data.contacts[0]._id;
+      }
+      if (data.contact) {
+        return data.contact.id || data.contact._id;
+      }
+      if (data.id || data._id) {
+        return data.id || data._id;
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "⚠️ Email lookup failed:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+  }
+
+  try {
+    if (phone) {
+      const res = await ghl.get("/v1/contacts/lookup", {
+        params: { phone },
+      });
+
+      const data = res.data || {};
+      if (Array.isArray(data.contacts) && data.contacts.length > 0) {
+        return data.contacts[0].id || data.contacts[0]._id;
+      }
+      if (data.contact) {
+        return data.contact.id || data.contact._id;
+      }
+      if (data.id || data._id) {
+        return data.id || data._id;
+      }
+    }
+  } catch (err) {
+    console.warn(
+      "⚠️ Phone lookup failed:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+  }
+
+  return null;
+}
+
+async function createContact(body) {
+  const res = await ghl.post("/v1/contacts/", body);
+  return res.data;
+}
+
+async function updateContact(contactId, body) {
+  const res = await ghl.put(`/v1/contacts/${contactId}`, body);
+  return res.data;
+}
+
+/**
+ * Upsert a contact from the widget payload.
+ * - mode = "partial" → background create/update, no consultation tag
+ * - mode = "final"   → ensure consultation tag present (triggers Workflow 1)
+ */
+async function upsertContactFromWidget(widgetPayload, mode = "partial") {
+  const {
+    firstName,
+    lastName,
+    email,
+    phone,
+    tags = [],
+    customFields = {},
+    utm = {},
+  } = widgetPayload || {};
+
+  const normalizedTags = normalizeTags(tags, mode);
+  const customField = mapCustomFields(customFields);
+
+  const contactBody = {
+    firstName,
+    lastName,
+    email,
+    phone,
+    tags: normalizedTags,
+    customField,
+    source: "AI Tattoo Widget",
+    // If you later map UTM to real custom fields, you can stuff them into customField above.
+  };
+
+  // Try to find existing contact
+  const contactId = await lookupContactIdByEmailOrPhone(email, phone);
+
+  if (contactId) {
+    console.log(`🔁 Updating existing GHL contact ${contactId} (${mode})`);
+    const updated = await updateContact(contactId, contactBody);
+    return { contactId, contact: updated };
+  } else {
+    console.log(`🆕 Creating new GHL contact (${mode})`);
+    const created = await createContact(contactBody);
+
+    // Response shape can vary; try to pull out ID safely
+    const newId =
+      created?.id ||
+      created?._id ||
+      created?.contact?.id ||
+      created?.contact?._id ||
+      null;
+
+    return { contactId: newId, contact: created };
   }
 }
 
 module.exports = {
   getContact,
+  upsertContactFromWidget,
 };

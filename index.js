@@ -1,11 +1,11 @@
-// index.js
 require("dotenv").config();
 
 const express = require("express");
+const { getContact, upsertContactFromWidget } = require("./ghlClient"); // ⬅️ add upsert
 const app = express();
 
-// This lets Express parse JSON bodies from GHL & Square
 app.use(express.json());
+
 
 // Temporary test route (you can keep this)
 app.get("/", (req, res) => {
@@ -107,6 +107,87 @@ app.post("/square/webhook", (req, res) => {
   // and update GHL when a deposit is paid.
   res.status(200).send("OK");
 });
+
+// Create/update contact when the widget does the background "partial" save
+app.post("/lead/partial", async (req, res) => {
+  console.log("🔹 /lead/partial hit");
+  console.log("Payload:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const { contactId, contact } = await upsertContactFromWidget(
+      req.body,
+      "partial"
+    );
+
+    console.log("✅ Partial upsert complete:", {
+      contactId,
+      firstName: contact?.firstName || contact?.first_name,
+      lastName: contact?.lastName || contact?.last_name,
+      email: contact?.email,
+      phone: contact?.phone,
+      tags: contact?.tags,
+    });
+
+    return res.json({
+      ok: true,
+      mode: "partial",
+      contactId,
+    });
+  } catch (err) {
+    console.error(
+      "❌ Error in /lead/partial:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to upsert contact (partial)",
+    });
+  }
+});
+
+// Create/update contact when the widget is fully submitted ("final" step)
+app.post("/lead/final", async (req, res) => {
+  console.log("🔸 /lead/final hit");
+  console.log("Payload:", JSON.stringify(req.body, null, 2));
+
+  try {
+    const { contactId, contact } = await upsertContactFromWidget(
+      req.body,
+      "final"
+    );
+
+    console.log("✅ Final upsert complete:", {
+      contactId,
+      firstName: contact?.firstName || contact?.first_name,
+      lastName: contact?.lastName || contact?.last_name,
+      email: contact?.email,
+      phone: contact?.phone,
+      tags: contact?.tags,
+    });
+
+    // IMPORTANT:
+    // At this point, the contact *should* have the "consultation request" tag.
+    // That will trigger your GHL Workflow 1 → which POSTs to /ghl/form-webhook.
+
+    return res.json({
+      ok: true,
+      mode: "final",
+      contactId,
+    });
+  } catch (err) {
+    console.error(
+      "❌ Error in /lead/final:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return res.status(500).json({
+      ok: false,
+      error: "Failed to upsert contact (final)",
+    });
+  }
+});
+
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
