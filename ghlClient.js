@@ -30,6 +30,16 @@ const CUSTOM_FIELD_MAP = {
   tattoo_photo_description: "tattoo_photo_description",
 };
 
+// 🔹 System fields for AI Setter state tracking
+const SYSTEM_FIELD_MAP = {
+  ai_phase: "ai_phase",
+  lead_temperature: "lead_temperature",
+  deposit_link_sent: "deposit_link_sent",
+  deposit_paid: "deposit_paid",
+  last_phase_update_at: "last_phase_update_at",
+};
+
+
 // Convert widget customFields → GHL v1 customField object
 function mapCustomFields(widgetFields = {}) {
   const customField = {};
@@ -219,7 +229,69 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
   }
 }
 
+/**
+ * Update AI/system custom fields on a contact
+ * Only writes fields that are provided (non-undefined).
+ *
+ * fields: {
+ *   ai_phase?: string,
+ *   lead_temperature?: string,
+ *   deposit_link_sent?: boolean,
+ *   deposit_paid?: boolean,
+ *   last_phase_update_at?: string (ISO)
+ * }
+ */
+async function updateSystemFields(contactId, fields = {}) {
+  if (!contactId) {
+    console.warn("updateSystemFields called without contactId");
+    return null;
+  }
+
+  const customField = {};
+
+  if (fields.ai_phase !== undefined && SYSTEM_FIELD_MAP.ai_phase) {
+    customField[SYSTEM_FIELD_MAP.ai_phase] = fields.ai_phase;
+  }
+
+  if (fields.lead_temperature !== undefined && SYSTEM_FIELD_MAP.lead_temperature) {
+    customField[SYSTEM_FIELD_MAP.lead_temperature] = fields.lead_temperature;
+  }
+
+  if (fields.deposit_link_sent !== undefined && SYSTEM_FIELD_MAP.deposit_link_sent) {
+    customField[SYSTEM_FIELD_MAP.deposit_link_sent] = fields.deposit_link_sent ? "Yes" : "No";
+  }
+
+  if (fields.deposit_paid !== undefined && SYSTEM_FIELD_MAP.deposit_paid) {
+    customField[SYSTEM_FIELD_MAP.deposit_paid] = fields.deposit_paid ? "Yes" : "No";
+  }
+
+  if (fields.last_phase_update_at !== undefined && SYSTEM_FIELD_MAP.last_phase_update_at) {
+    customField[SYSTEM_FIELD_MAP.last_phase_update_at] = fields.last_phase_update_at;
+  }
+
+  if (Object.keys(customField).length === 0) {
+    console.log("updateSystemFields: nothing to update");
+    return null;
+  }
+
+  try {
+    const body = { customField };
+    const res = await updateContact(contactId, body);
+    return res;
+  } catch (err) {
+    console.error(
+      "❌ Error updating system fields in GHL:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
+
 module.exports = {
   getContact,
   upsertContactFromWidget,
+  updateSystemFields,
 };
+

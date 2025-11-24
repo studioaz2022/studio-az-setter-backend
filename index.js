@@ -2,7 +2,17 @@ require("dotenv").config();
 
 const express = require("express");
 const cors = require("cors");
-const { getContact, upsertContactFromWidget } = require("./ghlClient");
+const {
+  getContact,
+  upsertContactFromWidget,
+  updateSystemFields,
+} = require("./ghlClient");
+const {
+  decideLeadTemperature,
+  initialPhaseForNewIntake,
+  decidePhaseForMessage,
+} = require("./stateMachine");
+
 const app = express();
 
 app.use(express.json());
@@ -32,11 +42,10 @@ app.post("/ghl/form-webhook", async (req, res) => {
   console.log("📝 GHL FORM WEBHOOK HIT");
   console.log("Raw Body:", JSON.stringify(req.body, null, 2));
 
-  // Safely grab contactId from the payload
   const customData = req.body.customData || req.body.custom_data || {};
   const contactId =
     customData.contactId ||
-    req.body.contactId || // in case you ever send it top-level
+    req.body.contactId ||
     null;
 
   console.log("Parsed contactId from form webhook:", contactId);
@@ -45,6 +54,51 @@ app.post("/ghl/form-webhook", async (req, res) => {
     console.warn("⚠️ No contactId found in form webhook payload");
     return res.status(200).send("OK");
   }
+
+  const contact = await getContact(contactId);
+
+  if (!contact) {
+    console.warn("⚠️ Could not load contact from GHL for id:", contactId);
+    return res.status(200).send("OK");
+  }
+
+  console.log("✅ Loaded Contact from GHL (form webhook):", {
+    id: contact.id || contact._id,
+    firstName: contact.firstName || contact.first_name,
+    lastName: contact.lastName || contact.last_name,
+    email: contact.email,
+    phone: contact.phone,
+    tags: contact.tags,
+  });
+
+  // 🔹 Extract how_soon_is_client_deciding from contact.customField
+  const cf = contact.customField || contact.customFields || {};
+  const howSoonValue =
+    cf["how_soon_is_client_deciding"] ||
+    cf["howSoonIsClientDeciding"] ||
+    null;
+
+  const leadTemperature = decideLeadTemperature(howSoonValue);
+  const aiPhase = initialPhaseForNewIntake();
+  const nowIso = new Date().toISOString();
+
+  console.log("🧠 Derived system state (form):", {
+    leadTemperature,
+    aiPhase,
+    howSoonValue,
+  });
+
+  await updateSystemFields(contactId, {
+    ai_phase: aiPhase,
+    lead_temperature: leadTemperature,
+    last_phase_update_at: nowIso,
+  });
+
+  console.log("✅ System fields updated for form webhook");
+
+  res.status(200).send("OK");
+});
+
 
   // Fetch contact from GHL
   const contact = await getContact(contactId);
@@ -93,6 +147,40 @@ app.post("/ghl/message-webhook", async (req, res) => {
     console.warn("⚠️ Could not load contact from GHL for id:", contactId);
     return res.status(200).send("OK");
   }
+
+  console.log("✅ Loaded Contact from GHL (message webhook):", {
+    id: contact.id || contact._id,
+    firstName: contact.firstName || contact.first_name,
+    lastName: contact.lastName || contact.last_name,
+    email: contact.email,
+    phone: contact.phone,
+    tags: contact.tags,
+  });
+
+  const cf = contact.customField || contact.customFields || {};
+
+  const currentPhase =
+    cf["ai_phase"] ||
+    cf["aiPhase"] ||
+    "";
+
+  const newPhase = decidePhaseForMessage(currentPhase);
+  const nowIso = new Date().toISOString();
+
+  console.log("🧠 Derived system state (message):", {
+    currentPhase,
+    newPhase,
+  });
+
+  await updateSystemFields(contactId, {
+    ai_phase: newPhase,
+    last_phase_update_at: nowIso,
+  });
+
+  console.log("✅ System fields updated for message webhook");
+
+  res.status(200).send("OK");
+});
 
   console.log("✅ Loaded Contact from GHL (message webhook):", {
     id: contact.id || contact._id,
