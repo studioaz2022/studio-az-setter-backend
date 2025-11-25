@@ -2,6 +2,8 @@ require("dotenv").config();
 
 // ghlClient.js
 const axios = require("axios");
+const FormData = require("form-data");
+
 
 // Axios client for GHL v1 API
 const ghl = axios.create({
@@ -23,7 +25,7 @@ const CUSTOM_FIELD_MAP = {
   tattoo_placement: "tattoo_placement",
   tattoo_style: "tattoo_style",
   size_of_tattoo: "size_of_tattoo",
-  tattoo_color_preference: "tattoo_color_preference}}",
+  tattoo_color_preference: "tattoo_color_preference",
   how_soon_is_client_deciding: "how_soon_is_client_deciding",
   first_tattoo: "first_tattoo",
   tattoo_concerns: "tattoo_concerns",
@@ -107,6 +109,62 @@ async function getContact(contactId) {
     return null;
   }
 }
+/** Photo Form Data */
+async function uploadFilesToTattooCustomField(contactId, files = []) {
+  if (!files || files.length === 0) return null;
+
+  const locationId = process.env.GHL_LOCATION_ID;
+  const customFieldId = process.env.GHL_TATTOO_FILE_FIELD_ID;
+
+  if (!locationId || !customFieldId) {
+    console.warn(
+      "⚠️ GHL_LOCATION_ID or GHL_TATTOO_FILE_FIELD_ID missing, skipping file upload."
+    );
+    return null;
+  }
+
+  const form = new FormData();
+
+  // GHL docs: key must be "<custom_field_id>_<file_id>"
+  files.forEach((file, idx) => {
+    const key = `${customFieldId}_${idx + 1}`;
+    form.append(key, file.buffer, {
+      filename: file.originalname,
+      contentType: file.mimetype,
+    });
+  });
+
+  const url = `https://services.leadconnectorhq.com/forms/upload-custom-files?contactId=${contactId}&locationId=${locationId}`;
+
+  console.log(
+    "📎 Uploading files to GHL custom field via:",
+    url,
+    "files:",
+    files.length
+  );
+
+  const res = await axios.post(url, form, {
+    headers: {
+      ...form.getHeaders(),
+      Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+      Accept: "application/json",
+      Version: "2021-07-28",
+    },
+  });
+
+  console.log(
+    "✅ GHL custom file upload response (truncated):",
+    JSON.stringify({ status: res.status, contactId }, null, 2)
+  );
+
+  return res.data;
+}
+
+module.exports = {
+  // ...existing exports
+  uploadFilesToTattooCustomField,
+};
+
 
 /**
  * Lookup a contact by email or phone using v1 lookup endpoint

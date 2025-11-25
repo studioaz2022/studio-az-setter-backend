@@ -11,17 +11,37 @@
 function decideLeadTemperature(howSoonRaw) {
   if (!howSoonRaw) return "cold";
 
-  const v = String(howSoonRaw).toLowerCase();
+  const v = String(howSoonRaw).toLowerCase().trim();
 
-  if (v.includes("soonest") || v.includes("soon as possible") || v.includes("in a month")) {
+  // 🔥 HOT (ASAP / within ~1 month)
+  if (
+    v.includes("soonest") ||
+    v.includes("soon as possible") ||
+    v.includes("asap") ||
+    v === "soonest possible" ||
+    v.includes("in a month") ||
+    v === "en un mes" ||          // Spanish: in a month
+    v.includes("lo antes posible")
+  ) {
     return "hot";
   }
 
-  if (v.includes("1-3 months") || v.includes("1 to 3 months") || v.includes("3 months")) {
+  // 🔥/🟠 WARM (1–3 months, Spanish + English)
+  if (
+    v.includes("1-3 months") ||
+    v.includes("1 – 3 months") ||
+    v.includes("1 to 3 months") ||
+    v.includes("three months") ||
+    v.includes("1-3 meses") ||
+    v.includes("1 a 3 meses") ||
+    v.includes("uno a tres meses")
+  ) {
     return "warm";
   }
 
-  if (v.includes("not sure") || v.includes("still deciding")) {
+  // 🧊 COLD (undecided)
+  if (v.includes("not sure") || v.includes("still deciding") ||
+      v.includes("no estoy seguro") || v.includes("aún estoy decidiendo")) {
     return "cold";
   }
 

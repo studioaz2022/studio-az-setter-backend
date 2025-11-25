@@ -1,5 +1,15 @@
 require("dotenv").config();
 
+const multer = require("multer");
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
+});
+
+const {
+  uploadFilesToTattooCustomField,
+} = require("./ghlClient");
+
 const express = require("express");
 const cors = require("cors");
 const {
@@ -12,6 +22,13 @@ const {
   initialPhaseForNewIntake,
   decidePhaseForMessage,
 } = require("./stateMachine");
+const {
+  decideLeadTemperature,
+  initialPhaseForNewIntake,
+  decidePhaseForMessage,
+} = require("./stateMachine");
+const { generateOpenerForContact } = require("./aiClient");
+
 
 const app = express();
 
@@ -129,6 +146,23 @@ app.post("/ghl/form-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for form webhook");
 
+    // 🔹 Call AI Setter for Opener (log only for now)
+  try {
+    const aiResult = await generateOpenerForContact({
+      contact,
+      aiPhase,
+      leadTemperature,
+    });
+
+    console.log("🤖 AI Opener suggestion:", JSON.stringify(aiResult, null, 2));
+
+    // ⚠️ IMPORTANT:
+    // Right now we are ONLY LOGGING the AI result.
+    // In the next phase, we'll use this to send a real message back via GHL Conversations API.
+  } catch (err) {
+    console.error("❌ Error generating AI opener:", err.response?.data || err.message);
+  }
+
   res.status(200).send("OK");
 });
 
@@ -244,13 +278,35 @@ app.post("/lead/partial", async (req, res) => {
 });
 
 // Create/update contact when the widget is fully submitted ("final" step)
-app.post("/lead/final", async (req, res) => {
+app.post("/lead/final", upload.array("files"), async (req, res) => {
   console.log("🔸 /lead/final hit");
-  console.log("Payload:", JSON.stringify(req.body, null, 2));
+
+  const hasFiles = req.files && req.files.length > 0;
+  console.log(
+    "📎 Final lead files:",
+    hasFiles ? req.files.map((f) => f.originalname) : "none"
+  );
+
+  let payload;
+  try {
+    if (req.body.data) {
+      // Multipart: JSON string in "data"
+      payload = JSON.parse(req.body.data);
+    } else {
+      // Pure JSON
+      payload = req.body;
+    }
+  } catch (err) {
+    console.error("❌ Failed to parse final lead payload:", err.message);
+    return res.status(400).json({ ok: false, error: "Invalid payload" });
+  }
+
+  console.log("Payload (final lead):", JSON.stringify(payload, null, 2));
 
   try {
+    // 1️⃣ Upsert contact and custom fields
     const { contactId, contact } = await upsertContactFromWidget(
-      req.body,
+      payload,
       "final"
     );
 
@@ -260,30 +316,33 @@ app.post("/lead/final", async (req, res) => {
       lastName: contact?.lastName || contact?.last_name,
       email: contact?.email,
       phone: contact?.phone,
-      tags: contact?.tags,
     });
 
-    // IMPORTANT:
-    // At this point, the contact *should* have the "consultation request" tag.
-    // That will trigger your GHL Workflow 1 → which POSTs to /ghl/form-webhook.
+    // 2️⃣ If we have files, upload them to the tattoo custom file field
+    if (hasFiles) {
+      try {
+        await uploadFilesToTattooCustomField(contactId, req.files);
+      } catch (err) {
+        console.error(
+          "⚠️ Failed to upload files to GHL custom field:",
+          err.response?.data || err.message
+        );
+      }
+    }
 
-    return res.json({
-      ok: true,
-      mode: "final",
-      contactId,
-    });
+    // 3️⃣ Respond OK
+    return res.json({ ok: true, contactId });
   } catch (err) {
     console.error(
       "❌ Error in /lead/final:",
-      err.response?.status,
       err.response?.data || err.message
     );
-    return res.status(500).json({
-      ok: false,
-      error: "Failed to upsert contact (final)",
-    });
+    return res
+      .status(500)
+      .json({ ok: false, error: "Failed to upsert contact (final)" });
   }
 });
+
 
 
 const PORT = process.env.PORT || 3000;

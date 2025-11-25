@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tattoo Consultation Request</title>
+    
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <script src="https://unpkg.com/react@17/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@17/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    
+    <!-- Lucide Icons for nice UI elements -->
+    <script src="https://unpkg.com/lucide@latest"></script>
+    
+    <style>
+        body, html, #root { 
+            margin: 0; 
+            padding: 0; 
+            height: 100%; 
+            width: 100%; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            background-color: #f3f4f6; 
+        }
+        /* Custom Scrollbar */
+        textarea::-webkit-scrollbar { width: 8px; }
+        textarea::-webkit-scrollbar-track { background: #f1f1f1; border-radius: 4px; }
+        textarea::-webkit-scrollbar-thumb { background: #cbd5e0; border-radius: 4px; }
+        
+        /* Hide scrollbar for the main container */
+        .no-scrollbar::-webkit-scrollbar { display: none; }
+        .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+        
+        select {
+            -webkit-appearance: none;
+            -moz-appearance: none;
+            appearance: none;
+            background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3E%3Cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3E%3C/svg%3E");
+            background-position: right 0.5rem center;
+            background-repeat: no-repeat;
+            background-size: 1.5em 1.5em;
+        }
+
+        /* Dashed border animation for drag zone */
+        .drag-active {
+            border-color: #2563eb;
+            background-color: #eff6ff;
+        }
+    </style>
+</head>
+<body>
+    
+<div id="root"></div>
+
+<script type="text/babel">
+    
+/* -------------------------------------------------
+   CONFIG & GLOBALS
+------------------------------------------------- */
+const API_BASE = 'https://studio-az-setter-backend.onrender.com'; 
+
+// We still need these IDs so your backend knows which GHL Form to mimic
+const GHL_FORM_ID_EN = 'p60hhm8U8rCgK83tiodm'; 
+const GHL_FORM_ID_ES = '6cIshvSCIWUld7T8inEn'; 
+
+const urlParams = new URLSearchParams(window.location.search);
+const technicianName = urlParams.get('technician');
+
+const utmParameters = {
+  source: urlParams.get('utm_source'),
+  medium: urlParams.get('utm_medium'),
+  campaign: urlParams.get('utm_campaign'),
+};
+
+/* -------------------------------------------------
+   ICONS
+------------------------------------------------- */
+const IconUpload = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400 mb-3">
+        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+        <polyline points="17 8 12 3 7 8"></polyline>
+        <line x1="12" y1="3" x2="12" y2="15"></line>
+    </svg>
+);
+
+const IconX = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <line x1="18" y1="6" x2="6" y2="18"></line>
+        <line x1="6" y1="6" x2="18" y2="18"></line>
+    </svg>
+);
+
+const BackArrowIcon = () => (
+  <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="h-5 w-5">
+    <path d="M19 12H5" /><path d="M12 19l-7-7 7-7" />
+  </svg>
+);
+
+const LoadingSpinner = () => (
+  <div className="flex justify-center items-center">
+    <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+  </div>
+);
+
+/* -------------------------------------------------
+   SURVEY DATA STRUCTURE
+------------------------------------------------- */
+
+const surveyFlow = {
+  start: 'q_language',
+  questions: {
+    'q_language': {
+      stepIndex: 0,
+      text_en: "Choose Your Language",
+      text_es: "Elige tu idioma",
+      type: 'multiple-choice-images',
+      options: [
+        { text: 'English', value: 'English', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a1135a685544.png', next: 'q_timeline_en' },
+        { text: 'Spanish', value: 'Spanish', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f8384a9d625075a1658.png', next: 'q_timeline_es' },
+      ]
+    },
+    'q_timeline_en': {
+      stepIndex: 1,
+      text: "When are you hoping to get your tattoo?",
+      type: 'multiple-choice',
+      options: [
+        { text: 'Soonest possible', value: 'Soonest possible', next: 'q_tattoo_size' },
+        { text: 'In a Month', value: 'In a Month', next: 'q_tattoo_size' },
+        { text: '1-3 Months', value: '1-3 Months', next: 'q_tattoo_size' },
+        { text: 'Not sure, I\'m still deciding', value: 'Not sure, I\'m still deciding', next: 'q_tattoo_size' }
+      ]
+    },
+    'q_timeline_es': {
+      stepIndex: 1,
+      text: "¿Qué tan pronto esperas hacerte tu tatuaje?",
+      type: 'multiple-choice',
+      options: [
+        { text: 'Lo Mas Pronto Posible', value: 'Lo Mas Pronto Posible', next: 'q_tatuaje_tamano' },
+        { text: 'En Un Mes', value: 'En Un Mes', next: 'q_tatuaje_tamano' },
+        { text: '1 - 3 Mes(es)', value: '1 - 3 Mes(es)', next: 'q_tatuaje_tamano' },
+        { text: 'Todavía Decidiendo', value: 'Todavía Decidiendo', next: 'q_tatuaje_tamano' }
+      ]
+    },
+    'q_tattoo_size': {
+      stepIndex: 2,
+      text_en: "Roughly what size?",
+      text_es: "¿Aproximadamente qué tamaño?",
+      type: 'multiple-choice-images',
+      options: [
+        { text: 'Fine Line', value: 'Fine Line', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd1772bc3efb5.png', next: 'q_contact_name' },
+        { text: 'Small', value: 'Small', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a13582685546.png', next: 'q_contact_name' },
+        { text: 'Medium', value: 'Medium', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd11ee6c3efbb.png', next: 'q_contact_name' },
+        { text: 'Large', value: 'Large', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a10352685545.png', next: 'q_contact_name' }
+      ]
+    },
+    'q_tatuaje_tamano': { 
+      stepIndex: 2,
+      text_en: "Roughly what size?",
+      text_es: "¿Qué tamaño de tatuaje estás considerando?",
+      type: 'multiple-choice-images',
+      options: [
+        { text: 'Línea Fina', value: 'Línea Fina', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f8384a9d673035a168c.png', next: 'q_contact_name' },
+        { text: 'Pequeño', value: 'Pequeño', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd126d1c3efb6.png', next: 'q_contact_name' },
+        { text: 'Mediano', value: 'Mediano', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f836279e9e1ebc7f341.png', next: 'q_contact_name' },
+        { text: 'Grande', value: 'Grande', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83924f1ee7862cd7bc.png', next: 'q_contact_name' }
+      ]
+    },
+    'q_contact_name': {
+      stepIndex: 3,
+      type: 'input_group',
+      title_en: "Let's get introduced.",
+      title_es: "Vamos a presentarnos.",
+      fields: [
+        { id: 'firstName', label_en: 'First Name', label_es: 'Nombre', type: 'text', placeholder_en: 'John', placeholder_es: 'Juan', required: true },
+        { id: 'lastName', label_en: 'Last Name', label_es: 'Apellido', type: 'text', placeholder_en: 'Doe', placeholder_es: 'Pérez', required: true },
+      ],
+      next: 'q_contact_details'
+    },
+    'q_contact_details': {
+      stepIndex: 3,
+      type: 'input_group',
+      title_en: "How can we reach you?",
+      title_es: "¿Cómo podemos contactarte?",
+      fields: [
+        { id: 'phone', label_en: 'Phone Number', label_es: 'Número de Teléfono', type: 'tel', placeholder_en: '(555) 555-5555', placeholder_es: '(555) 555-5555', required: true },
+        { id: 'whatsapp', label_en: 'I use WhatsApp', label_es: 'Uso WhatsApp', type: 'checkbox' },
+        { id: 'email', label_en: 'Email Address', label_es: 'Correo Electrónico', type: 'email', placeholder_en: 'john@example.com', placeholder_es: 'juan@ejemplo.com', required: true },
+      ],
+      next: 'trigger_create_contact'
+    },
+    'q_tattoo_concept': {
+      stepIndex: 4,
+      type: 'input_group',
+      title_en: "Tell us about your idea.",
+      title_es: "Cuéntanos sobre tu idea.",
+      fields: [
+        { id: 'tattoo_title', label_en: 'Name your idea', label_es: 'Nombra tu idea', type: 'text', placeholder_en: 'e.g., Lion & Roses on Forearm', placeholder_es: 'ej., León y Rosas en Antebrazo', required: true },
+        { id: 'tattoo_summary', label_en: 'In one sentence, what is this tattoo about?', label_es: 'En una frase, ¿de qué trata este tatuaje?', type: 'textarea', rows: 2, placeholder_en: 'A realistic black & grey lion...', placeholder_es: 'Un león realista en blanco y negro...', required: true },
+        { id: 'tattoo_placement', label_en: 'Where on your body?', label_es: '¿En qué parte del cuerpo?', type: 'text', placeholder_en: 'e.g. Left inner forearm', placeholder_es: 'ej. Antebrazo interno izquierdo', required: true },
+      ],
+      next: 'step_upload_images' 
+    },
+    
+    // --- CHANGED: NATIVE UPLOAD STEP (Replacing GHL iframe) ---
+    'step_upload_images': {
+       stepIndex: 5,
+       type: 'native_upload_step', // NEW TYPE
+       title_en: 'Reference Photos',
+       title_es: 'Fotos de Referencia',
+       next: 'q_style_desc'
+    },
+
+    'q_style_desc': {
+      stepIndex: 6,
+      type: 'input_group',
+      title_en: "Describe your photo(s)",
+      title_es: "Describe tu(s) foto(s)",
+      secondary_title_en: "Tattoo Style & Concept",
+      secondary_title_es: "Estilo y Concepto de Tatuaje",
+      fields: [
+        { id: 'tattoo_style', label_en: 'What style are you imagining?', label_es: '¿Qué estilo imaginas?', type: 'text', placeholder_en: 'Fine line, Realism, Traditional...', placeholder_es: 'Línea fina, Realismo, Tradicional...', required: true },
+        { 
+            id: 'tattoo_color_preference', 
+            label_en: 'Color Preference', 
+            label_es: 'Preferencia de Color', 
+            type: 'select',
+            required: true,
+            options: [
+                { value: 'Black & Grey', label_en: 'Black & Grey', label_es: 'Blanco y Negro' },
+                { value: 'Full Color', label_en: 'Full Color', label_es: 'Color Completo' },
+                { value: 'B&G with Color Accent', label_en: 'B&G with Color Accent', label_es: 'Blanco y Negro con Acento' },
+                { value: 'Not sure yet', label_en: 'Not sure yet', label_es: 'No estoy seguro/a' }
+            ]
+        },
+        { 
+            id: 'tattoo_reference_description', 
+            label_en: 'Describe your reference/uploaded photos', 
+            label_es: 'Describe tus fotos de referencia/subidas', 
+            type: 'textarea', 
+            rows: 2, 
+            placeholder_en: 'The lion face from image 1, but with the roses from image 2.', 
+            placeholder_es: 'La cara de león de la imagen 1, pero con las rosas de la imagen 2.', 
+            required: false,
+            showIf: 'has_reference_photos' 
+        },
+      ],
+      next: 'q_first_tattoo'
+    },
+    'q_first_tattoo': {
+      stepIndex: 7,
+      text_en: "Is this your first tattoo?",
+      text_es: "¿Es este tu primer tatuaje?",
+      type: 'multiple-choice',
+      options: [
+        { text: 'Yes, my first', text_es: 'Sí, es mi primero', value: 'Yes', next: 'q_concerns' }, 
+        { text: 'No, I have others', text_es: 'No, tengo otros', value: 'No', next: 'q_concerns' }, 
+      ]
+    },
+    'q_concerns': {
+      stepIndex: 7,
+      type: 'input_group',
+      title_en: "Almost done...",
+      title_es: "Casi terminamos...",
+      fields: [
+        { id: 'tattoo_concerns', label_en: 'Any concerns? (Optional)', label_es: '¿Alguna inquietud? (Opcional)', type: 'textarea', placeholder_en: 'Sensitive skin, scars, cover-up, pain tolerance...', placeholder_es: 'Piel sensible, cicatrices, coberturas, tolerancia al dolor...', required: false },
+      ],
+      next: 'submit_final' 
+    }
+  }
+};
+
+const TOTAL_STEPS = 8; 
+
+// Formats a string to (XXX) XXX-XXXX
+const formatPhoneNumber = (value) => {
+  if (!value) return value;
+  const phoneNumber = value.replace(/[^\d]/g, '');
+  const phoneNumberLength = phoneNumber.length;
+  if (phoneNumberLength < 4) return phoneNumber;
+  if (phoneNumberLength < 7) {
+    return `(${phoneNumber.slice(0, 3)}) ${phoneNumber.slice(3)}`;
+  }
+  return `(${phoneNumber.slice(0, 3)}) ${phoneNumber.slice(3, 6)}-${phoneNumber.slice(6, 10)}`;
+};
+
+/* -------------------------------------------------
+   COMPONENTS
+------------------------------------------------- */
+
+// Native File Uploader Component
+const FileUploader = ({ lang, onFilesSelected, existingFiles }) => {
+    const [files, setFiles] = React.useState(existingFiles || []);
+    const [isDragging, setIsDragging] = React.useState(false);
+
+    const isSpanish = lang === 'Spanish';
+    
+    const handleDragEnter = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(true); };
+    const handleDragLeave = (e) => { e.preventDefault(); e.stopPropagation(); setIsDragging(false); };
+    const handleDragOver = (e) => { e.preventDefault(); e.stopPropagation(); };
+    
+    const handleDrop = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setIsDragging(false);
+        if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+            addFiles(e.dataTransfer.files);
+        }
+    };
+
+    const handleFileInput = (e) => {
+        if (e.target.files && e.target.files.length > 0) {
+            addFiles(e.target.files);
+        }
+    };
+
+    const addFiles = (newFileList) => {
+        const newFilesArray = Array.from(newFileList);
+        // Basic validation: Images only
+        const validFiles = newFilesArray.filter(f => f.type.startsWith('image/'));
+        
+        if (validFiles.length < newFilesArray.length) {
+            alert(isSpanish ? "Solo se permiten imágenes." : "Only image files are allowed.");
+        }
+
+        const updated = [...files, ...validFiles];
+        setFiles(updated);
+        onFilesSelected(updated);
+    };
+
+    const removeFile = (index) => {
+        const updated = files.filter((_, i) => i !== index);
+        setFiles(updated);
+        onFilesSelected(updated);
+    };
+
+    return (
+        <div className="w-full">
+            <div 
+                onDragEnter={handleDragEnter}
+                onDragLeave={handleDragLeave}
+                onDragOver={handleDragOver}
+                onDrop={handleDrop}
+                className={`border-2 border-dashed rounded-xl p-8 flex flex-col items-center justify-center text-center transition-all bg-white cursor-pointer hover:bg-gray-50
+                ${isDragging ? 'drag-active' : 'border-gray-300'}`}
+                onClick={() => document.getElementById('fileInput').click()}
+            >
+                <input 
+                    type="file" 
+                    id="fileInput" 
+                    multiple 
+                    accept="image/*" 
+                    className="hidden" 
+                    onChange={handleFileInput}
+                />
+                <IconUpload />
+                <p className="text-gray-700 font-medium text-lg">
+                    {isSpanish ? "Arrastra tus fotos aquí" : "Drag & drop photos here"}
+                </p>
+                <p className="text-gray-400 text-sm mt-1">
+                    {isSpanish ? "o haz clic para explorar" : "or click to browse"}
+                </p>
+            </div>
+
+            {/* Preview Grid */}
+            {files.length > 0 && (
+                <div className="mt-6 grid grid-cols-3 gap-3">
+                    {files.map((file, i) => (
+                        <div key={i} className="relative aspect-square rounded-lg overflow-hidden border border-gray-200 group">
+                            <img 
+                                src={URL.createObjectURL(file)} 
+                                alt="preview" 
+                                className="w-full h-full object-cover" 
+                            />
+                            <button 
+                                onClick={(e) => { e.stopPropagation(); removeFile(i); }}
+                                className="absolute top-1 right-1 bg-black bg-opacity-50 hover:bg-red-500 text-white rounded-full p-1 transition-colors"
+                            >
+                                <IconX />
+                            </button>
+                        </div>
+                    ))}
+                </div>
+            )}
+        </div>
+    );
+};
+
+const InputField = ({ field, value, onChange, lang }) => {
+  const isSpanish = lang === 'Spanish';
+  const label = isSpanish ? field.label_es : field.label_en;
+  const placeholder = isSpanish ? (field.placeholder_es || field.placeholder_en) : (field.placeholder_en || field.placeholder_es);
+
+  if (field.type === 'select') {
+      return (
+        <div className="mb-4">
+            <label htmlFor={field.id} className="block text-sm font-medium text-gray-700 mb-1">
+                {label} {field.required && <span className="text-red-500">*</span>}
+            </label>
+            <div className="relative">
+                <select
+                    id={field.id}
+                    value={value || ''}
+                    onChange={(e) => onChange(field.id, e.target.value)}
+                    className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors bg-white"
+                >
+                    <option value="" disabled>
+                        {isSpanish ? 'Seleccionar...' : 'Select...'}
+                    </option>
+                    {field.options.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                            {isSpanish ? opt.label_es : opt.label_en}
+                        </option>
+                    ))}
+                </select>
+            </div>
+        </div>
+      );
+  }
+
+  if (field.type === 'checkbox') {
+    return (
+      <div className="flex items-center mb-4">
+        <input
+          type="checkbox" id={field.id} checked={!!value}
+          onChange={(e) => onChange(field.id, e.target.checked)}
+          className="h-5 w-5 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+        />
+        <label htmlFor={field.id} className="ml-2 block text-sm text-gray-900">{label}</label>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4">
+      <label htmlFor={field.id} className="block text-sm font-medium text-gray-700 mb-1">
+        {label} {field.required && <span className="text-red-500">*</span>}
+      </label>
+      {field.type === 'textarea' ? (
+        <textarea
+          id={field.id} rows={field.rows || 2} value={value || ''}
+          onChange={(e) => onChange(field.id, e.target.value)}
+          placeholder={placeholder}
+          className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+        />
+      ) : (
+        <input
+          type={field.type} id={field.id} value={value || ''}
+          onChange={(e) => onChange(field.id, e.target.value)}
+          placeholder={placeholder}
+          inputMode={field.type === 'tel' ? 'numeric' : 'text'}
+          className="w-full px-4 py-3 rounded-lg border border-gray-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 transition-colors"
+        />
+      )}
+    </div>
+  );
+};
+
+/* -------------------------------------------------
+   MAIN APP
+------------------------------------------------- */
+function App() {
+  const [currentQ, setCurrentQ] = React.useState(surveyFlow.start);
+  const [answers, setAnswers] = React.useState({});
+  const [uploadedFiles, setUploadedFiles] = React.useState([]); // Store actual File objects
+  const [history, setHistory] = React.useState([]);
+  const [animation, setAnimation] = React.useState('enter-forward');
+  
+  const [isSubmitting, setIsSubmitting] = React.useState(false);
+  const [isFinished, setIsFinished] = React.useState(false); 
+  const [contactCreated, setContactCreated] = React.useState(false);
+
+  const currentData = surveyFlow.questions[currentQ];
+  const progress = currentData 
+    ? ((currentData.stepIndex || 0) / TOTAL_STEPS) * 100 
+    : (isFinished ? 100 : 0);
+
+  const triggerTransition = (nextQ) => {
+    setAnimation('exit-forward');
+    setTimeout(() => {
+      setHistory(prev => [...prev, currentQ]);
+      setCurrentQ(nextQ);
+      setAnimation('enter-forward');
+    }, 300);
+  };
+
+  const handleNext = (nextQ, value) => {
+    if (!nextQ) return;
+    
+    let updatedAnswers = { ...answers };
+    updatedAnswers[currentQ] = value;
+    setAnswers(updatedAnswers);
+
+    if (nextQ === 'trigger_create_contact') {
+         submitPartialLead({ ...updatedAnswers, [currentQ]: value });
+         triggerTransition('q_tattoo_concept');
+    } 
+    else if (nextQ === 'submit_final') {
+        submitFinalLead({ ...updatedAnswers, [currentQ]: value });
+    } 
+    else {
+        triggerTransition(nextQ);
+    }
+  };
+
+  // Handler for Native Upload Step
+  const handleUploadNext = (files) => {
+      // 1. Store files in React state
+      setUploadedFiles(files);
+      
+      // 2. Set 'has_reference_photos' logic for later questions
+      const hasFiles = files.length > 0;
+      setAnswers(prev => ({ ...prev, has_reference_photos: hasFiles }));
+      
+      // 3. Move on
+      triggerTransition(surveyFlow.questions['step_upload_images'].next);
+  };
+
+  const handleInputGroupNext = (fieldValues, nextQ) => {
+      const finalAnswers = { ...answers, ...fieldValues };
+      setAnswers(finalAnswers);
+      
+      if (nextQ === 'trigger_create_contact') {
+          submitPartialLead(finalAnswers);
+          triggerTransition('q_tattoo_concept');
+      } 
+      else if (nextQ === 'submit_final') {
+          submitFinalLead(finalAnswers);
+      }
+      else {
+          triggerTransition(nextQ);
+      }
+  }
+
+  const handleBack = () => {
+    if (history.length === 0) return;
+    setAnimation('exit-backward');
+    setTimeout(() => {
+      const prev = history[history.length - 1];
+      setHistory(h => h.slice(0, -1));
+      setCurrentQ(prev);
+      setAnimation('enter-backward');
+    }, 300);
+  };
+
+  const submitPartialLead = async (currentData) => {
+    const payload = buildPayloadJSON(currentData);
+
+    try {
+        await fetch(`${API_BASE}/lead/partial`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+        });
+
+        console.log("Background partial lead sent:", payload.email);
+        setContactCreated(true);
+    } catch (e) {
+        console.error("Partial lead error", e);
+    }
+  };
+
+
+  const submitFinalLead = async (currentData) => {
+        setIsSubmitting(true);
+        try {
+            let bodyData;
+            let isMultipart = false;
+
+            if (uploadedFiles.length > 0) {
+            const formData = new FormData();
+            const jsonData = buildPayloadJSON(currentData);
+
+            // JSON payload as string
+            formData.append("data", JSON.stringify(jsonData));
+
+            // All images
+            uploadedFiles.forEach((file) => {
+                formData.append("files", file);
+            });
+
+            bodyData = formData;
+            isMultipart = true;
+            } else {
+            bodyData = JSON.stringify(buildPayloadJSON(currentData));
+            }
+
+            console.log(
+            "Submitting Final Lead...",
+            isMultipart ? "With Files" : "No Files"
+            );
+
+            await fetch(`${API_BASE}/lead/final`, {
+            method: "POST",
+            body: bodyData,
+            headers: isMultipart ? {} : { "Content-Type": "application/json" },
+            });
+
+            setIsSubmitting(false);
+            setIsFinished(true);
+        } catch (e) {
+            console.error(e);
+            alert("Error submitting form.");
+            setIsSubmitting(false);
+        }
+    };
+
+
+  const buildPayloadJSON = (data) => {
+      const lang = data.q_language || 'English';
+      return {
+        firstName: data.firstName,
+        lastName: data.lastName,
+        phone: data.phone,
+        email: data.email,
+        tags: ["Consultation Request", lang, "Source: Web Widget"],
+        customFields: {
+            inquired_technician: technicianName || '',
+            whatsapp_user: data.whatsapp ? "Yes" : "No",
+            tattoo_title: data.tattoo_title,
+            tattoo_summary: data.tattoo_summary,
+            tattoo_placement: data.tattoo_placement,
+            tattoo_style: data.tattoo_style,
+            size_of_tattoo: data.q_tattoo_size || data.q_tatuaje_tamano,
+            tattoo_color_preference: data.q_color_pref || data.tattoo_color_preference,
+            tattoo_timeframe: data.q_timeline_en || data.q_timeline_es,
+            first_tattoo: data.q_first_tattoo,
+            tattoo_concerns: data.tattoo_concerns,
+            tattoo_reference_description: data.tattoo_reference_description
+        },
+        utm: utmParameters
+      };
+  }
+
+  const renderScreen = () => {
+    if (isFinished) {
+        const lang = answers.q_language || 'English';
+        const isSpanish = lang === 'Spanish';
+        return (
+            <div className="text-center h-full flex flex-col justify-center items-center">
+                <div className="mx-auto h-20 w-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
+                    <svg className="h-10 w-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+                </div>
+                <h2 className="text-3xl font-bold text-gray-800 mb-4">
+                    {isSpanish ? "¡Solicitud Recibida!" : "Request Received!"}
+                </h2>
+                <p className="text-gray-600 px-8">
+                    {isSpanish 
+                     ? "Gracias por compartir tu idea. Revisaremos tus detalles y nos pondremos en contacto contigo pronto." 
+                     : "Thanks for sharing your idea. We will review your details and get in touch with you shortly."}
+                </p>
+                <button onClick={() => window.location.reload()} className="mt-8 text-gray-400 text-sm underline">
+                    Close / Start Over
+                </button>
+            </div>
+        );
+    }
+
+    if (isSubmitting) {
+        return (
+            <div className="text-center pt-20">
+                <LoadingSpinner />
+                <p className="text-gray-500 mt-4 animate-pulse">Uploading photos & Details...</p>
+            </div>
+        );
+    }
+
+    const lang = answers.q_language || 'English';
+    const isSpanish = lang === 'Spanish';
+
+    // --- RENDER NATIVE UPLOAD ---
+    if (currentData.type === 'native_upload_step') {
+        const title = isSpanish ? currentData.title_es : currentData.title_en;
+        return (
+            <div className="w-full h-full flex flex-col">
+                <h2 className="text-xl font-bold text-gray-800 mb-2 text-center">{title}</h2>
+                <p className="text-xs text-gray-500 text-center mb-6 px-2">
+                    {isSpanish 
+                     ? "Comparte hasta 3 imágenes de referencia." 
+                     : "Share up to 3 reference images for your idea."}
+                </p>
+                
+                {/* File Uploader UI */}
+                <FileUploader 
+                    lang={lang} 
+                    onFilesSelected={setUploadedFiles} 
+                    existingFiles={uploadedFiles}
+                />
+
+                <div className="mt-auto pt-6 flex flex-col gap-3">
+                    <button
+                        onClick={() => handleUploadNext(uploadedFiles)}
+                        className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all"
+                    >
+                        {uploadedFiles.length > 0 
+                            ? (isSpanish ? `Continuar (${uploadedFiles.length} fotos)` : `Continue (${uploadedFiles.length} photos)`)
+                            : (isSpanish ? "Saltar (Sin fotos)" : "Skip (No photos)")
+                        }
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    if (currentData.type === 'input_group') {
+        const title = (currentQ === 'q_style_desc' && !answers.has_reference_photos)
+            ? (isSpanish ? currentData.secondary_title_es : currentData.secondary_title_en)
+            : (isSpanish ? currentData.title_es : currentData.title_en);
+
+        return (
+            <InputGroupScreen 
+                data={currentData} lang={lang} 
+                onNext={handleInputGroupNext} existingAnswers={answers}
+                title={title} 
+            />
+        );
+    }
+
+    if (currentData.type === 'multiple-choice-images') {
+        const headline = isSpanish ? (currentData.text_es || currentData.text_en) : currentData.text_en;
+        const isLanguagePage = currentQ === 'q_language';
+
+        return (
+            <div className="w-full">
+                <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-6 text-center">{headline}</h2>
+                <div className={`grid ${isLanguagePage ? 'grid-cols-2' : 'grid-cols-2'} gap-3`}>
+                    {currentData.options.map((opt, i) => (
+                        <button
+                            key={i}
+                            onClick={() => handleNext(opt.next, opt.value)}
+                            className={
+                                (isLanguagePage || currentQ === 'q_tattoo_size' || currentQ === 'q_tatuaje_tamano') 
+                                ? "bg-transparent border-none shadow-none rounded-xl transition-all overflow-hidden group text-left transform hover:-translate-y-1"
+                                : "bg-white rounded-xl shadow-sm border border-gray-200 hover:border-blue-500 hover:shadow-md transition-all overflow-hidden group text-left transform hover:-translate-y-1"
+                            }
+                        >
+                            <div className="aspect-square w-full overflow-hidden bg-transparent">
+                                <img 
+                                    src={opt.imageUrl} 
+                                    alt={opt.text} 
+                                    className="w-full h-full object-contain transition-transform duration-500"
+                                    onError={(e) => { e.target.onerror = null; e.target.src='https://placehold.co/400x400/CCCCCC/FFFFFF?text=Image'; }}
+                                />
+                            </div>
+                            {!(isLanguagePage || currentQ === 'q_tattoo_size' || currentQ === 'q_tatuaje_tamano') && (
+                                <div className="p-3">
+                                    <span className="text-sm font-medium text-gray-800">{opt.text}</span>
+                                </div>
+                            )}
+                        </button>
+                    ))}
+                </div>
+            </div>
+        );
+    }
+
+    const headline = currentData.text || (isSpanish ? (currentData.text_es || currentData.text_en) : currentData.text_en);
+    return (
+        <div className="w-full flex flex-col items-center">
+             <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-6 text-center px-4">{headline}</h2>
+             <div className="w-full space-y-3">
+                {currentData.options.map((opt, i) => (
+                    <button
+                        key={i}
+                        onClick={() => handleNext(opt.next, opt.value)}
+                        className="w-full text-left bg-white border border-gray-200 rounded-lg p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm"
+                    >
+                        {isSpanish ? (opt.text_es || opt.text) : opt.text} 
+                    </button>
+                ))}
+             </div>
+        </div>
+    );
+  };
+
+  return (
+    <div className="flex items-center justify-center min-h-screen bg-gray-100 px-4 py-6">
+       <style>{`
+        @keyframes slide-in-right { 0% { transform: translateX(100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes slide-out-left { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(-100%); opacity: 0; } }
+        @keyframes slide-in-left { 0% { transform: translateX(-100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
+        @keyframes slide-out-right { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(100%); opacity: 0; } }
+        .animate-slide-in-right { animation: slide-in-right 0.3s ease-out forwards; }
+        .animate-slide-out-left { animation: slide-out-left 0.3s ease-in forwards; }
+        .animate-slide-in-left { animation: slide-in-left 0.3s ease-out forwards; }
+        .animate-slide-out-right { animation: slide-out-right 0.3s ease-in forwards; }
+      `}</style>
+
+      <div className="w-full max-w-md bg-white rounded-2xl shadow-2xl overflow-hidden flex flex-col min-h-[600px] max-h-[90vh] relative">
+        {technicianName && (
+            <div className="bg-gray-900 text-white text-center py-2 text-xs font-bold uppercase tracking-widest">
+                Working with: {technicianName}
+            </div>
+        )}
+        <div className="w-full h-1.5 bg-gray-100">
+            <div className="h-full bg-blue-600 transition-all duration-500 ease-out" style={{ width: `${progress}%` }}></div>
+        </div>
+        <div className="flex-grow p-6 relative overflow-y-auto no-scrollbar flex flex-col">
+            <div className={`flex-grow flex flex-col justify-center ${getAnimationClass(animation)}`}>
+                {renderScreen()}
+            </div>
+        </div>
+        {!isFinished && !isSubmitting && history.length > 0 && (
+            <div className="p-4 border-t border-gray-100 bg-white z-10">
+                <button onClick={handleBack} className="flex items-center text-gray-400 hover:text-gray-700 transition-colors text-sm font-semibold">
+                    <BackArrowIcon />
+                    <span className="ml-2">{answers.q_language === 'Spanish' ? 'Atrás' : 'Back'}</span>
+                </button>
+            </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+const getAnimationClass = (animation) => {
+  if (animation === 'enter-forward') return 'animate-slide-in-right';
+  if (animation === 'exit-forward') return 'animate-slide-out-left';
+  if (animation === 'enter-backward') return 'animate-slide-in-left';
+  if (animation === 'exit-backward') return 'animate-slide-out-right';
+  return '';
+};
+
+// ... InputGroupScreen code remains same as previous file ...
+const InputGroupScreen = ({ data, lang, onNext, existingAnswers, title }) => {
+    const [values, setValues] = React.useState({});
+    const [errors, setErrors] = React.useState({});
+
+    React.useEffect(() => {
+        const initial = {};
+        data.fields.forEach(f => { if(existingAnswers[f.id]) initial[f.id] = existingAnswers[f.id]; });
+        setValues(initial);
+    }, [data, existingAnswers]);
+
+    const handleChange = (id, val) => {
+        if (id === 'phone') {
+            setValues(prev => ({ ...prev, [id]: formatPhoneNumber(val) }));
+        } else {
+            setValues(prev => ({ ...prev, [id]: val }));
+        }
+        if (errors[id]) setErrors(prev => ({ ...prev, [id]: null }));
+    }
+
+    const validateAndNext = () => {
+        const newErrors = {};
+        let isValid = true;
+        data.fields.forEach(field => {
+            if (field.showIf && !existingAnswers[field.showIf]) return; 
+            if (field.required && !values[field.id]) {
+                isValid = false;
+                newErrors[field.id] = true;
+            }
+            if (field.type === 'email' && values[field.id] && !/\S+@\S+\.\S+/.test(values[field.id])) {
+                isValid = false;
+                newErrors[field.id] = 'Invalid email';
+            }
+            if (field.type === 'tel' && field.required && values[field.id]) {
+                const justDigits = values[field.id].replace(/[^\d]/g, '');
+                if (justDigits.length !== 10) {
+                    isValid = false;
+                    newErrors[field.id] = lang === 'Spanish' ? 'Debe ser un número de 10 dígitos' : 'Must be a 10-digit number';
+                }
+            }
+            if (field.type === 'select' && field.required && !values[field.id]) {
+                 isValid = false;
+                 newErrors[field.id] = true;
+            }
+        });
+        if (!isValid) { setErrors(newErrors); return; }
+        onNext(values, data.next);
+    }
+
+    const btnText = lang === 'Spanish' ? 'Continuar' : 'Continue';
+
+    return (
+        <div className="w-full h-full flex flex-col">
+            <h2 className="text-xl font-bold text-gray-800 mb-6 text-center">{title}</h2>
+            <div className="space-y-1 flex-grow">
+                {data.fields.map(field => {
+                    if (field.showIf && !existingAnswers[field.showIf]) return null;
+                    return (
+                        <div key={field.id}>
+                            <InputField field={field} value={values[field.id]} onChange={handleChange} lang={lang} />
+                            {errors[field.id] && (
+                                <p className="text-red-500 text-xs -mt-3 mb-3">
+                                    {typeof errors[field.id] === 'string' ? errors[field.id] : (lang === 'Spanish' ? 'Requerido' : 'Required')}
+                                </p>
+                            )}
+                        </div>
+                    );
+                })}
+            </div>
+            <div className="pt-6">
+                <button onClick={validateAndNext} className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all">
+                    {btnText}
+                </button>
+            </div>
+        </div>
+    );
+}
+
+ReactDOM.render(<App />, document.getElementById('root'));
+</script>
+</body>
+</html>
