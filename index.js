@@ -278,8 +278,10 @@ app.post("/lead/partial", async (req, res) => {
 });
 
 // Create/update contact when the widget is fully submitted ("final" step)
+
 app.post("/lead/final", upload.array("files"), async (req, res) => {
   console.log("🔸 /lead/final hit");
+  console.log("Content-Type:", req.headers["content-type"]);
 
   const hasFiles = req.files && req.files.length > 0;
   console.log(
@@ -288,13 +290,22 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
   );
 
   let payload;
+
   try {
-    if (req.body.data) {
-      // Multipart: JSON string in "data"
-      payload = JSON.parse(req.body.data);
+    if (req.is("multipart/form-data")) {
+      // multipart: expect JSON string in req.body.data
+      if (req.body && req.body.data) {
+        payload = JSON.parse(req.body.data);
+      } else {
+        console.warn("⚠️ Multipart request but no req.body.data – using empty object");
+        payload = {};
+      }
+    } else if (req.is("application/json")) {
+      // pure JSON
+      payload = req.body || {};
     } else {
-      // Pure JSON
-      payload = req.body;
+      // fallback
+      payload = req.body || {};
     }
   } catch (err) {
     console.error("❌ Failed to parse final lead payload:", err.message);
@@ -303,12 +314,17 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
 
   console.log("Payload (final lead):", JSON.stringify(payload, null, 2));
 
+  // Safety: don't even hit GHL if we have no email/phone
+  if (!payload.email && !payload.phone) {
+    console.error("❌ Final lead missing email/phone");
+    return res
+      .status(400)
+      .json({ ok: false, error: "Email or phone is required" });
+  }
+
   try {
-    // 1️⃣ Upsert contact and custom fields
-    const { contactId, contact } = await upsertContactFromWidget(
-      payload,
-      "final"
-    );
+    // 1️⃣ Upsert contact with full info, ensure 'consultation request' tag, etc.
+    const { contactId, contact } = await upsertContactFromWidget(payload, "final");
 
     console.log("✅ Final upsert complete:", {
       contactId,
@@ -318,7 +334,7 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
       phone: contact?.phone,
     });
 
-    // 2️⃣ If we have files, upload them to the tattoo custom file field
+    // 2️⃣ Upload files to custom file field, if any
     if (hasFiles) {
       try {
         await uploadFilesToTattooCustomField(contactId, req.files);
@@ -330,7 +346,6 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
       }
     }
 
-    // 3️⃣ Respond OK
     return res.json({ ok: true, contactId });
   } catch (err) {
     console.error(
@@ -342,6 +357,7 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
       .json({ ok: false, error: "Failed to upsert contact (final)" });
   }
 });
+
 
 
 
