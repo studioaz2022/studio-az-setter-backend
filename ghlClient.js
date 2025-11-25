@@ -9,7 +9,7 @@ const FormData = require("form-data");
 const ghl = axios.create({
   baseURL: "https://rest.gohighlevel.com", // v1 base
   headers: {
-    Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+    Authorization: `Bearer ${process.env.GHL_FILE_UPLOAD_TOKEN}`,
     "Content-Type": "application/json",
   },
 });
@@ -92,14 +92,25 @@ function normalizeTags(rawTags = [], mode = "partial") {
  * (Used by your /ghl/* webhooks)
  */
 async function getContact(contactId) {
-  if (!contactId) {
-    console.warn("getContact called without contactId");
-    return null;
-  }
+  if (!contactId) return null;
 
   try {
-    const res = await ghl.get(`/v1/contacts/${contactId}`);
-    return res.data;
+    const res = await axios.get(
+      `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const data = res.data || {};
+
+    // Handle either { contact: {...} } or just {...}
+    const contact = data.contact || data;
+
+    return contact;
   } catch (err) {
     console.error(
       "❌ Error fetching contact from GHL:",
@@ -109,6 +120,7 @@ async function getContact(contactId) {
     return null;
   }
 }
+
 /** Photo Form Data */
 async function uploadFilesToTattooCustomField(contactId, files = []) {
   if (!files || files.length === 0) return null;
@@ -125,7 +137,6 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
 
   const form = new FormData();
 
-  // GHL docs: key must be "<custom_field_id>_<file_id>"
   files.forEach((file, idx) => {
     const key = `${customFieldId}_${idx + 1}`;
     form.append(key, file.buffer, {
@@ -143,10 +154,13 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
     files.length
   );
 
+  const token =
+    process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
+
   const res = await axios.post(url, form, {
     headers: {
       ...form.getHeaders(),
-      Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+      Authorization: `Bearer ${token}`,
       Accept: "application/json",
       Version: "2021-07-28",
     },
@@ -159,6 +173,7 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
 
   return res.data;
 }
+
 
 /**
  * Lookup a contact by email or phone using v1 lookup endpoint
