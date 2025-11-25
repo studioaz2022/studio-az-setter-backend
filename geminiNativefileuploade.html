@@ -234,7 +234,7 @@ const surveyFlow = {
             ]
         },
         { 
-            id: 'tattoo_reference_description', 
+            id: 'tattoo_photo_description', 
             label_en: 'Describe your reference/uploaded photos', 
             label_es: 'Describe tus fotos de referencia/subidas', 
             type: 'textarea', 
@@ -253,8 +253,8 @@ const surveyFlow = {
       text_es: "¿Es este tu primer tatuaje?",
       type: 'multiple-choice',
       options: [
-        { text: 'Yes, my first', text_es: 'Sí, es mi primero', value: 'Yes', next: 'q_concerns' }, 
-        { text: 'No, I have others', text_es: 'No, tengo otros', value: 'No', next: 'q_concerns' }, 
+        { text: 'Yes, my first', text_es: 'Sí, es mi primero', value: 'Yes', value_es: 'Sí', next: 'q_concerns' }, 
+        { text: 'No, I have others', text_es: 'No, tengo otros', value: 'No', value_es: 'No', next: 'q_concerns' }, 
       ]
     },
     'q_concerns': {
@@ -407,11 +407,17 @@ const InputField = ({ field, value, onChange, lang }) => {
                     <option value="" disabled>
                         {isSpanish ? 'Seleccionar...' : 'Select...'}
                     </option>
-                    {field.options.map((opt) => (
-                        <option key={opt.value} value={opt.value}>
-                            {isSpanish ? opt.label_es : opt.label_en}
-                        </option>
-                    ))}
+                    {field.options.map((opt) => {
+                        // This ensures the CRM receives the Spanish text if the user is in Spanish mode
+                        const optionValue = isSpanish ? (opt.label_es || opt.value) : opt.value;
+                        const optionLabel = isSpanish ? (opt.label_es || opt.label_en) : (opt.label_en || opt.label_es);
+
+                        return (
+                            <option key={opt.value} value={optionValue}>
+                                {optionLabel}
+                            </option>
+                        );
+                    })}
                 </select>
             </div>
         </div>
@@ -568,22 +574,22 @@ function App() {
             let isMultipart = false;
 
             if (uploadedFiles.length > 0) {
-            const formData = new FormData();
-            const jsonData = buildPayloadJSON(currentData);
+              const formData = new FormData();
+              formData.append("data", JSON.stringify(buildPayloadJSON(currentData)));
+              uploadedFiles.forEach((file) => formData.append("files", file));
 
-            // JSON payload as string
-            formData.append("data", JSON.stringify(jsonData));
-
-            // All images
-            uploadedFiles.forEach((file) => {
-                formData.append("files", file);
-            });
-
-            bodyData = formData;
-            isMultipart = true;
+              await fetch(`${API_BASE}/lead/final`, {
+                method: "POST",
+                body: formData,          // 🔹 NO manual Content-Type header here
+              });
             } else {
-            bodyData = JSON.stringify(buildPayloadJSON(currentData));
+              await fetch(`${API_BASE}/lead/final`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(buildPayloadJSON(currentData)),
+              });
             }
+
 
             console.log(
             "Submitting Final Lead...",
@@ -615,6 +621,7 @@ function App() {
         email: data.email,
         tags: ["Consultation Request", lang, "Source: Web Widget"],
         customFields: {
+            language_preference: lang,
             inquired_technician: technicianName || '',
             whatsapp_user: data.whatsapp ? "Yes" : "No",
             tattoo_title: data.tattoo_title,
@@ -623,10 +630,10 @@ function App() {
             tattoo_style: data.tattoo_style,
             size_of_tattoo: data.q_tattoo_size || data.q_tatuaje_tamano,
             tattoo_color_preference: data.q_color_pref || data.tattoo_color_preference,
-            tattoo_timeframe: data.q_timeline_en || data.q_timeline_es,
+            how_soon_is_client_deciding: data.q_timeline_en || data.q_timeline_es,
             first_tattoo: data.q_first_tattoo,
             tattoo_concerns: data.tattoo_concerns,
-            tattoo_reference_description: data.tattoo_reference_description
+            tattoo_photo_description: data.tattoo_photo_description
         },
         utm: utmParameters
       };

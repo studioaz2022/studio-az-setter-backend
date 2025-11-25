@@ -121,18 +121,30 @@ function extractIntakeFromContact(contact) {
 }
 
 // 🔹 Decide which language to use (en/es)
-function detectLanguage(languagePreference) {
-  if (!languagePreference) return "en";
-  const v = String(languagePreference).toLowerCase();
-  if (v.includes("spanish") || v.includes("español") || v.includes("espanol")) {
+function detectLanguage(languagePreference, contactTags = []) {
+  // 1. Primary: explicit selection from form
+  if (languagePreference) {
+    const v = String(languagePreference).toLowerCase();
+    if (v.includes("spanish") || v.includes("español") || v.includes("espanol")) {
+      return "es";
+    }
+    return "en";
+  }
+
+  // 2. Secondary: tags (for DM/inbound messages)
+  const lowerTags = contactTags.map(t => t.toLowerCase());
+  if (lowerTags.includes("spanish") || lowerTags.includes("espanol")) {
     return "es";
   }
+
+  // 3. Default fallback
   return "en";
 }
 
+
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
 function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
-  const language = detectLanguage(intake.languagePreference);
+  const language = detectLanguage(intake.languagePreference, contactSafe.tags || []);
 
   const contactSafe = {
     id: contact.id || contact._id || null,
@@ -226,8 +238,9 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
     contactId: contact.id || contact._id,
     leadTemperature,
     aiPhase,
-    languageGuess: detectLanguage(intake.languagePreference),
+    language: detectLanguage(intake.languagePreference, contact.tags || []),
   });
+
 
   const completion = await openai.chat.completions.create({
     model: "gpt-4.1-mini",
