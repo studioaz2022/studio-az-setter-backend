@@ -9,7 +9,7 @@ const FormData = require("form-data");
 const ghl = axios.create({
   baseURL: "https://rest.gohighlevel.com", // v1 base
   headers: {
-    Authorization: `Bearer ${process.env.GHL_FILE_UPLOAD_TOKEN}`,
+    Authorization: `Bearer ${process.env.GHL_API_KEY}`,
     "Content-Type": "application/json",
   },
 });
