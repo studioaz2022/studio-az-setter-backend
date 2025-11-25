@@ -39,7 +39,11 @@ const SYSTEM_FIELD_MAP = {
   deposit_link_sent: "deposit_link_sent",
   deposit_paid: "deposit_paid",
   last_phase_update_at: "last_phase_update_at",
+
+  // 🔹 NEW: store the contact's preferred language
+  language_preference: "language_preference", // make sure this matches the actual GHL key
 };
+
 
 
 // Convert widget customFields → GHL v1 customField object
@@ -312,6 +316,8 @@ async function updateSystemFields(contactId, fields = {}) {
   if (!contactId) {
     console.warn("updateSystemFields called without contactId");
     return null;
+  if (fields.language_preference !== undefined && SYSTEM_FIELD_MAP.language_preference) {
+    customField[SYSTEM_FIELD_MAP.language_preference] = fields.language_preference;}
   }
 
   const customField = {};

@@ -24,9 +24,50 @@ const {
 } = require("./stateMachine");
 
 const { generateOpenerForContact } = require("./aiClient");
-
-
 const app = express();
+
+function looksLikeSpanish(text) {
+  if (!text) return false;
+  const v = String(text).toLowerCase();
+
+  const spanishHints = [
+    "hola",
+    "gracias",
+    "buenos días",
+    "buenas tardes",
+    "buenas noches",
+    "quiero",
+    "podría",
+    "me gustaría",
+    "tatuaje",
+    "tatuajes",
+    "cita",
+    "presupuesto",
+    "antebrazo",
+    "muñeca",
+    "pierna",
+    "dolor",
+    "cotizar",
+    "cotización",
+    "cotices",
+    "cotizo",
+    "busco",
+    "oye",
+    "negro y gris",
+    "en un mes",
+  ];
+
+  const hasAccent = /[áéíóúñ]/.test(v);
+
+  let hits = 0;
+  for (const word of spanishHints) {
+    if (v.includes(word)) hits++;
+  }
+
+  // Accent OR at least 2 Spanish words = Spanish
+  return hasAccent || hits >= 2;
+}
+
 
 app.use(express.json());
 
@@ -198,6 +239,37 @@ app.post("/ghl/message-webhook", async (req, res) => {
   });
 
   const cf = contact.customField || contact.customFields || {};
+  const currentLanguage =
+    cf["language_preference"] ||
+    cf["Language Preference"] ||
+    null;
+
+  // Extract the latest message text from the webhook payload
+  const messageText =
+    (req.body.messageBody ||
+     req.body.body ||
+     req.body.message ||
+     (customData && (customData.messageBody || customData.body || customData.message)) ||
+     "").toString();
+
+  console.log("📩 Incoming message text (for language detection):", messageText);
+
+  // If we don't already have a language preference and this looks like Spanish, set it
+  if (!currentLanguage && looksLikeSpanish(messageText)) {
+    console.log("🌐 Detected Spanish DM/SMS. Updating language_preference to Spanish...");
+
+    try {
+      await updateSystemFields(contactId, {
+        language_preference: "Spanish",
+      });
+      console.log("✅ language_preference updated to Spanish for contact:", contactId);
+    } catch (err) {
+      console.error(
+        "❌ Failed to update language_preference:",
+        err.response?.data || err.message
+      );
+    }
+  }
 
   const currentPhase =
     cf["ai_phase"] ||
