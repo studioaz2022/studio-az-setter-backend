@@ -316,30 +316,52 @@ async function updateSystemFields(contactId, fields = {}) {
   if (!contactId) {
     console.warn("updateSystemFields called without contactId");
     return null;
-  if (fields.language_preference !== undefined && SYSTEM_FIELD_MAP.language_preference) {
-    customField[SYSTEM_FIELD_MAP.language_preference] = fields.language_preference;}
   }
 
   const customField = {};
+
+  // 🔹 NEW: language_preference mapping in the right place
+  if (
+    fields.language_preference !== undefined &&
+    SYSTEM_FIELD_MAP.language_preference
+  ) {
+    customField[SYSTEM_FIELD_MAP.language_preference] =
+      fields.language_preference;
+  }
 
   if (fields.ai_phase !== undefined && SYSTEM_FIELD_MAP.ai_phase) {
     customField[SYSTEM_FIELD_MAP.ai_phase] = fields.ai_phase;
   }
 
-  if (fields.lead_temperature !== undefined && SYSTEM_FIELD_MAP.lead_temperature) {
-    customField[SYSTEM_FIELD_MAP.lead_temperature] = fields.lead_temperature;
+  if (
+    fields.lead_temperature !== undefined &&
+    SYSTEM_FIELD_MAP.lead_temperature
+  ) {
+    customField[SYSTEM_FIELD_MAP.lead_temperature] =
+      fields.lead_temperature;
   }
 
-  if (fields.deposit_link_sent !== undefined && SYSTEM_FIELD_MAP.deposit_link_sent) {
-    customField[SYSTEM_FIELD_MAP.deposit_link_sent] = fields.deposit_link_sent ? "Yes" : "No";
+  if (
+    fields.deposit_link_sent !== undefined &&
+    SYSTEM_FIELD_MAP.deposit_link_sent
+  ) {
+    customField[SYSTEM_FIELD_MAP.deposit_link_sent] = fields.deposit_link_sent
+      ? "Yes"
+      : "No";
   }
 
   if (fields.deposit_paid !== undefined && SYSTEM_FIELD_MAP.deposit_paid) {
-    customField[SYSTEM_FIELD_MAP.deposit_paid] = fields.deposit_paid ? "Yes" : "No";
+    customField[SYSTEM_FIELD_MAP.deposit_paid] = fields.deposit_paid
+      ? "Yes"
+      : "No";
   }
 
-  if (fields.last_phase_update_at !== undefined && SYSTEM_FIELD_MAP.last_phase_update_at) {
-    customField[SYSTEM_FIELD_MAP.last_phase_update_at] = fields.last_phase_update_at;
+  if (
+    fields.last_phase_update_at !== undefined &&
+    SYSTEM_FIELD_MAP.last_phase_update_at
+  ) {
+    customField[SYSTEM_FIELD_MAP.last_phase_update_at] =
+      fields.last_phase_update_at;
   }
 
   if (Object.keys(customField).length === 0) {
@@ -360,6 +382,7 @@ async function updateSystemFields(contactId, fields = {}) {
     return null;
   }
 }
+
 
 
 module.exports = {
