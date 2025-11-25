@@ -245,14 +245,32 @@ app.post("/ghl/message-webhook", async (req, res) => {
     null;
 
   // Extract the latest message text from the webhook payload
-  const messageText =
-    (req.body.messageBody ||
-     req.body.body ||
-     req.body.message ||
-     (customData && (customData.messageBody || customData.body || customData.message)) ||
-     "").toString();
+  // Try direct string fields first
+    let messageText =
+    req.body.messageBody ||
+    req.body.body ||
+    "";
 
-  console.log("📩 Incoming message text (for language detection):", messageText);
+    // If not found yet and there's a message object, use its body
+    if (!messageText && req.body.message && typeof req.body.message.body === "string") {
+    messageText = req.body.message.body;
+    }
+
+    // Also check inside customData if needed
+    if (!messageText && typeof customData.messageBody === "string") {
+    messageText = customData.messageBody;
+    }
+    if (!messageText && typeof customData.body === "string") {
+    messageText = customData.body;
+    }
+    if (!messageText && customData.message && typeof customData.message.body === "string") {
+    messageText = customData.message.body;
+    }
+
+    // Final safety cast
+    messageText = String(messageText || "");
+
+    console.log("📩 Incoming message text (for language detection):", messageText);
 
   // If we don't already have a language preference and this looks like Spanish, set it
   if (!currentLanguage && looksLikeSpanish(messageText)) {
