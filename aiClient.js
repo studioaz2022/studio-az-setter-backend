@@ -144,8 +144,6 @@ function detectLanguage(languagePreference, contactTags = []) {
 
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
 function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
-  const language = detectLanguage(intake.languagePreference, contactSafe.tags || []);
-
   const contactSafe = {
     id: contact.id || contact._id || null,
     firstName: contact.firstName || contact.first_name || null,
@@ -154,6 +152,11 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
     email: contact.email || null,
     tags: contact.tags || [],
   };
+
+  const language = detectLanguage(
+    intake.languagePreference,
+    contactSafe.tags || []
+  );
 
   const userPayload = {
     phase: "opener",
@@ -206,16 +209,11 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 `;
 
   return [
-    {
-      role: "system",
-      content: systemContent,
-    },
-    {
-      role: "user",
-      content: JSON.stringify(userPayload, null, 2),
-    },
+    { role: "system", content: systemContent },
+    { role: "user", content: JSON.stringify(userPayload, null, 2) },
   ];
 }
+
 
 // 🔹 Main: generate opener for a new intake (form webhook)
 async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
