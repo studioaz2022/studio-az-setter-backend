@@ -294,12 +294,18 @@ app.post("/ghl/message-webhook", async (req, res) => {
     cf["aiPhase"] ||
     "";
 
+  const leadTemperature =
+    cf["lead_temperature"] ||
+    cf["leadTemperature"] ||
+    "cold"; // default if not set yet
+
   const newPhase = decidePhaseForMessage(currentPhase);
   const nowIso = new Date().toISOString();
 
   console.log("🧠 Derived system state (message):", {
     currentPhase,
     newPhase,
+    leadTemperature,
   });
 
   await updateSystemFields(contactId, {
@@ -309,8 +315,28 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for message webhook");
 
+  // 🔹 NEW: Call AI Setter to suggest a reply (log-only for now)
+  try {
+    const aiResult = await generateOpenerForContact({
+      contact,
+      aiPhase: newPhase,
+      leadTemperature,
+    });
+
+    console.log(
+      "🤖 AI DM suggestion:",
+      JSON.stringify(aiResult, null, 2)
+    );
+  } catch (err) {
+    console.error(
+      "❌ Error generating AI DM suggestion:",
+      err.response?.data || err.message || err
+    );
+  }
+
   res.status(200).send("OK");
 });
+
 
 
 // Webhook to receive payment events from Square
