@@ -160,12 +160,6 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
   return res.data;
 }
 
-module.exports = {
-  // ...existing exports
-  uploadFilesToTattooCustomField,
-};
-
-
 /**
  * Lookup a contact by email or phone using v1 lookup endpoint
  * https://rest.gohighlevel.com/v1/contacts/lookup?email=john@doe.com
@@ -351,5 +345,7 @@ module.exports = {
   getContact,
   upsertContactFromWidget,
   updateSystemFields,
+  uploadFilesToTattooCustomField,
 };
+
 

@@ -22,11 +22,7 @@ const {
   initialPhaseForNewIntake,
   decidePhaseForMessage,
 } = require("./stateMachine");
-const {
-  decideLeadTemperature,
-  initialPhaseForNewIntake,
-  decidePhaseForMessage,
-} = require("./stateMachine");
+
 const { generateOpenerForContact } = require("./aiClient");
 
 
