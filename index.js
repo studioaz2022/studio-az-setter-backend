@@ -297,7 +297,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const leadTemperature =
     cf["lead_temperature"] ||
     cf["leadTemperature"] ||
-    "cold"; // default if not set yet
+    "cold";
 
   const newPhase = decidePhaseForMessage(currentPhase);
   const nowIso = new Date().toISOString();
@@ -315,10 +315,25 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for message webhook");
 
-  // 🔹 NEW: Call AI Setter to suggest a reply (log-only for now)
+  // 🔹 NEW: re-load contact so we get the updated language_preference
+  let freshContact = contact;
+  try {
+    const refreshed = await getContact(contactId);
+    if (refreshed) {
+      freshContact = refreshed;
+      console.log("🔄 Refetched contact after system field update for AI call.");
+    }
+  } catch (err) {
+    console.warn(
+      "⚠️ Could not refresh contact before AI call, falling back to stale contact:",
+      err.response?.data || err.message
+    );
+  }
+
+  // 🔹 Call AI Setter for DM suggestion (log only)
   try {
     const aiResult = await generateOpenerForContact({
-      contact,
+      contact: freshContact,
       aiPhase: newPhase,
       leadTemperature,
     });
@@ -336,7 +351,6 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   res.status(200).send("OK");
 });
-
 
 
 // Webhook to receive payment events from Square
