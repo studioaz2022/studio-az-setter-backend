@@ -42,12 +42,31 @@ function extractIntakeFromContact(contact) {
     cf = cfRaw;
   }
 
-  // 🔸 Adjust these keys to match your actual custom field keys exactly
-  const languagePreference =
+  // 🔸 Try direct keys first
+  let languagePreference =
     cf["language_preference"] ||
     cf["Language Preference"] ||
     cf["languagePreference"] ||
     null;
+
+  // 🔸 Fallback: scan ALL custom fields for a value that looks like a language
+  if (!languagePreference) {
+    for (const [key, value] of Object.entries(cf)) {
+      if (typeof value !== "string") continue;
+      const v = value.trim().toLowerCase();
+      if (
+        v === "spanish" ||
+        v === "español" ||
+        v === "english" ||
+        v === "inglés" ||
+        v === "es" ||
+        v === "en"
+      ) {
+        languagePreference = value;
+        break;
+      }
+    }
+  }
 
   const tattooTitle =
     cf["tattoo_title"] ||
@@ -120,26 +139,42 @@ function extractIntakeFromContact(contact) {
   };
 }
 
-// 🔹 Decide which language to use (en/es)
-function detectLanguage(languagePreference, contactTags = []) {
-  // 1. Primary: explicit selection from form
-  if (languagePreference) {
-    const v = String(languagePreference).toLowerCase();
-    if (v.includes("spanish") || v.includes("español") || v.includes("espanol")) {
-      return "es";
-    }
-    return "en";
-  }
 
-  // 2. Secondary: tags (for DM/inbound messages)
-  const lowerTags = contactTags.map(t => t.toLowerCase());
-  if (lowerTags.includes("spanish") || lowerTags.includes("espanol")) {
+// 🔹 Decide which language to use (en/es)
+function detectLanguage(preferred) {
+  if (!preferred) return "en";
+
+  const v = String(preferred).trim().toLowerCase();
+
+  // Treat anything Spanish-like as 'es'
+  if (
+    v === "es" ||
+    v === "spanish" ||
+    v === "español" ||
+    v.startsWith("es-") ||
+    v.startsWith("es_") ||
+    v.includes("español") ||
+    v.includes("spanish")
+  ) {
     return "es";
   }
 
-  // 3. Default fallback
+  // Treat anything English-like as 'en'
+  if (
+    v === "en" ||
+    v === "english" ||
+    v === "inglés" ||
+    v.startsWith("en-") ||
+    v.startsWith("en_") ||
+    v.includes("english")
+  ) {
+    return "en";
+  }
+
+  // Default fallback
   return "en";
 }
+
 
 
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
