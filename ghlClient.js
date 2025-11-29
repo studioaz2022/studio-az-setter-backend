@@ -397,14 +397,29 @@ async function sendConversationMessage({ contactId, body }) {
 
   const payload = {
     contactId,
-    locationId: process.env.GHL_LOCATION_ID,
-    body,              // message text
-    // You can extend this later with more fields like channel/type if needed.
+    locationId: GHL_LOCATION_ID,
+    body, // message text
   };
 
-  const resp = await ghl.post("/conversations/messages", payload);
+  const url = "https://services.leadconnectorhq.com/conversations/messages";
+
+  const resp = await axios.post(url, payload, {
+    headers: {
+      Authorization: `Bearer ${GHL_API_KEY}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Version: "2021-07-28", // required for this endpoint
+    },
+  });
+
+  console.log("📨 GHL conversations API response:", {
+    status: resp.status,
+    contactId,
+  });
+
   return resp.data;
 }
+
 
 
 
