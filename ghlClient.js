@@ -383,6 +383,32 @@ async function updateSystemFields(contactId, fields = {}) {
   }
 }
 
+// Send a message in a contact's conversation
+async function sendConversationMessage({ contactId, body }) {
+  if (!contactId) {
+    throw new Error("contactId is required for sendConversationMessage");
+  }
+  if (!body || !body.trim()) {
+    console.warn("sendConversationMessage called with empty body, skipping.");
+    return null;
+  }
+
+  const payload = {
+    contactId,
+    locationId: process.env.GHL_LOCATION_ID,
+    body,              // message text
+    // You can extend this later with more fields like channel/type if needed.
+  };
+
+  const resp = await ghl.post("/conversations/messages", payload);
+  return resp.data;
+}
+
+module.exports = {
+  // ...existing exports
+  sendConversationMessage,
+};
+
 
 
 module.exports = {
