@@ -6,17 +6,17 @@ const upload = multer({
   limits: { fileSize: 50 * 1024 * 1024 }, // 50MB
 });
 
-const {
-  uploadFilesToTattooCustomField,
-} = require("./ghlClient");
-
 const express = require("express");
 const cors = require("cors");
+
 const {
+  uploadFilesToTattooCustomField,
   getContact,
   upsertContactFromWidget,
   updateSystemFields,
+  sendConversationMessage,
 } = require("./ghlClient");
+
 const {
   decideLeadTemperature,
   initialPhaseForNewIntake,
@@ -24,16 +24,10 @@ const {
 } = require("./stateMachine");
 
 const { generateOpenerForContact } = require("./aiClient");
+
 const app = express();
 
-const {
-  getContact,
-  updateSystemFields,
-  // ...other imports
-  sendConversationMessage,
-} = require("./ghlClient");
-
-
+// 🔹 Simple heuristic to detect Spanish messages
 function looksLikeSpanish(text) {
   if (!text) return false;
   const v = String(text).toLowerCase();
