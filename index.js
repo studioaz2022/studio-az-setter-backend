@@ -21,9 +21,9 @@ const {
   decideLeadTemperature,
   initialPhaseForNewIntake,
   decidePhaseForMessage,
-} = require("./stateMachine");
+} = require("./src/ai/stateMachine");
 
-const { generateOpenerForContact } = require("./aiClient");
+const { generateOpenerForContact } = require("./src/ai/aiClient");
 
 const app = express();
 
