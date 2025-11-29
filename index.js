@@ -24,6 +24,7 @@ const {
 } = require("./src/ai/stateMachine");
 
 const { generateOpenerForContact } = require("./src/ai/aiClient");
+const { handleInboundMessage } = require("./src/ai/controller");
 
 const app = express();
 
@@ -334,7 +335,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   // 🔹 Call AI Setter and send reply into the conversation
   try {
-    const aiResult = await generateOpenerForContact({
+    const { aiResult } = await handleInboundMessage({
       contact: freshContact,
       aiPhase: newPhase,
       leadTemperature,
