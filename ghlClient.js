@@ -399,11 +399,9 @@ async function sendConversationMessage({ contactId, body }) {
   const payload = {
     contactId,
     locationId: GHL_LOCATION_ID,
-    body,        // message text
-    type: "SMS", // required by Conversations API
+    message: body, // ✅ correct field name for text
+    type: "SMS",   // Required by Conversations API
   };
-
-  console.log("📨 GHL conversations API payload:", payload);
 
   const url = "https://services.leadconnectorhq.com/conversations/messages";
 
@@ -412,7 +410,7 @@ async function sendConversationMessage({ contactId, body }) {
       Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
       "Content-Type": "application/json",
       Accept: "application/json",
-      Version: "2021-07-28", // required for this endpoint
+      Version: "2021-07-28",
     },
   });
 
@@ -423,6 +421,7 @@ async function sendConversationMessage({ contactId, body }) {
 
   return resp.data;
 }
+
 
 
 
