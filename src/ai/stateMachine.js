@@ -63,7 +63,7 @@ function initialPhaseForNewIntake() {
  */
 function decidePhaseForMessage(currentPhase) {
   if (!currentPhase || currentPhase.trim() === "") {
-    return "discovery";
+    return "intake"; // first inbound DM/SMS should behave like intake
   }
   // Later we can add more complex transitions here.
   return currentPhase;
