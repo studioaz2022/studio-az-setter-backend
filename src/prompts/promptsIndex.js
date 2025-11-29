@@ -1,4 +1,4 @@
-// prompts/index.js
+// src/prompts/promptsIndex.js
 const fs = require("fs");
 const path = require("path");
 

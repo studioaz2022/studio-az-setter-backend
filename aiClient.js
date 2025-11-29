@@ -10,7 +10,7 @@ const openai = new OpenAI({
 
 // 🔹 Helper to load prompt files safely
 function loadPrompt(filename) {
-  const fullPath = path.join(__dirname, "prompts", filename);
+  const fullPath = path.join(__dirname, "src", "prompts", filename);
   try {
     const text = fs.readFileSync(fullPath, "utf8");
     console.log(`✅ Loaded prompt file: ${filename}`);
