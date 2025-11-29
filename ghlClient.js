@@ -278,6 +278,27 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
   };
 
   // Try to find existing contact
+  async function sendConversationMessage({ contactId, body }) {
+  if (!contactId) {
+    throw new Error("contactId is required for sendConversationMessage");
+  }
+  if (!body || !body.trim()) {
+    console.warn("sendConversationMessage called with empty body, skipping.");
+    return null;
+  }
+
+  const payload = {
+    contactId,
+    locationId: GHL_LOCATION_ID,
+    body, // text message content
+  };
+
+  const res = await ghl.post("/conversations/messages", payload);
+  return res.data;
+}
+
+
+  // Try to find existing contact
   const contactId = await lookupContactIdByEmailOrPhone(email, phone);
 
   if (contactId) {
@@ -416,6 +437,9 @@ module.exports = {
   upsertContactFromWidget,
   updateSystemFields,
   uploadFilesToTattooCustomField,
+  uploadCustomFileToContact,
+  sendConversationMessage,
 };
+
 
 
