@@ -26,6 +26,14 @@ const {
 const { generateOpenerForContact } = require("./aiClient");
 const app = express();
 
+const {
+  getContact,
+  updateSystemFields,
+  // ...other imports
+  sendConversationMessage,
+} = require("./ghlClient");
+
+
 function looksLikeSpanish(text) {
   if (!text) return false;
   const v = String(text).toLowerCase();
@@ -315,7 +323,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for message webhook");
 
-  // 🔹 NEW: re-load contact so we get the updated language_preference
+  // 🔄 Refetch contact so intake sees latest language_preference
   let freshContact = contact;
   try {
     const refreshed = await getContact(contactId);
@@ -330,7 +338,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
   }
 
-  // 🔹 Call AI Setter for DM suggestion (log only)
+  // 🔹 Call AI Setter and send reply into the conversation
   try {
     const aiResult = await generateOpenerForContact({
       contact: freshContact,
@@ -342,9 +350,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
       "🤖 AI DM suggestion:",
       JSON.stringify(aiResult, null, 2)
     );
+
+    if (aiResult && Array.isArray(aiResult.bubbles)) {
+      for (const text of aiResult.bubbles) {
+        await sendConversationMessage({
+          contactId,
+          body: text,
+        });
+      }
+      console.log("📤 Sent AI bubbles to GHL conversation.");
+    } else {
+      console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
+    }
   } catch (err) {
     console.error(
-      "❌ Error generating AI DM suggestion:",
+      "❌ Error generating or sending AI DM suggestion:",
       err.response?.data || err.message || err
     );
   }
