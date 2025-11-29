@@ -8,10 +8,10 @@ function loadFile(relativePath) {
 }
 
 const masterPromptA = loadFile("master_system_prompt_v3.txt");
-const phasePromptsRaw = loadFile("phaseB_v2.txt");
+const phasePromptsRaw = loadFile("phase_prompts_v3.txt");
 
 // For now we'll just export both raw strings.
-// Later we can parse phaseB into a map if we want.
+// Later we can parse phase prompts into a map if we want.
 module.exports = {
   masterPromptA,
   phasePromptsRaw,
