@@ -4,6 +4,8 @@ require("dotenv").config();
 const axios = require("axios");
 const FormData = require("form-data");
 
+const GHL_API_KEY = process.env.GHL_API_KEY;
+const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
 // Axios client for GHL v1 API
 const ghl = axios.create({
@@ -247,6 +249,25 @@ async function updateContact(contactId, body) {
   return res.data;
 }
 
+async function sendConversationMessage({ contactId, body }) {
+  if (!contactId) {
+    throw new Error("contactId is required for sendConversationMessage");
+  }
+  if (!body || !body.trim()) {
+    console.warn("sendConversationMessage called with empty body, skipping.");
+    return null;
+  }
+
+  const payload = {
+    contactId,
+    locationId: GHL_LOCATION_ID,
+    body, // text message content
+  };
+
+  const res = await ghl.post("/conversations/messages", payload);
+  return res.data;
+}
+
 /**
  * Upsert a contact from the widget payload.
  * - mode = "partial" → background create/update, no consultation tag
@@ -276,27 +297,6 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
     source: "AI Tattoo Widget",
     // If you later map UTM to real custom fields, you can stuff them into customField above.
   };
-
-  // Try to find existing contact
-  async function sendConversationMessage({ contactId, body }) {
-  if (!contactId) {
-    throw new Error("contactId is required for sendConversationMessage");
-  }
-  if (!body || !body.trim()) {
-    console.warn("sendConversationMessage called with empty body, skipping.");
-    return null;
-  }
-
-  const payload = {
-    contactId,
-    locationId: GHL_LOCATION_ID,
-    body, // text message content
-  };
-
-  const res = await ghl.post("/conversations/messages", payload);
-  return res.data;
-}
-
 
   // Try to find existing contact
   const contactId = await lookupContactIdByEmailOrPhone(email, phone);
