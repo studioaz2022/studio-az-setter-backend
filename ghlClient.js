@@ -106,7 +106,7 @@ async function getContact(contactId) {
       `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
       {
         headers: {
-          Authorization: `Bearer ${process.env.GHL_FILE_UPLOAD_TOKEN}`,
+          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
           Accept: "application/json",
         },
       }
