@@ -6,7 +6,7 @@ const FormData = require("form-data");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
-const GHL_TATTOO_FILE_FIELD_ID = process.env.GHL_TATTOO_FILE_FIELD_ID;
+const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 
 // Axios client for GHL v1 API
 const ghl = axios.create({
@@ -106,7 +106,7 @@ async function getContact(contactId) {
       `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
       {
         headers: {
-          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
+          Authorization: `Bearer ${process.env.GHL_FILE_UPLOAD_TOKEN}`,
           Accept: "application/json",
         },
       }
