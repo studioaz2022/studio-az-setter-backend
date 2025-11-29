@@ -399,8 +399,11 @@ async function sendConversationMessage({ contactId, body }) {
   const payload = {
     contactId,
     locationId: GHL_LOCATION_ID,
-    body, // message text
+    body,        // message text
+    type: "SMS", // required by Conversations API
   };
+
+  console.log("📨 GHL conversations API payload:", payload);
 
   const url = "https://services.leadconnectorhq.com/conversations/messages";
 
