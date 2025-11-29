@@ -6,6 +6,7 @@ const FormData = require("form-data");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
+const GHL_TATTOO_FILE_FIELD_ID = process.env.GHL_TATTOO_FILE_FIELD_ID;
 
 // Axios client for GHL v1 API
 const ghl = axios.create({
