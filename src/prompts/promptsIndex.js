@@ -7,7 +7,7 @@ function loadFile(relativePath) {
   return fs.readFileSync(fullPath, "utf8");
 }
 
-const masterPromptA = loadFile("masterA_v2.txt");
+const masterPromptA = loadFile("master_system_prompt_v3.txt");
 const phasePromptsRaw = loadFile("phaseB_v2.txt");
 
 // For now we'll just export both raw strings.
