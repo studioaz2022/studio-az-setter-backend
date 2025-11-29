@@ -335,7 +335,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   // 🔹 Call AI Setter and send reply into the conversation
   try {
-    const { aiResult } = await handleInboundMessage({
+    const aiResult = await generateOpenerForContact({
       contact: freshContact,
       aiPhase: newPhase,
       leadTemperature,

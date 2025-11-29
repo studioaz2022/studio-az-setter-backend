@@ -386,6 +386,78 @@ async function updateSystemFields(contactId, fields = {}) {
   }
 }
 
+// Infer the outbound "type" for /conversations/messages by looking at the last inbound message
+async function inferConversationMessageType(contactId) {
+  if (!contactId) return "SMS";
+
+  const url = `https://services.leadconnectorhq.com/conversations/search?locationId=${encodeURIComponent(
+    GHL_LOCATION_ID
+  )}&contactId=${encodeURIComponent(contactId)}`;
+
+  try {
+    const resp = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        Accept: "application/json",
+        Version: "2021-04-15",
+      },
+    });
+
+    const convs = resp.data?.conversations || [];
+    if (!convs.length) {
+      console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
+      return "SMS";
+    }
+
+    const last = convs[0]; // they’re sorted newest-first in your example
+    const lastType = last.lastMessageType || last.type || "";
+
+    if (!lastType || typeof lastType !== "string") {
+      console.warn(
+        "inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS"
+      );
+      return "SMS";
+    }
+
+    const t = lastType.toUpperCase();
+
+    // Map GHL lastMessageType → Conversations API "type" enum
+    if (t.includes("INSTAGRAM")) {
+      return "IG";
+    }
+    if (t.includes("FACEBOOK")) {
+      return "FB";
+    }
+    if (t.includes("WHATSAPP")) {
+      return "WhatsApp";
+    }
+    if (t.includes("GMB")) {
+      return "GMB";
+    }
+    if (t.includes("WEBCHAT") || t.includes("LIVE_CHAT")) {
+      return "Live_Chat";
+    }
+    if (t.includes("EMAIL")) {
+      return "Email";
+    }
+    if (t.includes("SMS") || t.includes("PHONE") || t.includes("CALL") || t.includes("CUSTOM_SMS")) {
+      return "SMS";
+    }
+
+    // Fallback
+    console.warn(
+      `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to SMS`
+    );
+    return "SMS";
+  } catch (err) {
+    console.error(
+      "inferConversationMessageType: error calling /conversations/search, defaulting to SMS:",
+      err.response?.data || err.message
+    );
+    return "SMS";
+  }
+}
+
 // Send a message in a contact's conversation
 async function sendConversationMessage({ contactId, body }) {
   if (!contactId) {
@@ -396,11 +468,14 @@ async function sendConversationMessage({ contactId, body }) {
     return null;
   }
 
+  // 🔹 NEW: infer type (SMS / FB / IG / WhatsApp / Email / etc.)
+  const type = await inferConversationMessageType(contactId);
+
   const payload = {
     contactId,
     locationId: GHL_LOCATION_ID,
-    message: body, // ✅ correct field name for text
-    type: "SMS",   // Required by Conversations API
+    message: body,
+    type, // e.g. "SMS", "FB", "IG", ...
   };
 
   const url = "https://services.leadconnectorhq.com/conversations/messages";
@@ -417,10 +492,12 @@ async function sendConversationMessage({ contactId, body }) {
   console.log("📨 GHL conversations API response:", {
     status: resp.status,
     contactId,
+    type,
   });
 
   return resp.data;
 }
+
 
 
 
@@ -431,5 +508,7 @@ module.exports = {
   upsertContactFromWidget,
   updateSystemFields,
   uploadFilesToTattooCustomField,
+  uploadCustomFileToContact,
   sendConversationMessage,
 };
+
