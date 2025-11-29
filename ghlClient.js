@@ -249,25 +249,6 @@ async function updateContact(contactId, body) {
   return res.data;
 }
 
-async function sendConversationMessage({ contactId, body }) {
-  if (!contactId) {
-    throw new Error("contactId is required for sendConversationMessage");
-  }
-  if (!body || !body.trim()) {
-    console.warn("sendConversationMessage called with empty body, skipping.");
-    return null;
-  }
-
-  const payload = {
-    contactId,
-    locationId: GHL_LOCATION_ID,
-    body, // text message content
-  };
-
-  const res = await ghl.post("/conversations/messages", payload);
-  return res.data;
-}
-
 /**
  * Upsert a contact from the widget payload.
  * - mode = "partial" → background create/update, no consultation tag
@@ -425,11 +406,6 @@ async function sendConversationMessage({ contactId, body }) {
   return resp.data;
 }
 
-module.exports = {
-  // ...existing exports
-  sendConversationMessage,
-};
-
 
 
 module.exports = {
@@ -437,9 +413,5 @@ module.exports = {
   upsertContactFromWidget,
   updateSystemFields,
   uploadFilesToTattooCustomField,
-  uploadCustomFileToContact,
   sendConversationMessage,
 };
-
-
-
