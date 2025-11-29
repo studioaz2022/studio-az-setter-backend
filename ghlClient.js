@@ -405,7 +405,7 @@ async function sendConversationMessage({ contactId, body }) {
 
   const resp = await axios.post(url, payload, {
     headers: {
-      Authorization: `Bearer ${GHL_API_KEY}`,
+      Authorization: `Bearer ${GHL_API_KEGHL_FILE_UPLOAD_TOKENY}`,
       "Content-Type": "application/json",
       Accept: "application/json",
       Version: "2021-07-28", // required for this endpoint
