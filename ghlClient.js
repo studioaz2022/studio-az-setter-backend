@@ -508,7 +508,7 @@ module.exports = {
   upsertContactFromWidget,
   updateSystemFields,
   uploadFilesToTattooCustomField,
-  uploadCustomFileToContact,
   sendConversationMessage,
 };
+
 
