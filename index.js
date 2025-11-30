@@ -348,10 +348,20 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   // 🔹 Call AI Setter and send reply into the conversation
   try {
-    const aiResult = await generateOpenerForContact({
-      contact: freshContact,
-      aiPhase: newPhase,
-      leadTemperature,
+    const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
+      await handleInboundMessage({
+        contact: freshContact,
+        aiPhase: newPhase,
+        leadTemperature,
+      });
+
+    const meta = aiResult?.meta || {};
+    console.log("🧠 AI meta from response:", {
+      aiPhaseFromAI: meta.aiPhase,
+      leadTemperatureFromAI: meta.leadTemperature,
+      wantsDepositLink: meta.wantsDepositLink,
+      depositPushedThisTurn: meta.depositPushedThisTurn,
+      mentionDecoyOffered: meta.mentionDecoyOffered,
     });
 
     console.log(
@@ -383,6 +393,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
           });
         }
         console.log("📤 Sent delayed AI bubbles to GHL conversation.");
+
+        // Update system fields from AI meta if present
+        if (meta.aiPhase || meta.leadTemperature) {
+          const updateFields = {};
+          if (meta.aiPhase) updateFields.ai_phase = meta.aiPhase;
+          if (meta.leadTemperature) updateFields.lead_temperature = meta.leadTemperature;
+          updateFields.last_phase_update_at = new Date().toISOString();
+
+          console.log("🧠 Updating contact system fields from AI meta:", {
+            ai_phase: meta.aiPhase,
+            lead_temperature: meta.leadTemperature,
+          });
+
+          await updateSystemFields(contactId, updateFields);
+        }
       }
     } else {
       console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");

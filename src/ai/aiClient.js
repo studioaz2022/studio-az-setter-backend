@@ -230,6 +230,12 @@ For THIS call:
 - If language = "es", reply entirely in Spanish (neutral, non-corporate, no slang, no emojis, no inverted question marks).
 - If language = "en", reply in English.
 
+You MUST also maintain and output the "meta" object as described in the AI META FLAGS section of the master prompt:
+- Keep aiPhase in sync with where you are in the conversation (intake, discovery, qualification, closing, objections, routing, handoff, reengagement, consult_support).
+- Keep leadTemperature consistent with their behavior (hot, warm, cold).
+- Set wantsDepositLink and depositPushedThisTurn to true ONLY on turns where you are actively inviting them to move forward with the consult + refundable deposit.
+- Set mentionDecoyOffered to true ONLY on turns where you actually offer the lower-priced decoy consult after they resisted the main refundable deposit option.
+
 You MUST respond with VALID JSON ONLY, no extra text, matching this schema exactly:
 
 {
@@ -239,7 +245,14 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
     "Optional second bubble as a string",
     "Optional third bubble as a string"
   ],
-  "internal_notes": "Any internal notes for the human team or later phases (string). If not needed, use an empty string."
+  "internal_notes": "Any internal notes for the human team or later phases (string). If not needed, use an empty string.",
+  "meta": {
+    "aiPhase": "intake" | "discovery" | "qualification" | "closing" | "objections" | "routing" | "handoff" | "reengagement" | "consult_support",
+    "leadTemperature": "hot" | "warm" | "cold",
+    "wantsDepositLink": boolean,
+    "depositPushedThisTurn": boolean,
+    "mentionDecoyOffered": boolean
+  }
 }
 `;
 
@@ -305,6 +318,26 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
     };
   }
 
+  // Ensure meta exists with defaults
+  const meta = parsed.meta || {};
+  if (!meta.aiPhase) meta.aiPhase = aiPhase || "intake";
+  if (!meta.leadTemperature) meta.leadTemperature = leadTemperature || "warm";
+  parsed.meta = meta;
+
+  // Ensure boolean flags always exist as booleans
+  meta.wantsDepositLink =
+    typeof meta.wantsDepositLink === "boolean" ? meta.wantsDepositLink : false;
+  meta.depositPushedThisTurn =
+    typeof meta.depositPushedThisTurn === "boolean"
+      ? meta.depositPushedThisTurn
+      : false;
+  meta.mentionDecoyOffered =
+    typeof meta.mentionDecoyOffered === "boolean"
+      ? meta.mentionDecoyOffered
+      : false;
+
+  parsed.meta = meta;
+
   // Normalize shape
   if (!Array.isArray(parsed.bubbles)) {
     parsed.bubbles = [String(parsed.bubbles || "")].filter(Boolean);
@@ -314,10 +347,7 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
     language: parsed.language || detectLanguage(intake.languagePreference),
     bubbles: parsed.bubbles,
     internal_notes: parsed.internal_notes || "",
-    meta: {
-      aiPhase,
-      leadTemperature,
-    },
+    meta: parsed.meta,
   };
 }
 
