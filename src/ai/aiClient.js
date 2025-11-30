@@ -179,6 +179,7 @@ function detectLanguage(preferred) {
 
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
 function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
+  // Normalize contact so we never blow up on missing fields
   const contactSafe = {
     id: contact.id || contact._id || null,
     firstName: contact.firstName || contact.first_name || null,
@@ -188,20 +189,19 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
     tags: contact.tags || [],
   };
 
-  const language = detectLanguage(
-    intake.languagePreference,
-    contactSafe.tags || []
-  );
+  // Decide language for this opener
+  const language = detectLanguage(intake.languagePreference, contactSafe.tags || []);
 
   const userPayload = {
-    phase: "opener",
-    ai_phase: aiPhase,
+    phase: "opener",              // human-readable phase label
+    ai_phase: aiPhase || "intake", // matches what we store in GHL system field
     lead_temperature: leadTemperature,
     language,
     contact: contactSafe,
     intake: intake,
     instructions: {
-      goal: "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
+      goal:
+        "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
       notes: [
         "Behave like the front desk / setter, not the artist.",
         "Personalize using name, tattoo idea, size, placement, and timeline.",
@@ -244,10 +244,18 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 `;
 
   return [
-    { role: "system", content: systemContent },
-    { role: "user", content: JSON.stringify(userPayload, null, 2) },
+    {
+      role: "system",
+      content: systemContent,
+    },
+    {
+      role: "user",
+      content: JSON.stringify(userPayload, null, 2),
+    },
   ];
 }
+
+
 
 
 // 🔹 Main: generate opener for a new intake (form webhook)

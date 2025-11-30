@@ -71,6 +71,19 @@ function looksLikeSpanish(text) {
   return hasAccent || hits >= 2;
 }
 
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function calculateDelayForText(text) {
+  const len = (text || "").length;
+
+  // Delay rules (you can tune these later)
+  if (len < 80) return 8000;     // ~8 seconds
+  if (len < 160) return 12000;   // ~12 seconds
+  return 18000;                  // ~18 seconds
+}
+
 
 app.use(express.json());
 
@@ -347,13 +360,30 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
 
     if (aiResult && Array.isArray(aiResult.bubbles)) {
-      for (const text of aiResult.bubbles) {
-        await sendConversationMessage({
-          contactId,
-          body: text,
-        });
+      const bubbles = aiResult.bubbles
+        .map((b) => (b || "").trim())
+        .filter(Boolean);
+
+      if (bubbles.length === 0) {
+        console.warn("⚠️ AI bubbles were empty after trimming, nothing sent.");
+      } else {
+        for (let i = 0; i < bubbles.length; i++) {
+          const text = bubbles[i];
+
+          // Only wait before bubble #2 and beyond (more human)
+          if (i > 0) {
+            const delayMs = calculateDelayForText(text);
+            console.log(`⏱ Waiting ${delayMs}ms before sending bubble ${i + 1}...`);
+            await sleep(delayMs);
+          }
+
+          await sendConversationMessage({
+            contactId,
+            body: text,
+          });
+        }
+        console.log("📤 Sent delayed AI bubbles to GHL conversation.");
       }
-      console.log("📤 Sent AI bubbles to GHL conversation.");
     } else {
       console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
     }
