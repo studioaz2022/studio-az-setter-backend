@@ -610,35 +610,64 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.log("ℹ️ No field_updates from AI to apply this turn.");
         }
 
-        // 💳 If the AI wants to send a deposit link, generate one
-        if (aiResult?.meta?.wantsDepositLink === true) {
-          console.log("💳 AI requested deposit link. Generating Square link...");
+        // 💳 If AI wants to send a deposit link, and one isn't already sent/paid, create it
+        try {
+          const wantsDepositLink = aiResult?.meta?.wantsDepositLink === true;
 
-          try {
-            const { url, paymentLinkId } = await createDepositLinkForContact({
+          // Check if deposit already paid or sent from contact's system fields
+          const contactCf = freshContact?.customField || freshContact?.customFields || {};
+          const alreadyPaid =
+            aiResult?.meta?.depositPaid === true ||
+            contactCf?.deposit_paid === "Yes";
+
+          const alreadySent =
+            aiResult?.meta?.depositLinkSent === true ||
+            contactCf?.deposit_link_sent === "Yes";
+
+          if (wantsDepositLink && !alreadyPaid && !alreadySent) {
+            console.log("💳 AI requested deposit link. Creating Square link for contact:", {
               contactId,
-              amountCents: 5000, // $50.00 example deposit — we can make this dynamic later
-              description: "Studio AZ Tattoo Deposit",
             });
 
-            if (!url) throw new Error("No URL returned");
+            const { url: depositUrl, paymentLinkId } =
+              await createDepositLinkForContact({
+                contactId,
+                amountCents: 5000, // $50 deposit – we can make this dynamic later
+                description: "Studio AZ Tattoo Deposit",
+              });
 
-            // Save square_reference_id + deposit_link_sent
-            await updateTattooFields(contactId, {
-              deposit_link_sent: "Yes",
-              square_reference_id: paymentLinkId,
+            if (!depositUrl) {
+              console.warn("⚠️ Square did not return a deposit URL");
+            } else {
+              // Store system fields so AI / dashboard can see it
+              await updateSystemFields(contactId, {
+                deposit_link_sent: true,
+                square_payment_link_id: paymentLinkId,
+                last_phase_update_at: new Date().toISOString(),
+              });
+
+              // Send the link to the lead using the existing outbound message helper
+              const linkMessage =
+                aiResult?.meta?.depositLinkMessage ||
+                "Perfect, here's your secure deposit link to lock in your session:\n" +
+                  depositUrl;
+
+              await sendConversationMessage({
+                contactId,
+                body: linkMessage,
+              });
+
+              console.log("💳 Deposit link sent to lead and system fields updated");
+            }
+          } else {
+            console.log("ℹ️ No deposit link created (either not requested, already sent, or already paid).", {
+              wantsDepositLink,
+              alreadyPaid,
+              alreadySent,
             });
-
-            // Send link to client as another bubble
-            await sendConversationMessage({
-              contactId,
-              body: `Here's your deposit link:\n${url}`,
-            });
-
-            console.log("💳 Deposit link delivered to lead");
-          } catch (err) {
-            console.error("❌ Failed to generate/send deposit link:", err);
           }
+        } catch (err) {
+          console.error("❌ Error while handling AI deposit link logic:", err);
         }
       }
     } else {

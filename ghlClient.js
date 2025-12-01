@@ -39,12 +39,11 @@ const CUSTOM_FIELD_MAP = {
 const SYSTEM_FIELD_MAP = {
   ai_phase: "ai_phase",
   lead_temperature: "lead_temperature",
+  language_preference: "language_preference",
   deposit_link_sent: "deposit_link_sent",
   deposit_paid: "deposit_paid",
+  square_payment_link_id: "square_payment_link_id",
   last_phase_update_at: "last_phase_update_at",
-
-  // 🔹 NEW: store the contact's preferred language
-  language_preference: "language_preference", // make sure this matches the actual GHL key
 };
 
 
@@ -357,6 +356,14 @@ async function updateSystemFields(contactId, fields = {}) {
     customField[SYSTEM_FIELD_MAP.deposit_paid] = fields.deposit_paid
       ? "Yes"
       : "No";
+  }
+
+  if (
+    fields.square_payment_link_id !== undefined &&
+    SYSTEM_FIELD_MAP.square_payment_link_id
+  ) {
+    customField[SYSTEM_FIELD_MAP.square_payment_link_id] =
+      fields.square_payment_link_id;
   }
 
   if (
