@@ -504,27 +504,28 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
   }
 
+  // Derive system state from webhook + contact fields
   const currentPhase =
+    rawBody["AI Phase"] ||
     cf["ai_phase"] ||
     cf["aiPhase"] ||
     "";
 
-  const leadTemperature =
-    cf["lead_temperature"] ||
-    cf["leadTemperature"] ||
-    "warm";
+  const systemState = {
+    currentPhase,
+    newPhase: currentPhase || "intake",
+    leadTemperature:
+      cf["lead_temperature"] ||
+      cf["leadTemperature"] ||
+      "warm",
+  };
 
-  const newPhase = decidePhaseForMessage(currentPhase);
+  console.log("🧠 Derived system state (message):", systemState);
+
   const nowIso = new Date().toISOString();
 
-  console.log("🧠 Derived system state (message):", {
-    currentPhase,
-    newPhase,
-    leadTemperature,
-  });
-
   await updateSystemFields(contactId, {
-    ai_phase: newPhase,
+    ai_phase: systemState.newPhase,
     last_phase_update_at: nowIso,
   });
 
@@ -556,22 +557,19 @@ app.post("/ghl/message-webhook", async (req, res) => {
     currentLanguage ||
     "English";
 
-  // Build a normalized profile from refetched contact fields, merging webhook values (webhook wins)
+  // Build merged contactProfile (webhook values take precedence)
   const contactProfile = {
     tattooPlacement:
       contactProfileFromWebhook.tattooPlacement ||
       contactCustomFields?.tattoo_placement ||
-      contactCustomFields?.tattooPlacement ||
       null,
     tattooSize:
       contactProfileFromWebhook.tattooSize ||
       contactCustomFields?.size_of_tattoo ||
-      contactCustomFields?.tattoo_size ||
       null,
     tattooSummary:
       contactProfileFromWebhook.tattooSummary ||
       contactCustomFields?.tattoo_summary ||
-      contactCustomFields?.tattooSummary ||
       null,
     tattooStyle:
       contactProfileFromWebhook.tattooStyle ||
@@ -580,12 +578,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     tattooColor:
       contactProfileFromWebhook.tattooColor ||
       contactCustomFields?.tattoo_color_preference ||
-      contactCustomFields?.tattoo_color ||
       null,
-    firstTattoo:
-      contactCustomFields?.first_tattoo || null,
-    decisionTimeline:
-      contactCustomFields?.how_soon_is_client_deciding || null,
     depositPaid:
       contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
@@ -597,17 +590,17 @@ app.post("/ghl/message-webhook", async (req, res) => {
   // Build enriched AI payload
   const aiPayload = {
     contactId,
-    leadTemperature,
-    aiPhase: newPhase,
+    aiPhase: systemState.currentPhase || "intake",
+    leadTemperature: systemState.leadTemperature,
     language: contactLanguagePreference,
     contactProfile,
   };
 
   console.log("🤖 Calling OpenAI for opener with payload summary:", {
-    contactId,
-    leadTemperature,
-    aiPhase: newPhase,
-    language: contactLanguagePreference,
+    contactId: aiPayload.contactId,
+    leadTemperature: aiPayload.leadTemperature,
+    aiPhase: aiPayload.aiPhase,
+    language: aiPayload.language,
     hasTattooPlacement: !!contactProfile.tattooPlacement,
     hasTattooSize: !!contactProfile.tattooSize,
     depositPaid: contactProfile.depositPaid,
@@ -619,8 +612,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
       await handleInboundMessage({
         contact: freshContact,
-        aiPhase: newPhase,
-        leadTemperature,
+        aiPhase: systemState.currentPhase || "intake",
+        leadTemperature: systemState.leadTemperature,
         latestMessageText: messageText,
         contactProfile,
       });
@@ -646,15 +639,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
 
     if (aiResult && Array.isArray(aiResult.bubbles)) {
-      const bubbles = aiResult.bubbles
+      let bubblesToSend = aiResult.bubbles
         .map((b) => (b || "").trim())
         .filter(Boolean);
 
-      if (bubbles.length === 0) {
+      // If we're about to send a deposit link this turn,
+      // keep the conversation tight: only send the first bubble.
+      if (aiResult.meta?.wantsDepositLink && bubblesToSend.length > 1) {
+        bubblesToSend = bubblesToSend.slice(0, 1);
+      }
+
+      if (bubblesToSend.length === 0) {
         console.warn("⚠️ AI bubbles were empty after trimming, nothing sent.");
       } else {
-        for (let i = 0; i < bubbles.length; i++) {
-          const text = bubbles[i];
+        for (let i = 0; i < bubblesToSend.length; i++) {
+          const text = bubblesToSend[i];
 
           // Only wait before bubble #2 and beyond (more human)
           if (i > 0) {
