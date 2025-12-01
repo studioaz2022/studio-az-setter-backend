@@ -168,6 +168,11 @@ async function getContactIdFromOrder(orderId) {
       return null;
     }
 
+    console.log(
+      "[Square] Raw order from getContactIdFromOrder:",
+      JSON.stringify(order, null, 2)
+    );
+
     const contactId = order.reference_id || null;
 
     console.log("[Square] Resolved order → contact mapping:", {
