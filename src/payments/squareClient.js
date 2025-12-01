@@ -53,11 +53,10 @@ async function createDepositLinkForContact({
 
   const idempotencyKey = `${contactId}-${Date.now()}`;
 
-  // Body mirrors the working HTTP call (snake_case for quick_pay)
   const body = {
     idempotency_key: idempotencyKey,
+    // Optional: keep checkout options if you want to control methods, etc.
     checkout_options: {
-      // You can trim these later if you want fewer methods
       accepted_payment_methods: {
         afterpay_clearpay: true,
         apple_pay: true,
@@ -65,14 +64,20 @@ async function createDepositLinkForContact({
         google_pay: true,
       },
     },
-    quick_pay: {
+    // Use an explicit order and attach the GHL contactId as reference_id
+    order: {
       location_id: SQUARE_LOCATION_ID,
-      name: description,
-      price_money: {
-        // Square HTTP expects a plain integer, not BigInt
-        amount: amountCents,
-        currency,
-      },
+      reference_id: contactId, // 🔥 this is what we read back in getContactIdFromOrder
+      line_items: [
+        {
+          name: description,
+          quantity: "1",
+          base_price_money: {
+            amount: amountCents, // integer cents, e.g. 5000 = $50.00
+            currency,
+          },
+        },
+      ],
     },
   };
 
