@@ -461,9 +461,9 @@ async function updateTattooFields(contactId, fields = {}) {
   }
 }
 
-// Infer the outbound "type" for /conversations/messages by looking at the last inbound message
-async function inferConversationMessageType(contactId) {
-  if (!contactId) return "SMS";
+// Search for conversations for a contact and return the most recent one
+async function findConversationForContact(contactId) {
+  if (!contactId) return null;
 
   const url = `https://services.leadconnectorhq.com/conversations/search?locationId=${encodeURIComponent(
     GHL_LOCATION_ID
@@ -480,57 +480,69 @@ async function inferConversationMessageType(contactId) {
 
     const convs = resp.data?.conversations || [];
     if (!convs.length) {
-      console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
-      return "SMS";
+      return null;
     }
 
-    const last = convs[0]; // they’re sorted newest-first in your example
-    const lastType = last.lastMessageType || last.type || "";
-
-    if (!lastType || typeof lastType !== "string") {
-      console.warn(
-        "inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS"
-      );
-      return "SMS";
-    }
-
-    const t = lastType.toUpperCase();
-
-    // Map GHL lastMessageType → Conversations API "type" enum
-    if (t.includes("INSTAGRAM")) {
-      return "IG";
-    }
-    if (t.includes("FACEBOOK")) {
-      return "FB";
-    }
-    if (t.includes("WHATSAPP")) {
-      return "WhatsApp";
-    }
-    if (t.includes("GMB")) {
-      return "GMB";
-    }
-    if (t.includes("WEBCHAT") || t.includes("LIVE_CHAT")) {
-      return "Live_Chat";
-    }
-    if (t.includes("EMAIL")) {
-      return "Email";
-    }
-    if (t.includes("SMS") || t.includes("PHONE") || t.includes("CALL") || t.includes("CUSTOM_SMS")) {
-      return "SMS";
-    }
-
-    // Fallback
-    console.warn(
-      `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to SMS`
-    );
-    return "SMS";
+    // Return the most recent conversation (they're sorted newest-first)
+    return convs[0];
   } catch (err) {
     console.error(
-      "inferConversationMessageType: error calling /conversations/search, defaulting to SMS:",
+      "findConversationForContact: error calling /conversations/search:",
       err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
+// Infer the outbound "type" for /conversations/messages by looking at the last inbound message
+async function inferConversationMessageType(contactId) {
+  if (!contactId) return "SMS";
+
+  const conversation = await findConversationForContact(contactId);
+  if (!conversation) {
+    console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
+    return "SMS";
+  }
+
+  const lastType = conversation.lastMessageType || conversation.type || "";
+
+  if (!lastType || typeof lastType !== "string") {
+    console.warn(
+      "inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS"
     );
     return "SMS";
   }
+
+  const t = lastType.toUpperCase();
+
+  // Map GHL lastMessageType → Conversations API "type" enum
+  if (t.includes("INSTAGRAM")) {
+    return "IG";
+  }
+  if (t.includes("FACEBOOK")) {
+    return "FB";
+  }
+  if (t.includes("WHATSAPP")) {
+    return "WhatsApp";
+  }
+  if (t.includes("GMB")) {
+    return "GMB";
+  }
+  if (t.includes("WEBCHAT") || t.includes("LIVE_CHAT")) {
+    return "Live_Chat";
+  }
+  if (t.includes("EMAIL")) {
+    return "Email";
+  }
+  if (t.includes("SMS") || t.includes("PHONE") || t.includes("CALL") || t.includes("CUSTOM_SMS")) {
+    return "SMS";
+  }
+
+  // Fallback
+  console.warn(
+    `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to SMS`
+  );
+  return "SMS";
 }
 
 // Send a message in a contact's conversation
@@ -558,38 +570,109 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
   });
 
   // 1) DM reply path (no phone required)
-  if (isDm && conversationId) {
-    try {
-      // Use the GHL conversations API to reply in the existing DM thread
-      const payload = {
-        conversationId,
-        contactId,
-        message: body,
-        type: "SOCIAL", // Can be "INSTAGRAM", "FACEBOOK", etc. depending on setup
-      };
+  if (isDm) {
+    // If no conversationId provided, try to find existing conversation
+    let finalConversationId = conversationId;
+    let dmType = null;
 
-      console.log("📨 Sending DM reply via GHL:", payload);
+    if (!finalConversationId) {
+      console.log("🔍 No conversationId provided for DM, searching for existing conversation...");
+      const conversation = await findConversationForContact(contactId);
+      if (conversation) {
+        finalConversationId = conversation.id || conversation._id;
+        // Infer type from conversation
+        const lastType = conversation.lastMessageType || conversation.type || "";
+        const t = lastType.toUpperCase();
+        if (t.includes("INSTAGRAM")) {
+          dmType = "IG";
+        } else if (t.includes("FACEBOOK")) {
+          dmType = "FB";
+        } else {
+          dmType = "SOCIAL"; // Fallback
+        }
+        console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
+      }
+    }
 
-      const url = "https://services.leadconnectorhq.com/conversations/messages";
-      const resp = await axios.post(url, payload, {
-        headers: {
-          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Version: "2021-07-28",
-        },
-      });
+    // If we have a conversationId, use it
+    if (finalConversationId) {
+      try {
+        const payload = {
+          conversationId: finalConversationId,
+          contactId,
+          message: body,
+          type: dmType || "SOCIAL", // Use inferred type or fallback
+        };
 
-      console.log("📨 GHL DM reply response:", {
-        status: resp.status,
-        contactId,
-        conversationId,
-      });
+        console.log("📨 Sending DM reply via GHL:", payload);
 
-      return resp.data;
-    } catch (err) {
-      console.error("❌ Error sending DM reply via GHL:", err.response?.data || err.message);
-      // fall through to SMS/other logic if needed
+        const url = "https://services.leadconnectorhq.com/conversations/messages";
+        const resp = await axios.post(url, payload, {
+          headers: {
+            Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Version: "2021-07-28",
+          },
+        });
+
+        console.log("📨 GHL DM reply response:", {
+          status: resp.status,
+          contactId,
+          conversationId: finalConversationId,
+        });
+
+        return resp.data;
+      } catch (err) {
+        console.error("❌ Error sending DM reply via GHL:", err.response?.data || err.message);
+        // fall through to try alternative method
+      }
+    }
+
+    // If no conversationId found, try to infer type and send without conversationId
+    // GHL will create a new conversation if needed
+    if (!finalConversationId) {
+      try {
+        // Infer DM type from contact tags or default to IG/FB
+        const inferredType = await inferConversationMessageType(contactId);
+        
+        // Only proceed if it's a social media type
+        if (inferredType === "IG" || inferredType === "FB") {
+          const payload = {
+            contactId,
+            locationId: GHL_LOCATION_ID,
+            message: body,
+            type: inferredType,
+          };
+
+          console.log("📨 Sending DM via GHL (creating new conversation):", payload);
+
+          const url = "https://services.leadconnectorhq.com/conversations/messages";
+          const resp = await axios.post(url, payload, {
+            headers: {
+              Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+              "Content-Type": "application/json",
+              Accept: "application/json",
+              Version: "2021-07-28",
+            },
+          });
+
+          console.log("📨 GHL DM message response (new conversation):", {
+            status: resp.status,
+            contactId,
+            type: inferredType,
+          });
+
+          return resp.data;
+        } else {
+          console.warn(
+            `⚠️ Cannot send DM: inferred type is ${inferredType}, not IG/FB. Contact may need to initiate conversation first.`
+          );
+        }
+      } catch (err) {
+        console.error("❌ Error sending DM via GHL (new conversation):", err.response?.data || err.message);
+        // fall through to error handling
+      }
     }
   }
 
@@ -664,6 +747,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         throw err;
       }
     } else {
+      // This should not happen now since DM handling is above, but keep as safety net
       console.warn(
         "⚠️ No valid phone number and no DM conversationId; cannot send message.",
         { contactId, isDm, hasPhone, conversationId }
