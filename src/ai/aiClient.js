@@ -199,6 +199,7 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
     language,
     contact: contactSafe,
     intake: intake,
+    latest_message_text: intake?.latestMessageText || null,
     instructions: {
       goal:
         "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
@@ -235,6 +236,11 @@ You MUST also maintain and output the "meta" object as described in the AI META 
 - Keep leadTemperature consistent with their behavior (hot, warm, cold).
 - Set wantsDepositLink and depositPushedThisTurn to true ONLY on turns where you are actively inviting them to move forward with the consult + refundable deposit.
 - Set mentionDecoyOffered to true ONLY on turns where you actually offer the lower-priced decoy consult after they resisted the main refundable deposit option.
+
+You will receive the lead's most recent message as "latest_message_text". Use THAT text (plus any relevant past context mentioned in the intake or your own summaries) to:
+- Understand what they want (placement, size, style, timing, first tattoo or not, concerns).
+- Fill the "field_updates" object with ONLY the information that is clearly stated or strongly implied by their words, following the FIELD UPDATES rules from the master prompt.
+- Even on the very first message of the conversation, if they give enough detail (e.g., "half sleeve", "inner forearm", "black and grey", "next month", "first tattoo"), you SHOULD write those into field_updates so the CRM can store them.
 
 You MUST respond with VALID JSON ONLY, no extra text, matching this schema exactly:
 
@@ -282,7 +288,7 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 
 
 // 🔹 Main: generate opener for a new intake (form webhook)
-async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
+async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText }) {
   if (!MASTER_PROMPT_A) {
     console.warn("⚠️ MASTER_PROMPT_A is empty. Check prompt file path.");
   }
@@ -291,6 +297,10 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
   }
 
   const intake = extractIntakeFromContact(contact);
+  // Add latestMessageText to intake if provided
+  if (latestMessageText) {
+    intake.latestMessageText = latestMessageText;
+  }
   const messages = buildOpenerMessages({
     contact,
     intake,

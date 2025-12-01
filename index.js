@@ -314,7 +314,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const leadTemperature =
     cf["lead_temperature"] ||
     cf["leadTemperature"] ||
-    "cold";
+    "warm";
 
   const newPhase = decidePhaseForMessage(currentPhase);
   const nowIso = new Date().toISOString();
@@ -354,6 +354,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         contact: freshContact,
         aiPhase: newPhase,
         leadTemperature,
+        latestMessageText: messageText,
       });
 
     const meta = aiResult?.meta || {};
