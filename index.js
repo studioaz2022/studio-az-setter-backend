@@ -384,6 +384,39 @@ app.post("/ghl/message-webhook", async (req, res) => {
   console.log("💬 GHL MESSAGE WEBHOOK HIT");
   console.log("Raw Body:", JSON.stringify(rawBody, null, 2));
 
+  // Identify source channel
+  const messageObj = rawBody.message || {};
+
+  const isDm =
+    messageObj.type === 11 || // social DM (IG/FB)
+    rawBody.channel === "social_dm" ||
+    rawBody.channel === "instagram" ||
+    rawBody.channel === "facebook";
+
+  const hasPhone =
+    !!rawBody.phone ||
+    !!rawBody.contact?.phone ||
+    !!rawBody.contact?.phoneNumber;
+
+  const channelContext = {
+    isDm,
+    hasPhone,
+    // conversationId is what we should use for DM replies
+    conversationId:
+      rawBody.conversationId ||
+      messageObj.conversationId ||
+      rawBody.conversation_id ||
+      null,
+    // best-guess phone for SMS replies
+    phone:
+      rawBody.phone ||
+      rawBody.contact?.phone ||
+      rawBody.contact?.phoneNumber ||
+      null,
+  };
+
+  console.log("📡 Channel context:", channelContext);
+
   // Snapshot of relevant tattoo + deposit fields from the webhook body
   const contactProfileFromWebhook = {
     tattooPlacement: rawBody["Tattoo Placement"] || null,
@@ -665,6 +698,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           await sendConversationMessage({
             contactId,
             body: text,
+            channelContext,
           });
         }
         console.log("📤 Sent delayed AI bubbles to GHL conversation.");
@@ -741,6 +775,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
               await sendConversationMessage({
                 contactId,
                 body: linkMessage,
+                channelContext,
               });
 
               console.log("💳 Deposit link sent to lead and system fields updated");

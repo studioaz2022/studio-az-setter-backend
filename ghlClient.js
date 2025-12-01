@@ -534,7 +534,7 @@ async function inferConversationMessageType(contactId) {
 }
 
 // Send a message in a contact's conversation
-async function sendConversationMessage({ contactId, body }) {
+async function sendConversationMessage({ contactId, body, channelContext = {} }) {
   if (!contactId) {
     throw new Error("contactId is required for sendConversationMessage");
   }
@@ -543,34 +543,134 @@ async function sendConversationMessage({ contactId, body }) {
     return null;
   }
 
-  // 🔹 NEW: infer type (SMS / FB / IG / WhatsApp / Email / etc.)
-  const type = await inferConversationMessageType(contactId);
+  const {
+    isDm = false,
+    hasPhone = false,
+    conversationId = null,
+    phone = null,
+  } = channelContext;
 
-  const payload = {
+  console.log("✉️ sendConversationMessage context:", {
     contactId,
-    locationId: GHL_LOCATION_ID,
-    message: body,
-    type, // e.g. "SMS", "FB", "IG", ...
-  };
-
-  const url = "https://services.leadconnectorhq.com/conversations/messages";
-
-  const resp = await axios.post(url, payload, {
-    headers: {
-      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Version: "2021-07-28",
-    },
+    isDm,
+    hasPhone,
+    conversationId,
   });
 
-  console.log("📨 GHL conversations API response:", {
-    status: resp.status,
-    contactId,
-    type,
-  });
+  // 1) DM reply path (no phone required)
+  if (isDm && conversationId) {
+    try {
+      // Use the GHL conversations API to reply in the existing DM thread
+      const payload = {
+        conversationId,
+        contactId,
+        message: body,
+        type: "SOCIAL", // Can be "INSTAGRAM", "FACEBOOK", etc. depending on setup
+      };
 
-  return resp.data;
+      console.log("📨 Sending DM reply via GHL:", payload);
+
+      const url = "https://services.leadconnectorhq.com/conversations/messages";
+      const resp = await axios.post(url, payload, {
+        headers: {
+          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Version: "2021-07-28",
+        },
+      });
+
+      console.log("📨 GHL DM reply response:", {
+        status: resp.status,
+        contactId,
+        conversationId,
+      });
+
+      return resp.data;
+    } catch (err) {
+      console.error("❌ Error sending DM reply via GHL:", err.response?.data || err.message);
+      // fall through to SMS/other logic if needed
+    }
+  }
+
+  // 2) SMS / phone-based path (existing behavior)
+  if (hasPhone && phone) {
+    try {
+      // Infer type (SMS / FB / IG / WhatsApp / Email / etc.)
+      const type = await inferConversationMessageType(contactId);
+
+      const payload = {
+        contactId,
+        locationId: GHL_LOCATION_ID,
+        message: body,
+        type, // e.g. "SMS", "FB", "IG", ...
+      };
+
+      const url = "https://services.leadconnectorhq.com/conversations/messages";
+
+      const resp = await axios.post(url, payload, {
+        headers: {
+          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          Version: "2021-07-28",
+        },
+      });
+
+      console.log("📨 GHL conversations API response:", {
+        status: resp.status,
+        contactId,
+        type,
+      });
+
+      return resp.data;
+    } catch (err) {
+      console.error("❌ Error sending SMS/phone message via GHL:", err.response?.data || err.message);
+      throw err;
+    }
+  } else {
+    // Fallback: try to infer type and send anyway (existing behavior for backward compatibility)
+    if (!isDm) {
+      try {
+        const type = await inferConversationMessageType(contactId);
+
+        const payload = {
+          contactId,
+          locationId: GHL_LOCATION_ID,
+          message: body,
+          type,
+        };
+
+        const url = "https://services.leadconnectorhq.com/conversations/messages";
+
+        const resp = await axios.post(url, payload, {
+          headers: {
+            Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+            "Content-Type": "application/json",
+            Accept: "application/json",
+            Version: "2021-07-28",
+          },
+        });
+
+        console.log("📨 GHL conversations API response (fallback):", {
+          status: resp.status,
+          contactId,
+          type,
+        });
+
+        return resp.data;
+      } catch (err) {
+        console.error("❌ Error sending message via GHL (fallback):", err.response?.data || err.message);
+        throw err;
+      }
+    } else {
+      console.warn(
+        "⚠️ No valid phone number and no DM conversationId; cannot send message.",
+        { contactId, isDm, hasPhone, conversationId }
+      );
+      return null;
+    }
+  }
 }
 
 
