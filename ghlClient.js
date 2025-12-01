@@ -412,7 +412,26 @@ async function updateTattooFields(contactId, fields = {}) {
     const fieldId = CUSTOM_FIELD_MAP[key];
     if (!fieldId) return; // no mapping defined for this key
 
-    customField[fieldId] = value;
+    let outboundValue = value;
+
+    // Special handling: first_tattoo is a TEXT field in GHL, but we keep it boolean in AI.
+    if (key === "first_tattoo") {
+      if (typeof value === "boolean") {
+        outboundValue = value ? "Yes" : "No";
+      } else if (typeof value === "string") {
+        const v = value.trim().toLowerCase();
+        if (["yes", "y", "true", "si", "sí"].includes(v)) {
+          outboundValue = "Yes";
+        } else if (["no", "n", "false"].includes(v)) {
+          outboundValue = "No";
+        } else {
+          // fall back to the raw string if it's something unexpected
+          outboundValue = value;
+        }
+      }
+    }
+
+    customField[fieldId] = outboundValue;
   });
 
   if (Object.keys(customField).length === 0) {
