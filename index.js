@@ -86,6 +86,51 @@ function calculateDelayForText(text) {
   return 18000;                  // ~18 seconds
 }
 
+//////  START OF NEW SQUARE WEBHOOK ROUTE  //////
+
+app.post(
+  "/square/webhook",
+  express.raw({ type: "application/json" }),  // raw body for signature validation
+  (req, res) => {
+    console.log("📬 Square webhook received");
+
+    try {
+      const signatureHeader = req.headers["x-square-hmacsha256-signature"];
+      const webhookSecret = process.env.SQUARE_WEBHOOK_SECRET;
+
+      if (!signatureHeader || !webhookSecret) {
+        console.warn("⚠️ Missing signature header or webhook secret.");
+      } else {
+        // Validate signature
+        const crypto = require("crypto");
+        const computedSignature = crypto
+          .createHmac("sha256", webhookSecret)
+          .update(req.body) // raw body, not parsed JSON
+          .digest("base64");
+
+        if (computedSignature !== signatureHeader) {
+          console.warn("❌ Invalid Square webhook signature!");
+        } else {
+          console.log("✅ Square webhook signature validated.");
+        }
+      }
+
+      console.log("📬 Square Webhook Headers:");
+      console.log(JSON.stringify(req.headers, null, 2));
+
+      console.log("📬 Square Webhook Raw Body:");
+      console.log(req.body.toString()); // raw
+
+      // Respond OK no matter what so Square doesn't retry spam
+      return res.status(200).send("OK");
+    } catch (err) {
+      console.error("❌ Error in Square webhook:", err);
+      return res.status(200).send("OK");
+    }
+  }
+);
+
+//////  END OF NEW SQUARE WEBHOOK ROUTE  //////
 
 app.use(express.json());
 
@@ -500,68 +545,6 @@ app.post("/ghl/message-webhook", async (req, res) => {
 });
 
 
-// Square Webhook Route
-app.post("/square/webhook", async (req, res) => {
-  console.log("📬 Square Webhook received");
-
-  try {
-    const event = req.body;
-
-    // Protect against random hits
-    if (!event || !event.type) {
-      console.warn("⚠️ Invalid Square webhook payload:", event);
-      return res.status(400).send("Invalid payload");
-    }
-
-    // We care about payment.status
-    if (event.type !== "payment.updated") {
-      console.log("ℹ️ Ignoring non-payment webhook:", event.type);
-      return res.status(200).send("Ignored");
-    }
-
-    const payment = event.data?.object?.payment;
-    if (!payment) {
-      console.warn("⚠️ Missing payment in webhook");
-      return res.status(400).send("Missing payment");
-    }
-
-    const referenceId = payment?.orderId || payment?.referenceId || payment?.reference_id;
-    const status = payment.status;
-
-    console.log("💳 Square Payment Event:", {
-      referenceId,
-      status,
-    });
-
-    if (!referenceId) {
-      console.warn("⚠️ No referenceId; cannot map to GHL contact");
-      return res.status(200).send("No-op");
-    }
-
-    // Only act on successful payments
-    if (status === "COMPLETED" || status === "completed") {
-      console.log("🎉 Deposit paid for contact", referenceId);
-
-      // Write to GHL
-      await updateTattooFields(referenceId, {
-        deposit_paid: "Yes",
-        square_reference_id: payment.id,
-      });
-
-      // Move pipeline stage (optional)
-      try {
-        await updatePipelineStage(referenceId, "Consult Scheduled"); // or whatever your next stage is
-      } catch (moveErr) {
-        console.error("⚠️ Pipeline move failed:", moveErr);
-      }
-    }
-
-    res.status(200).send("OK");
-  } catch (err) {
-    console.error("❌ Square Webhook error:", err);
-    res.status(500).send("Webhook error");
-  }
-});
 
 // Test route to generate a Square sandbox deposit link
 app.get("/payments/test-link", async (req, res) => {

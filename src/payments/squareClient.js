@@ -1,35 +1,34 @@
 // src/payments/squareClient.js
-// Square Checkout / Payment Link client for Studio AZ Setter backend.
-//
-// IMPORTANT:
-// - Uses Square Sandbox or Production based on SQUARE_ENVIRONMENT.
-// - We use referenceId = GHL contactId so webhooks can map payment → contact.
+// Direct HTTP client for Square payment links using axios.
+// We skip the Node SDK weirdness and hit the REST endpoint that we KNOW works.
 
-const {
-  SquareClient,
-  SquareEnvironment,
-  SquareError,
-} = require("square");
+const axios = require("axios");
 
-if (!process.env.SQUARE_ACCESS_TOKEN) {
+const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
+const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
+
+// Decide base URL from environment
+const isProd = process.env.SQUARE_ENVIRONMENT === "production";
+const SQUARE_BASE_URL = isProd
+  ? "https://connect.squareup.com"
+  : "https://connect.squareupsandbox.com";
+
+if (!SQUARE_ACCESS_TOKEN) {
   console.warn(
-    "[Square] SQUARE_ACCESS_TOKEN is not set. Square client will NOT be able to create live links."
+    "[Square] SQUARE_ACCESS_TOKEN is not set. Payment link creation will fail."
   );
 }
 
-const isProd = process.env.NODE_ENV === "production";
-
-const square = new SquareClient({
-  token: process.env.SQUARE_ACCESS_TOKEN,
-  environment: isProd
-    ? SquareEnvironment.Production
-    : SquareEnvironment.Sandbox,
-});
+if (!SQUARE_LOCATION_ID) {
+  console.warn(
+    "[Square] SQUARE_LOCATION_ID is not set. Payment link creation will fail."
+  );
+}
 
 /**
  * Create a Square payment link for a specific contact.
- * - contactId → used as referenceId so webhook can map payment → GHL contact
- * - amountCents → integer in cents, e.g. 10000 = $100.00
+ * - contactId: GHL contact id (for your internal reference / future metadata use)
+ * - amountCents: integer in cents, e.g. 5000 = $50.00
  */
 async function createDepositLinkForContact({
   contactId,
@@ -40,63 +39,96 @@ async function createDepositLinkForContact({
   if (!contactId) {
     throw new Error("contactId is required for createDepositLinkForContact");
   }
-  if (!amountCents || typeof amountCents !== "number") {
-    throw new Error("amountCents (number) is required for createDepositLinkForContact");
+  if (typeof amountCents !== "number" || !amountCents) {
+    throw new Error(
+      "amountCents (number) is required for createDepositLinkForContact"
+    );
   }
-
-  if (!process.env.SQUARE_LOCATION_ID) {
-    console.warn(
-      "[Square] SQUARE_LOCATION_ID is not set. createDepositLinkForContact will fail."
+  if (!SQUARE_LOCATION_ID) {
+    throw new Error(
+      "SQUARE_LOCATION_ID is not set. Cannot create payment link."
     );
   }
 
   const idempotencyKey = `${contactId}-${Date.now()}`;
 
+  // Body mirrors your working test from Square's API explorer
   const body = {
-    idempotencyKey,
-    description,
-    checkoutOptions: {
-      redirectUrl:
-        process.env.SQUARE_REDIRECT_URL ||
-        "https://studioaztattoo.com/thank-you",
+    idempotency_key: idempotencyKey,
+    checkout_options: {
+      accepted_payment_methods: {
+        afterpay_clearpay: true,
+        apple_pay: true,
+        cash_app_pay: true,
+        google_pay: true,
+      },
     },
-    order: {
-      locationId: process.env.SQUARE_LOCATION_ID,
-      referenceId: contactId, // 🔥 ties payment back to the GHL contact
-      lineItems: [
-        {
-          name: description,
-          quantity: "1",
-          basePriceMoney: {
-            amount: amountCents,
-            currency,
-          },
-        },
-      ],
+    quick_pay: {
+      location_id: SQUARE_LOCATION_ID,
+      name: description,
+      price_money: {
+        amount: amountCents, // integer in cents, e.g. 1000 = $10.00
+        currency,
+      },
     },
   };
 
-  console.log("[Square] Creating payment link with body:", {
+  console.log("[Square] Creating payment link (HTTP) with body:", {
     contactId,
     amountCents,
-    env:
-      process.env.SQUARE_ENVIRONMENT === "production"
-        ? "production"
-        : "sandbox",
+    currency,
+    env: isProd ? "production" : "sandbox",
   });
 
   try {
-    const { result } = await square.checkoutApi.createPaymentLink(body);
+    const url = `${SQUARE_BASE_URL}/v2/online-checkout/payment-links`;
 
-    const url = result?.paymentLink?.url || null;
-    const paymentLinkId = result?.paymentLink?.id || null;
+    const response = await axios.post(url, body, {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        // We can omit Square-Version to use the account default.
+      },
+    });
 
-    console.log("💳 Square payment link created:", { contactId, url, paymentLinkId });
+    const data = response.data || {};
+    const paymentLink = data.payment_link;
 
-    return { url, paymentLinkId };
+    if (!paymentLink || !paymentLink.url) {
+      console.error(
+        "[Square] No payment_link.url in HTTP response:",
+        JSON.stringify(data, null, 2)
+      );
+      throw new Error("No payment link URL returned from Square");
+    }
+
+    console.log("💳 Square payment link created (HTTP):", {
+      contactId,
+      paymentLinkId: paymentLink.id,
+      url: paymentLink.url,
+    });
+
+    return {
+      url: paymentLink.url,
+      paymentLinkId: paymentLink.id,
+    };
   } catch (err) {
-    console.error("❌ Error creating Square payment link:", err);
-    throw err;
+    if (err.response) {
+      console.error(
+        "[Square] HTTP error creating payment link:",
+        err.response.status,
+        JSON.stringify(err.response.data, null, 2)
+      );
+      throw new Error(
+        `Square HTTP error ${err.response.status}: ${
+          err.response.data?.errors?.[0]?.detail ||
+          JSON.stringify(err.response.data)
+        }`
+      );
+    } else {
+      console.error("[Square] Unexpected error creating payment link:", err);
+      throw err;
+    }
   }
 }
 
