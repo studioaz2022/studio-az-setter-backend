@@ -539,17 +539,34 @@ app.post("/ghl/message-webhook", async (req, res) => {
     currentLanguage ||
     "English";
 
-  // Build contactProfile object from contact data
+  // Build a normalized profile from refetched contact fields
   const contactProfile = {
-    tattooPlacement: contactCustomFields?.tattoo_placement || null,
-    tattooSize: contactCustomFields?.size_of_tattoo || null,
-    tattooStyle: contactCustomFields?.tattoo_style || null,
-    tattooColor: contactCustomFields?.tattoo_color_preference || null,
-    tattooSummary: contactCustomFields?.tattoo_summary || null,
-    firstTattoo: contactCustomFields?.first_tattoo || null,
-    decisionTimeline: contactCustomFields?.how_soon_is_client_deciding || null,
-    depositPaid: contactSystemFields?.deposit_paid === "Yes",
-    depositLinkSent: contactSystemFields?.deposit_link_sent === "Yes",
+    tattooPlacement:
+      contactCustomFields?.tattoo_placement ||
+      contactCustomFields?.tattooPlacement ||
+      null,
+    tattooSize:
+      contactCustomFields?.size_of_tattoo ||
+      contactCustomFields?.tattoo_size ||
+      null,
+    tattooStyle:
+      contactCustomFields?.tattoo_style || null,
+    tattooColor:
+      contactCustomFields?.tattoo_color_preference ||
+      contactCustomFields?.tattoo_color ||
+      null,
+    tattooSummary:
+      contactCustomFields?.tattoo_summary ||
+      contactCustomFields?.tattooSummary ||
+      null,
+    firstTattoo:
+      contactCustomFields?.first_tattoo || null,
+    decisionTimeline:
+      contactCustomFields?.how_soon_is_client_deciding || null,
+    depositPaid:
+      contactSystemFields?.deposit_paid === "Yes",
+    depositLinkSent:
+      contactSystemFields?.deposit_link_sent === "Yes",
   };
 
   // Build enriched AI payload
