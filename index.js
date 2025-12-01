@@ -528,6 +528,50 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
   }
 
+  // 🔹 Extract contact custom fields and system fields for AI payload
+  const contactCustomFields = freshContact?.customField || freshContact?.customFields || {};
+  const contactSystemFields = contactCustomFields; // System fields are also in customField
+  
+  // Get language preference from fresh contact
+  const contactLanguagePreference =
+    contactCustomFields["language_preference"] ||
+    contactCustomFields["Language Preference"] ||
+    currentLanguage ||
+    "English";
+
+  // Build contactProfile object from contact data
+  const contactProfile = {
+    tattooPlacement: contactCustomFields?.tattoo_placement || null,
+    tattooSize: contactCustomFields?.size_of_tattoo || null,
+    tattooStyle: contactCustomFields?.tattoo_style || null,
+    tattooColor: contactCustomFields?.tattoo_color_preference || null,
+    tattooSummary: contactCustomFields?.tattoo_summary || null,
+    firstTattoo: contactCustomFields?.first_tattoo || null,
+    decisionTimeline: contactCustomFields?.how_soon_is_client_deciding || null,
+    depositPaid: contactSystemFields?.deposit_paid === "Yes",
+    depositLinkSent: contactSystemFields?.deposit_link_sent === "Yes",
+  };
+
+  // Build enriched AI payload
+  const aiPayload = {
+    contactId,
+    leadTemperature,
+    aiPhase: newPhase,
+    language: contactLanguagePreference,
+    contactProfile,
+  };
+
+  console.log("🤖 Calling OpenAI for opener with payload summary:", {
+    contactId: aiPayload.contactId,
+    leadTemperature: aiPayload.leadTemperature,
+    aiPhase: aiPayload.aiPhase,
+    language: aiPayload.language,
+    hasTattooPlacement: !!contactProfile.tattooPlacement,
+    hasTattooSize: !!contactProfile.tattooSize,
+    depositPaid: contactProfile.depositPaid,
+    depositLinkSent: contactProfile.depositLinkSent,
+  });
+
   // 🔹 Call AI Setter and send reply into the conversation
   try {
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
@@ -536,6 +580,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         aiPhase: newPhase,
         leadTemperature,
         latestMessageText: messageText,
+        contactProfile,
       });
 
     const meta = aiResult?.meta || {};

@@ -1,7 +1,7 @@
 const { generateOpenerForContact } = require("./aiClient");
 
-async function handleInboundMessage({ contact, aiPhase, leadTemperature, latestMessageText }) {
-  const aiResult = await generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText });
+async function handleInboundMessage({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile }) {
+  const aiResult = await generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile });
 
   return {
     aiResult,

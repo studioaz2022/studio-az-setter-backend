@@ -288,7 +288,7 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 
 
 // 🔹 Main: generate opener for a new intake (form webhook)
-async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText }) {
+async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile }) {
   if (!MASTER_PROMPT_A) {
     console.warn("⚠️ MASTER_PROMPT_A is empty. Check prompt file path.");
   }
@@ -301,18 +301,15 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature, lat
   if (latestMessageText) {
     intake.latestMessageText = latestMessageText;
   }
+  // Add contactProfile to intake if provided
+  if (contactProfile) {
+    intake.contactProfile = contactProfile;
+  }
   const messages = buildOpenerMessages({
     contact,
     intake,
     aiPhase,
     leadTemperature,
-  });
-
-  console.log("🤖 Calling OpenAI for opener with payload summary:", {
-    contactId: contact.id || contact._id,
-    leadTemperature,
-    aiPhase,
-    language: detectLanguage(intake.languagePreference, contact.tags || []),
   });
 
 
