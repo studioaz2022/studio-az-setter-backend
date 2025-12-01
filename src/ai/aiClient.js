@@ -1,28 +1,22 @@
 // aiClient.js
 require("dotenv").config();
-const fs = require("fs");
-const path = require("path");
 const OpenAI = require("openai");
+const { masterPromptA, phasePromptsRaw } = require("../prompts/promptsIndex");
 
 const openai = new OpenAI({
   apiKey: process.env.LLM_API_KEY,
 });
 
-// 🔹 Helper to load prompt files safely
-function loadPrompt(filename) {
-  const fullPath = path.join(__dirname, "..", "prompts", filename);
-  try {
-    const text = fs.readFileSync(fullPath, "utf8");
-    console.log(`✅ Loaded prompt file: ${filename}`);
-    return text;
-  } catch (err) {
-    console.error(`❌ Could not load prompt file: ${filename}`, err.message);
-    return "";
-  }
-}
+// 🔹 Load v3 prompts via promptsIndex
+const MASTER_PROMPT_V3 = masterPromptA;
+const PHASE_PROMPTS_V3 = phasePromptsRaw;
 
-const MASTER_PROMPT_A = loadPrompt("master_system_prompt_a.txt");
-const PHASE_PROMPTS_B = loadPrompt("phase_prompts_b.txt");
+if (!MASTER_PROMPT_V3) {
+  console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
+}
+if (!PHASE_PROMPTS_V3) {
+  console.warn("⚠️ PHASE_PROMPTS_V3 is empty. Check promptsIndex.js.");
+}
 
 // 🔹 Extract intake info from a GHL contact
 function extractIntakeFromContact(contact) {
@@ -215,14 +209,14 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
   };
 
   const systemContent = `
-${MASTER_PROMPT_A}
+${MASTER_PROMPT_V3}
 
 ---
 
-You are currently in: PHASE = "Opener" (ai_phase = "${aiPhase}") for a NEW INTAKE.
+You are currently in: PHASE = "${aiPhase || 'intake'}" for a NEW INTAKE.
 
-Use the following Phase B prompt content as reference for behavior, tone, and objectives:
-${PHASE_PROMPTS_B}
+Use the following Phase Prompts V3 content as reference for behavior, tone, and objectives:
+${PHASE_PROMPTS_V3}
 
 For THIS call:
 - Only generate the FIRST outbound message (or up to 2–3 short bubbles) to start the conversation.
@@ -289,11 +283,11 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 
 // 🔹 Main: generate opener for a new intake (form webhook)
 async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile }) {
-  if (!MASTER_PROMPT_A) {
-    console.warn("⚠️ MASTER_PROMPT_A is empty. Check prompt file path.");
+  if (!MASTER_PROMPT_V3) {
+    console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
   }
-  if (!PHASE_PROMPTS_B) {
-    console.warn("⚠️ PHASE_PROMPTS_B is empty. Check prompt file path.");
+  if (!PHASE_PROMPTS_V3) {
+    console.warn("⚠️ PHASE_PROMPTS_V3 is empty. Check promptsIndex.js.");
   }
 
   const intake = extractIntakeFromContact(contact);

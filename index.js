@@ -28,6 +28,9 @@ const {
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
 const { createDepositLinkForContact, getContactIdFromOrder } = require("./src/payments/squareClient");
+const { DEPOSIT_CONFIG, AI_PHASES, LEAD_TEMPERATURES, SYSTEM_FIELDS } = require("./src/config/constants");
+const { autoAssignArtist } = require("./src/ai/artistRouter");
+const { errorHandler, notFoundHandler } = require("./src/middleware/errorHandler");
 
 const app = express();
 
@@ -206,9 +209,24 @@ app.post(
                   deposit_paid: true,
                   deposit_link_sent: true,
                   last_phase_update_at: new Date().toISOString(),
+                  ai_phase: AI_PHASES.HANDOFF, // Move to handoff phase after deposit paid
                 });
+                console.log("✅ System fields updated after deposit payment");
               } catch (ghlErr) {
                 console.error("❌ Error updating GHL after deposit:", ghlErr.message || ghlErr);
+              }
+
+              // Auto-assign artist after deposit is paid
+              try {
+                const assignedArtist = await autoAssignArtist(contactId);
+                if (assignedArtist) {
+                  console.log(`✅ Artist ${assignedArtist} auto-assigned to contact ${contactId}`);
+                } else {
+                  console.log(`ℹ️ No artist assigned (could not determine from contact data)`);
+                }
+              } catch (artistErr) {
+                console.error("❌ Error auto-assigning artist after deposit:", artistErr.message || artistErr);
+                // Don't fail the webhook if artist assignment fails
               }
 
               // (Optional) Later we'll also move pipeline stage here once we have stage IDs nailed down.
@@ -356,7 +374,7 @@ app.post("/ghl/form-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for form webhook");
 
-    // 🔹 Call AI Setter for Opener (log only for now)
+  // 🔹 Call AI Setter for Opener and send it
   try {
     const aiResult = await generateOpenerForContact({
       contact,
@@ -366,11 +384,89 @@ app.post("/ghl/form-webhook", async (req, res) => {
 
     console.log("🤖 AI Opener suggestion:", JSON.stringify(aiResult, null, 2));
 
-    // ⚠️ IMPORTANT:
-    // Right now we are ONLY LOGGING the AI result.
-    // In the next phase, we'll use this to send a real message back via GHL Conversations API.
+    // Build channel context for form submissions
+    // For form submissions, we don't have a conversation yet, so we'll infer from contact data
+    const hasPhone = !!(contact.phone || contact.phoneNumber);
+    const tags = contact.tags || [];
+    const isDm = tags.some(t => 
+      typeof t === 'string' && (
+        t.includes('INSTAGRAM') || 
+        t.includes('FACEBOOK') || 
+        t.includes('DM')
+      )
+    );
+
+    const channelContext = {
+      isDm,
+      hasPhone,
+      conversationId: null, // Form submissions don't have a conversation yet
+      phone: contact.phone || contact.phoneNumber || null,
+    };
+
+    console.log("📡 Channel context for form opener:", channelContext);
+
+    // Send AI opener bubbles if we have them
+    if (aiResult && Array.isArray(aiResult.bubbles)) {
+      let bubblesToSend = aiResult.bubbles
+        .map((b) => (b || "").trim())
+        .filter(Boolean);
+
+      if (bubblesToSend.length === 0) {
+        console.warn("⚠️ AI opener bubbles were empty after trimming, nothing sent.");
+      } else {
+        for (let i = 0; i < bubblesToSend.length; i++) {
+          const text = bubblesToSend[i];
+
+          // Only wait before bubble #2 and beyond (more human)
+          if (i > 0) {
+            const delayMs = calculateDelayForText(text);
+            console.log(`⏱ Waiting ${delayMs}ms before sending opener bubble ${i + 1}...`);
+            await sleep(delayMs);
+          }
+
+          await sendConversationMessage({
+            contactId,
+            body: text,
+            channelContext,
+          });
+        }
+        console.log("📤 Sent AI opener bubbles to GHL conversation.");
+
+        // Update system fields from AI meta if present
+        const meta = aiResult.meta || {};
+        if (meta.aiPhase || meta.leadTemperature) {
+          const updateFields = {};
+          if (meta.aiPhase) updateFields.ai_phase = meta.aiPhase;
+          if (meta.leadTemperature) updateFields.lead_temperature = meta.leadTemperature;
+          updateFields.last_phase_update_at = new Date().toISOString();
+
+          console.log("🧠 Updating contact system fields from AI opener meta:", {
+            ai_phase: meta.aiPhase,
+            lead_temperature: meta.leadTemperature,
+          });
+
+          await updateSystemFields(contactId, updateFields);
+        }
+
+        // Apply field_updates from AI response
+        const fieldUpdates = aiResult.field_updates || {};
+        if (fieldUpdates && Object.keys(fieldUpdates).length > 0) {
+          console.log("🧾 Applying AI field_updates from opener to GHL:", fieldUpdates);
+          try {
+            await updateTattooFields(contactId, fieldUpdates);
+            console.log("✅ Field updates applied from opener.");
+          } catch (fieldErr) {
+            console.error("❌ Error applying field_updates from opener:", fieldErr.message || fieldErr);
+          }
+        } else {
+          console.log("ℹ️ No field_updates from AI opener to apply this turn.");
+        }
+      }
+    } else {
+      console.warn("⚠️ AI opener result did not contain bubbles array, nothing sent.");
+    }
   } catch (err) {
-    console.error("❌ Error generating AI opener:", err.response?.data || err.message);
+    console.error("❌ Error generating or sending AI opener:", err.response?.data || err.message || err);
   }
 
   res.status(200).send("OK");
@@ -752,8 +848,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
             const { url: depositUrl, paymentLinkId } =
               await createDepositLinkForContact({
                 contactId,
-                amountCents: 5000, // $50 deposit – we can make this dynamic later
-                description: "Studio AZ Tattoo Deposit",
+                amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+                description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
               });
 
             if (!depositUrl) {
@@ -816,7 +912,7 @@ app.get("/payments/test-link", async (req, res) => {
 
     const { url, paymentLinkId } = await createDepositLinkForContact({
       contactId,
-      amountCents: 5000, // $50.00 test deposit
+      amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
       description: "Test Studio AZ Tattoo Deposit (Sandbox)",
     });
 
@@ -970,6 +1066,10 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
 
 
 const PORT = process.env.PORT || 3000;
+// Error handling middleware (must be last)
+app.use(notFoundHandler); // 404 handler
+app.use(errorHandler); // General error handler
+
 app.listen(PORT, () => {
   console.log(`AI Setter server listening on port ${PORT}`);
 });
