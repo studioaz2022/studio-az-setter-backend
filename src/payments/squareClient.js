@@ -5,23 +5,25 @@
 // - Uses Square Sandbox or Production based on SQUARE_ENVIRONMENT.
 // - We use referenceId = GHL contactId so webhooks can map payment → contact.
 
-const { Client, Environment } = require("square");
+const {
+  SquareClient,
+  SquareEnvironment,
+  SquareError,
+} = require("square");
 
-const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
-const SQUARE_ENVIRONMENT =
-  process.env.SQUARE_ENVIRONMENT === "production"
-    ? Environment.Production
-    : Environment.Sandbox;
-
-if (!SQUARE_ACCESS_TOKEN) {
+if (!process.env.SQUARE_ACCESS_TOKEN) {
   console.warn(
     "[Square] SQUARE_ACCESS_TOKEN is not set. Square client will NOT be able to create live links."
   );
 }
 
-const square = new Client({
-  accessToken: SQUARE_ACCESS_TOKEN,
-  environment: SQUARE_ENVIRONMENT,
+const isProd = process.env.NODE_ENV === "production";
+
+const square = new SquareClient({
+  token: process.env.SQUARE_ACCESS_TOKEN,
+  environment: isProd
+    ? SquareEnvironment.Production
+    : SquareEnvironment.Sandbox,
 });
 
 /**
