@@ -357,12 +357,18 @@ app.post("/ghl/message-webhook", async (req, res) => {
       });
 
     const meta = aiResult?.meta || {};
-    console.log("🧠 AI meta from response:", {
+    const fieldUpdates = aiResult?.field_updates || {};
+
+    console.log("🧠 AI DECISION SUMMARY", {
       aiPhaseFromAI: meta.aiPhase,
       leadTemperatureFromAI: meta.leadTemperature,
       wantsDepositLink: meta.wantsDepositLink,
       depositPushedThisTurn: meta.depositPushedThisTurn,
       mentionDecoyOffered: meta.mentionDecoyOffered,
+      field_updates: fieldUpdates,
+      bubblesPreview: Array.isArray(aiResult?.bubbles)
+        ? aiResult.bubbles.map((b) => (b || "").slice(0, 80))
+        : [],
     });
 
     console.log(
@@ -411,8 +417,6 @@ app.post("/ghl/message-webhook", async (req, res) => {
         }
 
         // Apply field_updates from AI response
-        const fieldUpdates = aiResult?.field_updates || {};
-
         if (fieldUpdates && Object.keys(fieldUpdates).length > 0) {
           console.log("🧾 Applying AI field_updates to GHL:", fieldUpdates);
           try {
