@@ -659,10 +659,13 @@ app.post("/ghl/message-webhook", async (req, res) => {
 // Test route to generate a Square sandbox deposit link
 app.get("/payments/test-link", async (req, res) => {
   try {
-    const fakeContactId = "test-contact-" + Date.now(); // not a real GHL contact yet
+    // If ?contactId=... is provided, we'll use it.
+    // Otherwise we fall back to a fake test contact id.
+    const contactId =
+      req.query.contactId || `test-contact-${Date.now()}`;
 
     const { url, paymentLinkId } = await createDepositLinkForContact({
-      contactId: fakeContactId,
+      contactId,
       amountCents: 5000, // $50.00 test deposit
       description: "Test Studio AZ Tattoo Deposit (Sandbox)",
     });
@@ -673,19 +676,24 @@ app.get("/payments/test-link", async (req, res) => {
         .json({ error: "No URL returned from createDepositLinkForContact" });
     }
 
-    console.log("🧪 Test payment link created:", { fakeContactId, url, paymentLinkId });
+    console.log("🧪 Test payment link created:", {
+      contactId,
+      url,
+      paymentLinkId,
+    });
 
     return res.json({
       message: "Sandbox test payment link created",
-      contactId: fakeContactId,
+      contactId,
       paymentLinkId,
       url,
     });
   } catch (err) {
     console.error("❌ Error in /payments/test-link:", err);
-    return res
-      .status(500)
-      .json({ error: "Failed to create test payment link", details: err.message });
+    return res.status(500).json({
+      error: "Failed to create test payment link",
+      details: err.message,
+    });
   }
 });
 
