@@ -1,0 +1,227 @@
+// ghlCalendarClient.js
+// GHL Calendar API client for appointment booking
+
+require("dotenv").config();
+const axios = require("axios");
+
+const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
+const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
+const GHL_BASE_URL = "https://services.leadconnectorhq.com";
+
+if (!GHL_FILE_UPLOAD_TOKEN) {
+  console.warn("[GHL Calendar] GHL_FILE_UPLOAD_TOKEN is not set.");
+}
+
+if (!GHL_LOCATION_ID) {
+  console.warn("[GHL Calendar] GHL_LOCATION_ID is not set.");
+}
+
+function ghlHeaders() {
+  return {
+    Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+    Accept: "application/json",
+    "Content-Type": "application/json",
+    Version: "2021-04-15",
+  };
+}
+
+/**
+ * Create an appointment on a GHL calendar
+ * @param {Object} params
+ * @param {string} params.calendarId - Calendar ID
+ * @param {string} params.contactId - Contact ID
+ * @param {string} params.locationId - Location ID (defaults to GHL_LOCATION_ID)
+ * @param {string} params.startTime - ISO datetime string
+ * @param {string} params.endTime - ISO datetime string
+ * @param {string} params.title - Appointment title
+ * @param {string} [params.description] - Appointment description/notes
+ * @param {string} [params.appointmentStatus] - Status: "new", "confirmed", "cancelled", etc.
+ * @param {string} [params.assignedUserId] - User ID to assign (optional)
+ * @param {string} [params.address] - Meeting address (e.g. "Zoom" for online)
+ * @param {string} [params.meetingLocationType] - "custom" for online, etc.
+ * @param {string} [params.meetingLocationId] - Location ID for meeting
+ * @param {boolean} [params.ignoreDateRange] - Whether to ignore date range validation
+ * @param {boolean} [params.ignoreFreeSlotValidation] - Whether to ignore free slot validation
+ * @returns {Promise<Object>} Created appointment object
+ */
+async function createAppointment({
+  calendarId,
+  contactId,
+  locationId = GHL_LOCATION_ID,
+  startTime,
+  endTime,
+  title,
+  description = "",
+  appointmentStatus = "new",
+  assignedUserId = null,
+  address = "Zoom",
+  meetingLocationType = "custom",
+  meetingLocationId = "custom_0",
+  ignoreDateRange = false,
+  ignoreFreeSlotValidation = true,
+}) {
+  if (!calendarId) {
+    throw new Error("calendarId is required for createAppointment");
+  }
+  if (!contactId) {
+    throw new Error("contactId is required for createAppointment");
+  }
+  if (!startTime || !endTime) {
+    throw new Error("startTime and endTime are required for createAppointment");
+  }
+  if (!locationId) {
+    throw new Error("locationId is required (set GHL_LOCATION_ID env var)");
+  }
+
+  const url = `${GHL_BASE_URL}/calendars/events/appointments`;
+
+  const payload = {
+    title: title || "Consultation",
+    meetingLocationType,
+    meetingLocationId,
+    overrideLocationConfig: true,
+    appointmentStatus,
+    description,
+    address,
+    ignoreDateRange,
+    toNotify: false,
+    ignoreFreeSlotValidation,
+    calendarId,
+    locationId,
+    contactId,
+    startTime,
+    endTime,
+  };
+
+  // Add optional fields if provided
+  if (assignedUserId) {
+    payload.assignedUserId = assignedUserId;
+  }
+
+  try {
+    const resp = await axios.post(url, payload, {
+      headers: ghlHeaders(),
+    });
+
+    console.log("✅ Created appointment:", {
+      appointmentId: resp.data?.id,
+      calendarId,
+      contactId,
+      startTime,
+      appointmentStatus,
+    });
+
+    return resp.data;
+  } catch (err) {
+    console.error("❌ Error creating appointment:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
+ * List appointments for a contact
+ * @param {string} contactId - Contact ID
+ * @returns {Promise<Array>} Array of appointment objects
+ */
+async function listAppointmentsForContact(contactId) {
+  if (!contactId) {
+    throw new Error("contactId is required for listAppointmentsForContact");
+  }
+
+  const url = `${GHL_BASE_URL}/contacts/${encodeURIComponent(contactId)}/appointments`;
+
+  try {
+    const resp = await axios.get(url, {
+      headers: ghlHeaders(),
+    });
+
+    const events = resp.data?.events || [];
+    console.log(`✅ Found ${events.length} appointments for contact ${contactId}`);
+
+    return events;
+  } catch (err) {
+    console.error(
+      "❌ Error listing appointments for contact:",
+      err.response?.data || err.message
+    );
+    throw err;
+  }
+}
+
+/**
+ * Update appointment status
+ * @param {string} appointmentId - Appointment ID
+ * @param {string} status - New status: "new", "confirmed", "cancelled", etc.
+ * @returns {Promise<Object>} Updated appointment object
+ */
+async function updateAppointmentStatus(appointmentId, status) {
+  if (!appointmentId) {
+    throw new Error("appointmentId is required for updateAppointmentStatus");
+  }
+  if (!status) {
+    throw new Error("status is required for updateAppointmentStatus");
+  }
+
+  const url = `${GHL_BASE_URL}/calendars/events/appointments/${encodeURIComponent(
+    appointmentId
+  )}`;
+
+  const payload = {
+    appointmentStatus: status,
+  };
+
+  try {
+    const resp = await axios.patch(url, payload, {
+      headers: ghlHeaders(),
+    });
+
+    console.log("✅ Updated appointment status:", {
+      appointmentId,
+      status,
+    });
+
+    return resp.data;
+  } catch (err) {
+    console.error("❌ Error updating appointment status:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
+ * Get consult appointments for a contact (filters for future appointments on consult calendars)
+ * @param {string} contactId - Contact ID
+ * @param {Array<string>} consultCalendarIds - Array of calendar IDs to filter by
+ * @returns {Promise<Array>} Filtered appointment objects
+ */
+async function getConsultAppointmentsForContact(contactId, consultCalendarIds) {
+  const allAppointments = await listAppointmentsForContact(contactId);
+  const now = new Date();
+
+  return allAppointments.filter((apt) => {
+    // Must be on one of our consult calendars
+    if (!consultCalendarIds.includes(apt.calendarId)) {
+      return false;
+    }
+
+    // Must be in the future
+    const startTime = new Date(apt.startTime);
+    if (startTime <= now) {
+      return false;
+    }
+
+    // Must be "new" or "confirmed" (not cancelled)
+    if (apt.appointmentStatus === "cancelled") {
+      return false;
+    }
+
+    return true;
+  });
+}
+
+module.exports = {
+  createAppointment,
+  listAppointmentsForContact,
+  updateAppointmentStatus,
+  getConsultAppointmentsForContact,
+};
+

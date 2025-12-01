@@ -3,7 +3,12 @@
 
 const { getContact, updateSystemFields, sendConversationMessage } = require("../../ghlClient");
 const { generateOpenerForContact } = require("./aiClient");
-const { LEAD_TEMPERATURES, SYSTEM_FIELDS, AI_PHASES } = require("../config/constants");
+const { LEAD_TEMPERATURES, SYSTEM_FIELDS, AI_PHASES, CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
+const {
+  getConsultAppointmentsForContact,
+  updateAppointmentStatus,
+} = require("../clients/ghlCalendarClient");
+const { formatSlotDisplay } = require("./bookingController");
 
 /**
  * Calculate follow-up cadence based on lead temperature and days since last message
@@ -90,11 +95,130 @@ async function generateFollowUpMessage({ contact, leadTemperature, daysSinceLast
 }
 
 /**
+ * Process appointment hold reminders and cancellations
+ * Checks for pending appointments and sends reminders or cancels them
+ */
+async function processAppointmentHoldsForContact(contactId) {
+  try {
+    const contact = await getContact(contactId);
+    if (!contact) {
+      console.warn(`⚠️ Contact ${contactId} not found for appointment hold processing`);
+      return;
+    }
+
+    // Check if deposit is paid - if so, no need to process holds
+    const cf = contact.customField || contact.customFields || {};
+    const depositPaid = cf[SYSTEM_FIELDS.DEPOSIT_PAID] === "Yes" || cf[SYSTEM_FIELDS.DEPOSIT_PAID] === true;
+
+    if (depositPaid) {
+      console.log(`ℹ️ Deposit paid for contact ${contactId}, skipping appointment hold processing`);
+      return;
+    }
+
+    // Get consult appointments
+    const consultCalendarIds = Object.values(CALENDARS);
+    const consultAppointments = await getConsultAppointmentsForContact(
+      contactId,
+      consultCalendarIds
+    );
+
+    // Filter for pending appointments (status = "new")
+    const pendingAppointments = consultAppointments.filter(
+      (apt) => apt.appointmentStatus === APPOINTMENT_STATUS.NEW
+    );
+
+    if (pendingAppointments.length === 0) {
+      return; // No pending appointments
+    }
+
+    const now = new Date();
+
+    for (const appointment of pendingAppointments) {
+      const dateAdded = new Date(appointment.dateAdded);
+      const holdExpiresAt = new Date(dateAdded.getTime() + HOLD_CONFIG.HOLD_MINUTES * 60 * 1000);
+      const finalReminderAt = new Date(
+        holdExpiresAt.getTime() - HOLD_CONFIG.FINAL_REMINDER_MINUTES_BEFORE_EXPIRY * 60 * 1000
+      );
+
+      // Check if we're in the final reminder window
+      if (now >= finalReminderAt && now < holdExpiresAt) {
+        // Send final reminder
+        const slotDisplay = formatSlotDisplay(new Date(appointment.startTime));
+        const reminderMessage = `Quick reminder: We're still holding your ${slotDisplay} consultation slot. To keep it, please complete the $100 refundable deposit now. Otherwise, we may have to release the time for other clients.`;
+
+        const hasPhone = !!(contact.phone || contact.phoneNumber);
+        const tags = contact.tags || [];
+        const isDm = tags.some((t) =>
+          typeof t === "string" &&
+          (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+        );
+
+        const channelContext = {
+          isDm,
+          hasPhone,
+          conversationId: null,
+          phone: contact.phone || contact.phoneNumber || null,
+        };
+
+        await sendConversationMessage({
+          contactId,
+          body: reminderMessage,
+          channelContext,
+        });
+
+        console.log(`📅 Sent final reminder for appointment ${appointment.id}`);
+      }
+
+      // Check if hold has expired
+      if (now >= holdExpiresAt) {
+        // Cancel the appointment
+        try {
+          await updateAppointmentStatus(appointment.id, APPOINTMENT_STATUS.CANCELLED);
+
+          const slotDisplay = formatSlotDisplay(new Date(appointment.startTime));
+          const cancelMessage = `We had to release your ${slotDisplay} consultation slot since we didn't receive the deposit. No worries though - we can help you find another time that works if you're still interested!`;
+
+          const hasPhone = !!(contact.phone || contact.phoneNumber);
+          const tags = contact.tags || [];
+          const isDm = tags.some((t) =>
+            typeof t === "string" &&
+            (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+          );
+
+          const channelContext = {
+            isDm,
+            hasPhone,
+            conversationId: null,
+            phone: contact.phone || contact.phoneNumber || null,
+          };
+
+          await sendConversationMessage({
+            contactId,
+            body: cancelMessage,
+            channelContext,
+          });
+
+          console.log(`📅 Cancelled expired appointment ${appointment.id}`);
+        } catch (cancelErr) {
+          console.error(`❌ Error cancelling appointment ${appointment.id}:`, cancelErr.message || cancelErr);
+        }
+      }
+    }
+  } catch (err) {
+    console.error(`❌ Error processing appointment holds for contact ${contactId}:`, err.message || err);
+    throw err;
+  }
+}
+
+/**
  * Schedule and send follow-up messages for a contact
  * This should be called by a scheduled job (cron) or queue system
  */
 async function processFollowUpsForContact(contactId) {
   try {
+    // First, process appointment holds
+    await processAppointmentHoldsForContact(contactId);
+
     const contact = await getContact(contactId);
     if (!contact) {
       console.warn(`⚠️ Contact ${contactId} not found for follow-up processing`);
@@ -198,6 +322,7 @@ module.exports = {
   shouldStopFollowUps,
   generateFollowUpMessage,
   processFollowUpsForContact,
+  processAppointmentHoldsForContact,
   getContactsNeedingFollowUps,
 };
 

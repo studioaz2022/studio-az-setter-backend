@@ -79,6 +79,30 @@ const MESSAGE_DELAYS = {
   CHARS_PER_SECOND: 50,
 };
 
+// Calendar IDs for consult appointments
+const CALENDARS = {
+  JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
+  JOAN_ONLINE: "Y13HIK8jFgO45zyq4sk7",
+  ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
+  ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
+};
+
+// Appointment hold configuration
+const HOLD_CONFIG = {
+  HOLD_MINUTES: 15, // Hold time before releasing slot
+  FINAL_REMINDER_MINUTES_BEFORE_EXPIRY: 10, // Send reminder X minutes before hold expires
+};
+
+// Appointment status values (per GHL API)
+const APPOINTMENT_STATUS = {
+  NEW: "new", // Pending / on-hold before deposit
+  CONFIRMED: "confirmed", // After deposit paid
+  CANCELLED: "cancelled", // Released due to no deposit
+  SHOWED: "showed",
+  NOSHOW: "noshow",
+  INVALID: "invalid",
+};
+
 module.exports = {
   AI_PHASES,
   LEAD_TEMPERATURES,
@@ -88,5 +112,8 @@ module.exports = {
   LANGUAGES,
   TAGS,
   MESSAGE_DELAYS,
+  CALENDARS,
+  HOLD_CONFIG,
+  APPOINTMENT_STATUS,
 };
 

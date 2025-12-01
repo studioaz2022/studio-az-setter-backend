@@ -2,7 +2,7 @@
 // Style-based artist assignment and routing logic
 
 const { getContact, updateSystemFields, updateTattooFields } = require("../../ghlClient");
-const { SYSTEM_FIELDS, TATTOO_FIELDS } = require("../config/constants");
+const { SYSTEM_FIELDS, TATTOO_FIELDS, CALENDARS } = require("../config/constants");
 
 /**
  * Artist style mappings
@@ -227,11 +227,40 @@ function updateArtistWorkload(artistName, delta) {
   }
 }
 
+/**
+ * Get calendar ID for an artist and consult mode
+ * @param {string} artistName - Artist name (e.g. "Joan", "Andrew")
+ * @param {string} consultMode - "online" or "in_person"
+ * @returns {string|null} Calendar ID or null if not found
+ */
+function getCalendarIdForArtist(artistName, consultMode = "online") {
+  const normalizedArtist = String(artistName).trim();
+  const normalizedMode = String(consultMode).toLowerCase().trim();
+
+  if (normalizedArtist.toLowerCase() === "joan") {
+    return normalizedMode === "in_person" || normalizedMode === "in-person"
+      ? CALENDARS.JOAN_IN_PERSON
+      : CALENDARS.JOAN_ONLINE;
+  }
+
+  if (normalizedArtist.toLowerCase() === "andrew") {
+    return normalizedMode === "in_person" || normalizedMode === "in-person"
+      ? CALENDARS.ANDREW_IN_PERSON
+      : CALENDARS.ANDREW_ONLINE;
+  }
+
+  console.warn(
+    `⚠️ Unknown artist "${artistName}" for calendar selection, defaulting to Joan online`
+  );
+  return CALENDARS.JOAN_ONLINE; // Default fallback
+}
+
 module.exports = {
   determineArtist,
   assignArtistToContact,
   autoAssignArtist,
   updateArtistWorkload,
+  getCalendarIdForArtist,
   ARTIST_STYLE_MAP,
   artistWorkloads,
 };
