@@ -1,17 +1,18 @@
 // squareClient.js
-// Square Payment Link + Orders client for Studio AZ Setter backend.
-// - Creates payment links for deposits
-// - Uses order.reference_id = GHL contactId so webhooks can map payment → contact
-// - Exposes a helper to fetch an order and read its reference_id
+// Direct HTTP client for Square payment links + orders using axios.
+// We skip the Node SDK and talk to the Square REST API directly.
 
-const {
-  SquareClient,
-  SquareEnvironment,
-  SquareError,
-} = require("square");
+const axios = require("axios");
 
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
+const SQUARE_ENVIRONMENT = process.env.SQUARE_ENVIRONMENT || "sandbox";
+
+const isProd = SQUARE_ENVIRONMENT === "production";
+
+const SQUARE_BASE_URL = isProd
+  ? "https://connect.squareup.com"
+  : "https://connect.squareupsandbox.com";
 
 if (!SQUARE_ACCESS_TOKEN) {
   console.warn(
@@ -25,22 +26,10 @@ if (!SQUARE_LOCATION_ID) {
   );
 }
 
-const environment =
-  process.env.SQUARE_ENVIRONMENT === "production"
-    ? SquareEnvironment.Production
-    : SquareEnvironment.Sandbox;
-
-console.log("[Square] Initializing SquareClient with env:", environment);
-
-const squareClient = new SquareClient({
-  environment,
-  token: SQUARE_ACCESS_TOKEN,
-});
-
 /**
  * Create a Square payment link for a specific contact.
- * - contactId: GHL contactId (saved as order.reference_id)
- * - amountCents: integer cents (e.g. 10000 = $100.00)
+ * - contactId: GHL contact id (for your internal reference / future metadata use)
+ * - amountCents: integer in cents, e.g. 5000 = $50.00
  */
 async function createDepositLinkForContact({
   contactId,
@@ -52,7 +41,9 @@ async function createDepositLinkForContact({
     throw new Error("contactId is required for createDepositLinkForContact");
   }
   if (typeof amountCents !== "number" || !amountCents) {
-    throw new Error("amountCents (number) is required for createDepositLinkForContact");
+    throw new Error(
+      "amountCents (number) is required for createDepositLinkForContact"
+    );
   }
   if (!SQUARE_LOCATION_ID) {
     throw new Error(
@@ -62,87 +53,117 @@ async function createDepositLinkForContact({
 
   const idempotencyKey = `${contactId}-${Date.now()}`;
 
-  // Use checkout.paymentLinks.create with an ORDER that includes reference_id
+  // Body mirrors the working HTTP call (snake_case for quick_pay)
   const body = {
-    idempotencyKey,
-    description,
-    order: {
-      locationId: SQUARE_LOCATION_ID,
-      referenceId: contactId, // 🔥 binds order → GHL contact
-      lineItems: [
-        {
-          name: description,
-          quantity: "1",
-          basePriceMoney: {
-            amount: amountCents,
-            currency,
-          },
-        },
-      ],
+    idempotency_key: idempotencyKey,
+    checkout_options: {
+      // You can trim these later if you want fewer methods
+      accepted_payment_methods: {
+        afterpay_clearpay: true,
+        apple_pay: true,
+        cash_app_pay: true,
+        google_pay: true,
+      },
     },
-    checkoutOptions: {
-      // Optional: redirect after payment
-      redirectUrl:
-        process.env.SQUARE_REDIRECT_URL ||
-        "https://studioaztattoo.com/thank-you",
+    quick_pay: {
+      location_id: SQUARE_LOCATION_ID,
+      name: description,
+      price_money: {
+        // Square HTTP expects a plain integer, not BigInt
+        amount: amountCents,
+        currency,
+      },
     },
   };
 
-  console.log("[Square] Creating payment link with body:", {
+  console.log("[Square] Creating payment link (HTTP) with body:", {
     contactId,
     amountCents,
     currency,
+    env: isProd ? "production" : "sandbox",
   });
 
   try {
-    const res = await squareClient.checkout.paymentLinks.create(body);
-    const result = res.result;
-    const paymentLink = result && result.paymentLink;
+    const url = `${SQUARE_BASE_URL}/v2/online-checkout/payment-links`;
+
+    const response = await axios.post(url, body, {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+        // Square-Version header is optional; we can rely on app default
+      },
+    });
+
+    const data = response.data || {};
+    const paymentLink = data.payment_link;
 
     if (!paymentLink || !paymentLink.url) {
-      console.error("[Square] No paymentLink or URL in response:", result);
+      console.error(
+        "[Square] No payment_link.url in HTTP response:",
+        JSON.stringify(data, null, 2)
+      );
       throw new Error("No payment link URL returned from Square");
     }
 
-    console.log("💳 Square payment link created:", {
+    console.log("💳 Square payment link created (HTTP):", {
       contactId,
       paymentLinkId: paymentLink.id,
       url: paymentLink.url,
-      orderId: paymentLink.orderId || paymentLink.order_id,
     });
 
     return {
       url: paymentLink.url,
       paymentLinkId: paymentLink.id,
-      orderId: paymentLink.orderId || paymentLink.order_id || null,
+      // Some responses also include order_id – plumb it through if present
+      orderId: paymentLink.order_id || null,
     };
   } catch (err) {
-    if (err instanceof SquareError) {
-      console.error("[Square] SquareError creating payment link:", err.errors);
+    if (err.response) {
+      console.error(
+        "[Square] HTTP error creating payment link:",
+        err.response.status,
+        JSON.stringify(err.response.data, null, 2)
+      );
+      throw new Error(
+        `Square HTTP error ${err.response.status}: ${
+          err.response.data?.errors?.[0]?.detail ||
+          JSON.stringify(err.response.data)
+        }`
+      );
     } else {
       console.error("[Square] Unexpected error creating payment link:", err);
+      throw err;
     }
-    throw err;
   }
 }
 
 /**
  * Given an orderId from a webhook (payment.created/payment.updated),
- * fetch the order and return its reference_id (which we use as GHL contactId).
+ * fetch the order and return its reference_id (intended for future use
+ * to map order → GHL contactId). For now, this will just try and log.
  */
 async function getContactIdFromOrder(orderId) {
   if (!orderId) return null;
 
   try {
-    const res = await squareClient.orders.getOrder(orderId);
-    const order = res.result && res.result.order;
+    const url = `${SQUARE_BASE_URL}/v2/orders/${orderId}`;
+
+    const response = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+
+    const data = response.data || {};
+    const order = data.order;
 
     if (!order) {
       console.warn("[Square] No order found for id:", orderId);
       return null;
     }
 
-    const contactId = order.referenceId || order.reference_id || null;
+    const contactId = order.reference_id || null;
 
     console.log("[Square] Resolved order → contact mapping:", {
       orderId,
@@ -151,8 +172,12 @@ async function getContactIdFromOrder(orderId) {
 
     return contactId;
   } catch (err) {
-    if (err instanceof SquareError) {
-      console.error("[Square] SquareError reading order:", err.errors);
+    if (err.response) {
+      console.error(
+        "[Square] HTTP error reading order:",
+        err.response.status,
+        JSON.stringify(err.response.data, null, 2)
+      );
     } else {
       console.error("[Square] Unexpected error reading order:", err);
     }
