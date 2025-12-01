@@ -252,6 +252,16 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
     "wantsDepositLink": boolean,
     "depositPushedThisTurn": boolean,
     "mentionDecoyOffered": boolean
+  },
+  "field_updates": {
+    "tattoo_placement"?: string,
+    "size_of_tattoo"?: string,
+    "tattoo_style"?: string,
+    "tattoo_color_preference"?: string,
+    "how_soon_is_client_deciding"?: string,
+    "first_tattoo"?: boolean,
+    "tattoo_concerns"?: string,
+    "tattoo_summary"?: string
   }
 }
 `;
@@ -338,6 +348,15 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
 
   parsed.meta = meta;
 
+  // Normalize field_updates
+  let fieldUpdates = parsed.field_updates;
+
+  if (!fieldUpdates || typeof fieldUpdates !== "object") {
+    fieldUpdates = {};
+  }
+
+  parsed.field_updates = fieldUpdates;
+
   // Normalize shape
   if (!Array.isArray(parsed.bubbles)) {
     parsed.bubbles = [String(parsed.bubbles || "")].filter(Boolean);
@@ -348,6 +367,7 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature }) {
     bubbles: parsed.bubbles,
     internal_notes: parsed.internal_notes || "",
     meta: parsed.meta,
+    field_updates: parsed.field_updates,
   };
 }
 

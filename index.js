@@ -14,6 +14,7 @@ const {
   getContact,
   upsertContactFromWidget,
   updateSystemFields,
+  updateTattooFields,
   sendConversationMessage,
 } = require("./ghlClient");
 
@@ -407,6 +408,20 @@ app.post("/ghl/message-webhook", async (req, res) => {
           });
 
           await updateSystemFields(contactId, updateFields);
+        }
+
+        // Apply field_updates from AI response
+        const fieldUpdates = aiResult?.field_updates || {};
+
+        if (fieldUpdates && Object.keys(fieldUpdates).length > 0) {
+          console.log("🧾 Applying AI field_updates to GHL:", fieldUpdates);
+          try {
+            await updateTattooFields(contactId, fieldUpdates);
+          } catch (err) {
+            console.error("❌ Failed to update tattoo-related fields from AI:", err.message);
+          }
+        } else {
+          console.log("ℹ️ No field_updates from AI to apply this turn.");
         }
       }
     } else {

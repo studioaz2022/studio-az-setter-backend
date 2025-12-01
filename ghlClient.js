@@ -386,6 +386,55 @@ async function updateSystemFields(contactId, fields = {}) {
   }
 }
 
+/**
+ * Update tattoo-related custom fields on a contact using the CUSTOM_FIELD_MAP.
+ * 
+ * @param {string} contactId
+ * @param {object} fields - keys like "tattoo_placement", "size_of_tattoo", etc.
+ */
+async function updateTattooFields(contactId, fields = {}) {
+  if (!contactId) {
+    console.warn("updateTattooFields called without contactId");
+    return null;
+  }
+
+  if (!fields || typeof fields !== "object") {
+    console.warn("updateTattooFields called with invalid fields:", fields);
+    return null;
+  }
+
+  // Map from friendly keys → actual GHL customField IDs
+  const customField = {};
+
+  Object.entries(fields).forEach(([key, value]) => {
+    if (value === undefined || value === null || value === "") return;
+
+    const fieldId = CUSTOM_FIELD_MAP[key];
+    if (!fieldId) return; // no mapping defined for this key
+
+    customField[fieldId] = value;
+  });
+
+  if (Object.keys(customField).length === 0) {
+    console.log("updateTattooFields: no mapped fields to update for contact", contactId);
+    return null;
+  }
+
+  try {
+    const body = { customField };
+    const res = await updateContact(contactId, body);
+    console.log("✅ Updated tattoo fields for contact", contactId, "with", customField);
+    return res;
+  } catch (err) {
+    console.error(
+      "❌ Error updating tattoo fields in GHL:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
 // Infer the outbound "type" for /conversations/messages by looking at the last inbound message
 async function inferConversationMessageType(contactId) {
   if (!contactId) return "SMS";
@@ -507,6 +556,7 @@ module.exports = {
   getContact,
   upsertContactFromWidget,
   updateSystemFields,
+  updateTattooFields,
   uploadFilesToTattooCustomField,
   sendConversationMessage,
 };
