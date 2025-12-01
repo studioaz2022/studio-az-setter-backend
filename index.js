@@ -379,8 +379,25 @@ app.post("/ghl/form-webhook", async (req, res) => {
 
 // Webhook to receive conversation messages from GoHighLevel
 app.post("/ghl/message-webhook", async (req, res) => {
+  const rawBody = req.body || {};
+  
   console.log("💬 GHL MESSAGE WEBHOOK HIT");
-  console.log("Raw Body:", JSON.stringify(req.body, null, 2));
+  console.log("Raw Body:", JSON.stringify(rawBody, null, 2));
+
+  // Snapshot of relevant tattoo + deposit fields from the webhook body
+  const contactProfileFromWebhook = {
+    tattooPlacement: rawBody["Tattoo Placement"] || null,
+    tattooSize: rawBody["Tattoo Size"] || null,
+    tattooSummary: rawBody["Tattoo Summary"] || null,
+    tattooStyle: rawBody["Tattoo Style"] || null,
+    tattooColor: rawBody["Tattoo Color Preference"] || null,
+    depositPaid:
+      typeof rawBody["Deposit Paid"] === "string" &&
+      rawBody["Deposit Paid"].toLowerCase() === "yes",
+    depositLinkSent:
+      typeof rawBody["Deposit Link Sent"] === "string" &&
+      rawBody["Deposit Link Sent"].toLowerCase() === "yes",
+  };
 
   const customData = req.body.customData || req.body.custom_data || {};
   const contactId =
@@ -539,33 +556,41 @@ app.post("/ghl/message-webhook", async (req, res) => {
     currentLanguage ||
     "English";
 
-  // Build a normalized profile from refetched contact fields
+  // Build a normalized profile from refetched contact fields, merging webhook values (webhook wins)
   const contactProfile = {
     tattooPlacement:
+      contactProfileFromWebhook.tattooPlacement ||
       contactCustomFields?.tattoo_placement ||
       contactCustomFields?.tattooPlacement ||
       null,
     tattooSize:
+      contactProfileFromWebhook.tattooSize ||
       contactCustomFields?.size_of_tattoo ||
       contactCustomFields?.tattoo_size ||
       null,
-    tattooStyle:
-      contactCustomFields?.tattoo_style || null,
-    tattooColor:
-      contactCustomFields?.tattoo_color_preference ||
-      contactCustomFields?.tattoo_color ||
-      null,
     tattooSummary:
+      contactProfileFromWebhook.tattooSummary ||
       contactCustomFields?.tattoo_summary ||
       contactCustomFields?.tattooSummary ||
+      null,
+    tattooStyle:
+      contactProfileFromWebhook.tattooStyle ||
+      contactCustomFields?.tattoo_style ||
+      null,
+    tattooColor:
+      contactProfileFromWebhook.tattooColor ||
+      contactCustomFields?.tattoo_color_preference ||
+      contactCustomFields?.tattoo_color ||
       null,
     firstTattoo:
       contactCustomFields?.first_tattoo || null,
     decisionTimeline:
       contactCustomFields?.how_soon_is_client_deciding || null,
     depositPaid:
+      contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
     depositLinkSent:
+      contactProfileFromWebhook.depositLinkSent ||
       contactSystemFields?.deposit_link_sent === "Yes",
   };
 
@@ -579,10 +604,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
   };
 
   console.log("🤖 Calling OpenAI for opener with payload summary:", {
-    contactId: aiPayload.contactId,
-    leadTemperature: aiPayload.leadTemperature,
-    aiPhase: aiPayload.aiPhase,
-    language: aiPayload.language,
+    contactId,
+    leadTemperature,
+    aiPhase: newPhase,
+    language: contactLanguagePreference,
     hasTattooPlacement: !!contactProfile.tattooPlacement,
     hasTattooSize: !!contactProfile.tattooSize,
     depositPaid: contactProfile.depositPaid,
