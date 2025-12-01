@@ -90,26 +90,43 @@ function calculateDelayForText(text) {
 
 app.post(
   "/square/webhook",
-  express.raw({ type: "application/json" }),  // raw body for signature validation
+  express.raw({ type: "application/json" }), // raw body for signature validation
   (req, res) => {
     console.log("📬 Square webhook received");
 
+    const signatureHeader =
+      req.headers["x-square-hmacsha256-signature"] ||
+      req.headers["x-square-hmacsha256-signature".toLowerCase()];
+    const webhookSecret = process.env.SQUARE_WEBHOOK_SECRET;
+
+    // IMPORTANT: This MUST match the Notification URL configured in the Square dashboard
+    const notificationUrl =
+      process.env.SQUARE_WEBHOOK_NOTIFICATION_URL ||
+      "https://studio-az-setter-backend.onrender.com/square/webhook";
+
     try {
-      const signatureHeader = req.headers["x-square-hmacsha256-signature"];
-      const webhookSecret = process.env.SQUARE_WEBHOOK_SECRET;
+      const rawBodyBuffer = req.body; // Buffer from express.raw
+      const rawBodyString =
+        Buffer.isBuffer(rawBodyBuffer)
+          ? rawBodyBuffer.toString("utf8")
+          : String(rawBodyBuffer || "");
 
       if (!signatureHeader || !webhookSecret) {
-        console.warn("⚠️ Missing signature header or webhook secret.");
+        console.warn(
+          "⚠️ Missing signature header or webhook secret. Skipping signature validation."
+        );
       } else {
-        // Validate signature
         const crypto = require("crypto");
-        const computedSignature = crypto
-          .createHmac("sha256", webhookSecret)
-          .update(req.body) // raw body, not parsed JSON
-          .digest("base64");
+
+        // Square: HMAC-SHA256 over notificationUrl + rawBodyString
+        const hmac = crypto.createHmac("sha256", webhookSecret);
+        hmac.update(notificationUrl + rawBodyString);
+        const computedSignature = hmac.digest("base64");
 
         if (computedSignature !== signatureHeader) {
           console.warn("❌ Invalid Square webhook signature!");
+          console.warn("   computedSignature:", computedSignature);
+          console.warn("   headerSignature:  ", signatureHeader);
         } else {
           console.log("✅ Square webhook signature validated.");
         }
@@ -119,9 +136,33 @@ app.post(
       console.log(JSON.stringify(req.headers, null, 2));
 
       console.log("📬 Square Webhook Raw Body:");
-      console.log(req.body.toString()); // raw
+      console.log(rawBodyString);
 
-      // Respond OK no matter what so Square doesn't retry spam
+      // Try to parse the JSON so we can log type + status
+      try {
+        const event = JSON.parse(rawBodyString);
+
+        const eventType = event?.type;
+        const payment =
+          event?.data?.object?.payment || event?.data?.object?.payment?.payment;
+        const paymentStatus = payment?.status;
+        const paymentAmount = payment?.amount_money?.amount;
+        const paymentCurrency = payment?.amount_money?.currency;
+        const paymentId = payment?.id;
+        const orderId = payment?.order_id;
+
+        console.log("📬 Parsed Square Event Type:", eventType);
+        if (payment) {
+          console.log("💳 Payment ID:", paymentId);
+          console.log("💳 Payment Status:", paymentStatus);
+          console.log("💳 Payment Amount:", paymentAmount, paymentCurrency);
+          console.log("💳 Payment Order ID:", orderId);
+        }
+      } catch (parseErr) {
+        console.warn("⚠️ Failed to parse Square webhook JSON:", parseErr);
+      }
+
+      // For now, always respond 200 so Square doesn't retry spam
       return res.status(200).send("OK");
     } catch (err) {
       console.error("❌ Error in Square webhook:", err);
