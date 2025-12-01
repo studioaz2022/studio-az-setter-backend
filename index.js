@@ -198,14 +198,14 @@ app.post(
                 { orderId, paymentId: payment.id }
               );
             } else {
-              console.log("🎉 Deposit paid for contact", contactId);
+              console.log(`🎉 Deposit paid for contact ${contactId}`);
 
+              // Mark deposit as paid in GHL system fields
               try {
-                await updateTattooFields(contactId, {
-                  deposit_paid: "Yes",
-                  square_payment_id: payment.id,
-                  square_order_id: orderId,
-                  square_payment_status: status,
+                await updateSystemFields(contactId, {
+                  deposit_paid: true,
+                  deposit_link_sent: true,
+                  last_phase_update_at: new Date().toISOString(),
                 });
               } catch (ghlErr) {
                 console.error("❌ Error updating GHL after deposit:", ghlErr.message || ghlErr);
