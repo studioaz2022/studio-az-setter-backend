@@ -1,5 +1,6 @@
 require("dotenv").config();
 
+const crypto = require("crypto");
 const multer = require("multer");
 const upload = multer({
   storage: multer.memoryStorage(),
@@ -26,7 +27,7 @@ const {
 
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
-const { createDepositLinkForContact } = require("./src/payments/squareClient");
+const { createDepositLinkForContact, getContactIdFromOrder } = require("./src/payments/squareClient");
 
 const app = express();
 
@@ -86,94 +87,133 @@ function calculateDelayForText(text) {
   return 18000;                  // ~18 seconds
 }
 
-//////  START OF NEW SQUARE WEBHOOK ROUTE  //////
+// 🔐 Validate Square webhook signatures using x-square-hmacsha256-signature
+function verifySquareSignature(req, secret) {
+  const signature = req.headers["x-square-hmacsha256-signature"];
+  const rawBody = req.rawBody || "";
 
-app.post(
-  "/square/webhook",
-  express.raw({ type: "application/json" }), // raw body for signature validation
-  (req, res) => {
-    console.log("📬 Square webhook received");
-
-    const signatureHeader =
-      req.headers["x-square-hmacsha256-signature"] ||
-      req.headers["x-square-hmacsha256-signature".toLowerCase()];
-    const webhookSecret = process.env.SQUARE_WEBHOOK_SECRET;
-
-    // IMPORTANT: This MUST match the Notification URL configured in the Square dashboard
-    const notificationUrl =
-      process.env.SQUARE_WEBHOOK_NOTIFICATION_URL ||
-      "https://studio-az-setter-backend.onrender.com/square/webhook";
-
-    try {
-      const rawBodyBuffer = req.body; // Buffer from express.raw
-      const rawBodyString =
-        Buffer.isBuffer(rawBodyBuffer)
-          ? rawBodyBuffer.toString("utf8")
-          : String(rawBodyBuffer || "");
-
-      if (!signatureHeader || !webhookSecret) {
-        console.warn(
-          "⚠️ Missing signature header or webhook secret. Skipping signature validation."
-        );
-      } else {
-        const crypto = require("crypto");
-
-        // Square: HMAC-SHA256 over notificationUrl + rawBodyString
-        const hmac = crypto.createHmac("sha256", webhookSecret);
-        hmac.update(notificationUrl + rawBodyString);
-        const computedSignature = hmac.digest("base64");
-
-        if (computedSignature !== signatureHeader) {
-          console.warn("❌ Invalid Square webhook signature!");
-          console.warn("   computedSignature:", computedSignature);
-          console.warn("   headerSignature:  ", signatureHeader);
-        } else {
-          console.log("✅ Square webhook signature validated.");
-        }
-      }
-
-      console.log("📬 Square Webhook Headers:");
-      console.log(JSON.stringify(req.headers, null, 2));
-
-      console.log("📬 Square Webhook Raw Body:");
-      console.log(rawBodyString);
-
-      // Try to parse the JSON so we can log type + status
-      try {
-        const event = JSON.parse(rawBodyString);
-
-        const eventType = event?.type;
-        const payment =
-          event?.data?.object?.payment || event?.data?.object?.payment?.payment;
-        const paymentStatus = payment?.status;
-        const paymentAmount = payment?.amount_money?.amount;
-        const paymentCurrency = payment?.amount_money?.currency;
-        const paymentId = payment?.id;
-        const orderId = payment?.order_id;
-
-        console.log("📬 Parsed Square Event Type:", eventType);
-        if (payment) {
-          console.log("💳 Payment ID:", paymentId);
-          console.log("💳 Payment Status:", paymentStatus);
-          console.log("💳 Payment Amount:", paymentAmount, paymentCurrency);
-          console.log("💳 Payment Order ID:", orderId);
-        }
-      } catch (parseErr) {
-        console.warn("⚠️ Failed to parse Square webhook JSON:", parseErr);
-      }
-
-      // For now, always respond 200 so Square doesn't retry spam
-      return res.status(200).send("OK");
-    } catch (err) {
-      console.error("❌ Error in Square webhook:", err);
-      return res.status(200).send("OK");
-    }
+  if (!signature || !secret) {
+    console.warn("Missing Square signature or secret.");
+    return false;
   }
+
+  const hmac = crypto.createHmac("sha256", secret);
+  hmac.update(rawBody, "utf8");
+  const computed = hmac.digest("base64");
+
+  const isValid = crypto.timingSafeEqual(
+    Buffer.from(signature, "utf8"),
+    Buffer.from(computed, "utf8")
+  );
+
+  if (!isValid) {
+    console.error(
+      "❌ Invalid Square webhook signature!",
+      "\nExpected:", computed,
+      "\nReceived:", signature
+    );
+  }
+
+  return isValid;
+}
+
+app.post("/square/webhook", async (req, res) => {
+  console.log("📬 Square webhook received");
+
+  try {
+    const secret = process.env.SQUARE_WEBHOOK_SECRET;
+    if (!verifySquareSignature(req, secret)) {
+      return res.status(400).send("Invalid signature");
+    }
+
+    console.log("✅ Square webhook signature validated.");
+
+    const event = req.body;
+    console.log("📬 Square Webhook Raw Body (parsed JSON):", JSON.stringify(event));
+
+    const eventType = event?.type;
+    console.log("📬 Parsed Square Event Type:", eventType);
+
+    // We care primarily about payment events
+    if (eventType === "payment.created" || eventType === "payment.updated") {
+      const payment = event?.data?.object?.payment;
+      if (!payment) {
+        console.warn("⚠️ payment webhook without payment object");
+      } else {
+        const status = payment.status;
+        const amount = payment.amount_money?.amount;
+        const currency = payment.amount_money?.currency;
+        const orderId = payment.order_id;
+
+        console.log("💳 Payment details:", {
+          paymentId: payment.id,
+          status,
+          amount,
+          currency,
+          orderId,
+        });
+
+        // Only act on completed/approved payments
+        const normalizedStatus = (status || "").toUpperCase();
+        const isDone =
+          normalizedStatus === "COMPLETED" ||
+          normalizedStatus === "APPROVED" ||
+          normalizedStatus === "CAPTURED";
+
+        if (isDone && orderId) {
+          // Map order → GHL contactId via reference_id
+          const contactId = await getContactIdFromOrder(orderId);
+
+          if (!contactId) {
+            console.warn(
+              "⚠️ Could not resolve contactId from order; not updating GHL.",
+              { orderId, paymentId: payment.id }
+            );
+          } else {
+            console.log("🎉 Deposit paid for contact", contactId);
+
+            try {
+              await updateTattooFields(contactId, {
+                deposit_paid: "Yes",
+                square_payment_id: payment.id,
+                square_order_id: orderId,
+                square_payment_status: status,
+              });
+            } catch (ghlErr) {
+              console.error("❌ Error updating GHL after deposit:", ghlErr.message || ghlErr);
+            }
+
+            // (Optional) Later we'll also move pipeline stage here once we have stage IDs nailed down.
+            // e.g., await updatePipelineStage(contactId, "Deposit Paid");
+          }
+        } else {
+          console.log(
+            "ℹ️ Payment not in a completed/approved state yet; ignoring for now."
+          );
+        }
+      }
+    } else {
+      // For now we just log other event types (order.updated, etc.)
+      console.log("ℹ️ Non-payment webhook event received from Square.");
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Square Webhook error:", err);
+    res.status(500).send("Webhook error");
+  }
+});
+
+app.use(
+  express.json({
+    verify: (req, res, buf) => {
+      // Save raw body for Square HMAC validation
+      if (req.originalUrl === "/square/webhook") {
+        req.rawBody = buf.toString("utf8");
+      }
+    },
+  })
 );
-
-//////  END OF NEW SQUARE WEBHOOK ROUTE  //////
-
-app.use(express.json());
 
 // 🔹 Allow your widget to call this API from the browser
 app.use(
