@@ -26,6 +26,7 @@ const {
 
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
+const { createDepositLinkForContact } = require("./src/payments/squareClient");
 
 const app = express();
 
@@ -289,21 +290,46 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
     console.log("📩 Incoming message text (for language detection):", messageText);
 
-  // If we don't already have a language preference and this looks like Spanish, set it
-  if (!currentLanguage && looksLikeSpanish(messageText)) {
-    console.log("🌐 Detected Spanish DM/SMS. Updating language_preference to Spanish...");
+  // Detect language from message and update if different from existing preference
+  const existingLanguagePreference = currentLanguage;
+
+  let detectedLanguage = null;
+
+  if (looksLikeSpanish(messageText)) {
+    detectedLanguage = "Spanish";
+  } else {
+    // If it's not clearly Spanish, treat it as English by default
+    detectedLanguage = "English";
+  }
+
+  if (
+    detectedLanguage &&
+    detectedLanguage !== existingLanguagePreference
+  ) {
+    console.log(
+      "🌐 Updating language_preference based on DM/SMS detection:",
+      {
+        previous: existingLanguagePreference,
+        next: detectedLanguage,
+      }
+    );
 
     try {
       await updateSystemFields(contactId, {
-        language_preference: "Spanish",
+        language_preference: detectedLanguage,
       });
-      console.log("✅ language_preference updated to Spanish for contact:", contactId);
+      console.log("✅ language_preference updated to", detectedLanguage, "for contact:", contactId);
     } catch (err) {
       console.error(
         "❌ Failed to update language_preference:",
         err.response?.data || err.message
       );
     }
+  } else {
+    console.log(
+      "ℹ️ language_preference unchanged:",
+      existingLanguagePreference || "(none)"
+    );
   }
 
   const currentPhase =
@@ -428,6 +454,37 @@ app.post("/ghl/message-webhook", async (req, res) => {
         } else {
           console.log("ℹ️ No field_updates from AI to apply this turn.");
         }
+
+        // 💳 If the AI wants to send a deposit link, generate one
+        if (aiResult?.meta?.wantsDepositLink === true) {
+          console.log("💳 AI requested deposit link. Generating Square link...");
+
+          try {
+            const { url, paymentLinkId } = await createDepositLinkForContact({
+              contactId,
+              amountCents: 5000, // $50.00 example deposit — we can make this dynamic later
+              description: "Studio AZ Tattoo Deposit",
+            });
+
+            if (!url) throw new Error("No URL returned");
+
+            // Save square_reference_id + deposit_link_sent
+            await updateTattooFields(contactId, {
+              deposit_link_sent: "Yes",
+              square_reference_id: paymentLinkId,
+            });
+
+            // Send link to client as another bubble
+            await sendConversationMessage({
+              contactId,
+              body: `Here's your deposit link:\n${url}`,
+            });
+
+            console.log("💳 Deposit link delivered to lead");
+          } catch (err) {
+            console.error("❌ Failed to generate/send deposit link:", err);
+          }
+        }
       }
     } else {
       console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
@@ -443,16 +500,100 @@ app.post("/ghl/message-webhook", async (req, res) => {
 });
 
 
-// Webhook to receive payment events from Square
-app.post("/square/webhook", (req, res) => {
-  console.log("💳 SQUARE WEBHOOK HIT");
+// Square Webhook Route
+app.post("/square/webhook", async (req, res) => {
+  console.log("📬 Square Webhook received");
 
-  console.log("Headers:", req.headers);
-  console.log("Body:", JSON.stringify(req.body, null, 2));
+  try {
+    const event = req.body;
 
-  // Later, we will verify the signature using SQUARE_WEBHOOK_SECRET
-  // and update GHL when a deposit is paid.
-  res.status(200).send("OK");
+    // Protect against random hits
+    if (!event || !event.type) {
+      console.warn("⚠️ Invalid Square webhook payload:", event);
+      return res.status(400).send("Invalid payload");
+    }
+
+    // We care about payment.status
+    if (event.type !== "payment.updated") {
+      console.log("ℹ️ Ignoring non-payment webhook:", event.type);
+      return res.status(200).send("Ignored");
+    }
+
+    const payment = event.data?.object?.payment;
+    if (!payment) {
+      console.warn("⚠️ Missing payment in webhook");
+      return res.status(400).send("Missing payment");
+    }
+
+    const referenceId = payment?.orderId || payment?.referenceId || payment?.reference_id;
+    const status = payment.status;
+
+    console.log("💳 Square Payment Event:", {
+      referenceId,
+      status,
+    });
+
+    if (!referenceId) {
+      console.warn("⚠️ No referenceId; cannot map to GHL contact");
+      return res.status(200).send("No-op");
+    }
+
+    // Only act on successful payments
+    if (status === "COMPLETED" || status === "completed") {
+      console.log("🎉 Deposit paid for contact", referenceId);
+
+      // Write to GHL
+      await updateTattooFields(referenceId, {
+        deposit_paid: "Yes",
+        square_reference_id: payment.id,
+      });
+
+      // Move pipeline stage (optional)
+      try {
+        await updatePipelineStage(referenceId, "Consult Scheduled"); // or whatever your next stage is
+      } catch (moveErr) {
+        console.error("⚠️ Pipeline move failed:", moveErr);
+      }
+    }
+
+    res.status(200).send("OK");
+  } catch (err) {
+    console.error("❌ Square Webhook error:", err);
+    res.status(500).send("Webhook error");
+  }
+});
+
+// Test route to generate a Square sandbox deposit link
+app.get("/payments/test-link", async (req, res) => {
+  try {
+    const fakeContactId = "test-contact-" + Date.now(); // not a real GHL contact yet
+
+    const { url, paymentLinkId } = await createDepositLinkForContact({
+      contactId: fakeContactId,
+      amountCents: 5000, // $50.00 test deposit
+      description: "Test Studio AZ Tattoo Deposit (Sandbox)",
+    });
+
+    if (!url) {
+      return res
+        .status(500)
+        .json({ error: "No URL returned from createDepositLinkForContact" });
+    }
+
+    console.log("🧪 Test payment link created:", { fakeContactId, url, paymentLinkId });
+
+    return res.json({
+      message: "Sandbox test payment link created",
+      contactId: fakeContactId,
+      paymentLinkId,
+      url,
+    });
+  } catch (err) {
+    console.error("❌ Error in /payments/test-link:", err);
+    return res
+      .status(500)
+      .json({ error: "Failed to create test payment link", details: err.message });
+  }
 });
 
 // Create/update contact when the widget does the background "partial" save
