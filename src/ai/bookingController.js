@@ -331,6 +331,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
 
 /**
  * Create appointment when user selects a time
+ * If deposit is already paid, creates as CONFIRMED. Otherwise creates as NEW (hold).
  */
 async function createConsultAppointment({
   contactId,
@@ -347,6 +348,10 @@ async function createConsultAppointment({
       throw new Error(`Contact ${contactId} not found`);
     }
 
+    // Check if deposit is already paid
+    const cf = contact?.customField || contact?.customFields || {};
+    const depositPaid = cf.deposit_paid === "Yes" || cf.deposit_paid === true;
+
     // Build appointment title
     const tattooSummary = contactProfile?.tattooSummary || "tattoo";
     const title = `Consultation - ${artist} (${consultMode === "online" ? "Online" : "In-Person"})`;
@@ -360,7 +365,10 @@ async function createConsultAppointment({
       console.warn(`⚠️ No assignedUserId found for artist "${artist}", appointment may fail`);
     }
 
-    // Create appointment with status "new" (on hold)
+    // If deposit already paid, create as CONFIRMED. Otherwise NEW (hold).
+    const appointmentStatus = depositPaid ? APPOINTMENT_STATUS.CONFIRMED : APPOINTMENT_STATUS.NEW;
+
+    // Create appointment
     const appointment = await createAppointment({
       calendarId,
       contactId,
@@ -368,45 +376,48 @@ async function createConsultAppointment({
       endTime,
       title,
       description,
-      appointmentStatus: APPOINTMENT_STATUS.NEW,
+      appointmentStatus,
       assignedUserId,
       address: consultMode === "online" ? "Zoom" : null,
       meetingLocationType: consultMode === "online" ? "custom" : null,
     });
 
-    console.log(`✅ Created tentative appointment:`, {
+    console.log(`✅ Created appointment (status: ${appointmentStatus}):`, {
       appointmentId: appointment.id,
       calendarId,
       contactId,
       startTime,
-      appointmentStatus: APPOINTMENT_STATUS.NEW,
+      appointmentStatus,
+      depositPaid,
     });
 
-    // Send confirmation message explaining the hold
-    const slotDisplay = formatSlotDisplay(new Date(startTime));
-    const holdMessage = `Perfect! I've got you tentatively set for ${slotDisplay}. I'll hold this spot for about ${HOLD_CONFIG.HOLD_MINUTES} minutes while you place the $100 refundable deposit. If we don't receive it in that window, we may have to release the time for other clients - but I'll send you a quick reminder before we do.`;
+    // Only send hold message if deposit NOT paid
+    if (!depositPaid) {
+      const slotDisplay = formatSlotDisplay(new Date(startTime));
+      const holdMessage = `Got you — I'll hold ${slotDisplay} for you.\n\nTo lock it in, just finish the $100 refundable deposit I sent.\n\nIf I don't hear back for a bit, I'll have to release the spot so someone else can grab it 🙌`;
 
-    // Determine channel context (reuse logic from message webhook)
-    const hasPhone = !!(contact.phone || contact.phoneNumber);
-    const tags = contact.tags || [];
-    const isDm = tags.some(
-      (t) =>
-        typeof t === "string" &&
-        (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
-    );
+      // Determine channel context (reuse logic from message webhook)
+      const hasPhone = !!(contact.phone || contact.phoneNumber);
+      const tags = contact.tags || [];
+      const isDm = tags.some(
+        (t) =>
+          typeof t === "string" &&
+          (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+      );
 
-    const channelContext = {
-      isDm,
-      hasPhone,
-      conversationId: null,
-      phone: contact.phone || contact.phoneNumber || null,
-    };
+      const channelContext = {
+        isDm,
+        hasPhone,
+        conversationId: null,
+        phone: contact.phone || contact.phoneNumber || null,
+      };
 
-    await sendConversationMessage({
-      contactId,
-      body: holdMessage,
-      channelContext,
-    });
+      await sendConversationMessage({
+        contactId,
+        body: holdMessage,
+        channelContext,
+      });
+    }
 
     return appointment;
   } catch (err) {

@@ -304,6 +304,50 @@ function getStoredDepositLinkUrl(contact) {
 }
 
 /**
+ * Check if user wants the previously released slot
+ */
+function wantsPreviousSlot(messageText, lastReleasedSlotDisplay) {
+  if (!messageText || !lastReleasedSlotDisplay) return false;
+  
+  const text = String(messageText).toLowerCase();
+  const slotLower = String(lastReleasedSlotDisplay).toLowerCase();
+  
+  // Extract day/time from slot display (e.g., "wednesday, dec 3 at 5pm")
+  const dayMatch = slotLower.match(/(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/);
+  const timeMatch = slotLower.match(/(\d+)\s*(am|pm)/);
+  
+  const patterns = [
+    /same\s*time/i,
+    /that\s*time/i,
+    /that\s*\d+\s*(am|pm)/i,
+    /still\s*(open|available)/i,
+    /can\s*i\s*still\s*(get|do|have)/i,
+    /is\s*that\s*still\s*(open|available)/i,
+    /can\s*we\s*still\s*do\s*that/i,
+    /can\s*i\s*still\s*do\s*that/i,
+    /that\s*(same|exact)\s*time/i,
+  ];
+  
+  // Check for explicit patterns
+  if (patterns.some(p => p.test(text))) {
+    return true;
+  }
+  
+  // Check if they mention the same day/time
+  if (dayMatch && text.includes(dayMatch[1])) {
+    if (timeMatch && text.includes(timeMatch[1]) && text.includes(timeMatch[2])) {
+      return true;
+    }
+    // If they mention the day and ask about availability
+    if (text.includes("still") || text.includes("available") || text.includes("open")) {
+      return true;
+    }
+  }
+  
+  return false;
+}
+
+/**
  * Determine if channel supports emojis (IG, FB, WhatsApp, Email - NOT SMS)
  */
 function channelSupportsEmojis(channelContext, contact) {
@@ -461,6 +505,153 @@ function verifySquareSignatureSafe({ req, rawBody }) {
   }
 }
 
+// Internal endpoint for hold sweep (called by cron job)
+// TODO: Once GHL pipeline is set up, query contacts by pipeline stage
+// For now, this endpoint is ready but needs GHL contact search implementation
+app.post("/internal/holds/sweep", async (req, res) => {
+  console.log("🕐 Hold sweep job started");
+  
+  try {
+    // TODO: Query contacts with hold_appointment_id set and deposit_paid === false
+    // Options:
+    // 1. Use GHL API search/filter (when available)
+    // 2. Use pipeline stage/opportunity status (once pipeline is set up)
+    // 3. Maintain in-memory list (lost on restart - not ideal)
+    
+    // Placeholder: For now, this endpoint is ready but needs GHL contact query
+    // Once pipeline is set up, replace this with:
+    // const activeHolds = await getContactsWithActiveHolds(); // Implement this
+    
+    // Example structure for when pipeline is ready:
+    /*
+    const activeHolds = await getContactsWithActiveHolds(); // Returns array of contactIds
+    
+    for (const contactId of activeHolds) {
+      const contact = await getContact(contactId);
+      const cf = contact?.customField || contact?.customFields || {};
+      
+      const holdAppointmentId = cf.hold_appointment_id;
+      const holdLastActivityAt = cf.hold_last_activity_at;
+      const holdWarningSent = cf.hold_warning_sent === "Yes" || cf.hold_warning_sent === true;
+      const depositPaid = cf.deposit_paid === "Yes" || cf.deposit_paid === true;
+      
+      if (!holdAppointmentId || depositPaid) continue;
+      
+      const now = new Date();
+      const lastActivity = new Date(holdLastActivityAt);
+      const minutesSinceLastActivity = Math.floor((now - lastActivity) / (1000 * 60));
+      
+      // Case A: 10 minutes of silence, no warning sent yet
+      if (minutesSinceLastActivity >= 10 && minutesSinceLastActivity < 20 && !holdWarningSent) {
+        // Get appointment to get slot display
+        const consultCalendarIds = Object.values(CALENDARS);
+        const appointments = await getConsultAppointmentsForContact(contactId, consultCalendarIds);
+        const holdAppointment = appointments.find(apt => apt.id === holdAppointmentId);
+        
+        if (holdAppointment) {
+          const slotDisplay = formatSlotDisplay(new Date(holdAppointment.startTime));
+          
+          // Determine channel context
+          const hasPhone = !!(contact.phone || contact.phoneNumber);
+          const tags = contact.tags || [];
+          const isDm = tags.some(
+            (t) =>
+              typeof t === "string" &&
+              (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+          );
+          
+          const channelContext = {
+            isDm,
+            hasPhone,
+            conversationId: null,
+            phone: contact.phone || contact.phoneNumber || null,
+          };
+          
+          const useEmojis = channelSupportsEmojis(channelContext, contact);
+          
+          const warningMessage = useEmojis
+            ? `Quick heads up — I'm holding ${slotDisplay} for you right now.\n\nIf I don't hear back in about 10 minutes, I'll release it so someone else can book that time.\n\nIf you still want it, just reply here or complete the deposit 🙌`
+            : `Quick heads up — I'm holding ${slotDisplay} for you right now. If I don't hear back in about 10 minutes, I'll release it so someone else can book that time. If you still want it, just reply here or complete the deposit.`;
+          
+          await sendConversationMessage({
+            contactId,
+            body: warningMessage,
+            channelContext,
+          });
+          
+          await updateSystemFields(contactId, {
+            hold_warning_sent: true,
+          });
+          
+          console.log(`⚠️ Sent 10-minute warning to contact ${contactId}`);
+        }
+      }
+      
+      // Case B: 20+ minutes of silence (hard timeout)
+      if (minutesSinceLastActivity >= 20 && !depositPaid) {
+        const consultCalendarIds = Object.values(CALENDARS);
+        const appointments = await getConsultAppointmentsForContact(contactId, consultCalendarIds);
+        const holdAppointment = appointments.find(apt => apt.id === holdAppointmentId);
+        
+        if (holdAppointment && holdAppointment.appointmentStatus === APPOINTMENT_STATUS.NEW) {
+          // Cancel the appointment
+          await updateAppointmentStatus(holdAppointmentId, APPOINTMENT_STATUS.CANCELLED);
+          
+          const slotDisplay = formatSlotDisplay(new Date(holdAppointment.startTime));
+          
+          // Save "last released" info
+          await updateSystemFields(contactId, {
+            last_released_slot_display: slotDisplay,
+            last_released_slot_start: holdAppointment.startTime,
+            last_released_slot_end: holdAppointment.endTime,
+            // Clear active hold fields
+            hold_appointment_id: null,
+            hold_last_activity_at: null,
+            hold_warning_sent: false,
+          });
+          
+          // Determine channel context
+          const hasPhone = !!(contact.phone || contact.phoneNumber);
+          const tags = contact.tags || [];
+          const isDm = tags.some(
+            (t) =>
+              typeof t === "string" &&
+              (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+          );
+          
+          const channelContext = {
+            isDm,
+            hasPhone,
+            conversationId: null,
+            phone: contact.phone || contact.phoneNumber || null,
+          };
+          
+          const useEmojis = channelSupportsEmojis(channelContext, contact);
+          
+          const releaseMessage = useEmojis
+            ? `I went ahead and released ${slotDisplay} so someone else can grab it.\n\nIf you still want to move forward, I can send you fresh times or see if that same time is still open 👍`
+            : `I went ahead and released ${slotDisplay} so someone else can grab it. If you still want to move forward, I can send you fresh times or see if that same time is still open.`;
+          
+          await sendConversationMessage({
+            contactId,
+            body: releaseMessage,
+            channelContext,
+          });
+          
+          console.log(`🗑️ Cancelled hold appointment for contact ${contactId} (20+ min inactivity)`);
+        }
+      }
+    }
+    */
+    
+    console.log("✅ Hold sweep completed (placeholder - waiting for GHL pipeline setup)");
+    res.status(200).json({ success: true, message: "Hold sweep completed (placeholder)" });
+  } catch (err) {
+    console.error("❌ Error in hold sweep:", err.message || err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 app.post(
   "/square/webhook",
   express.raw({ type: "application/json" }),
@@ -557,41 +748,47 @@ app.post(
                 // Don't fail the webhook if artist assignment fails
               }
 
-              // 📅 Check for pending appointment in GHL custom fields
+              // 📅 Check for hold appointment - prioritize hold_appointment_id
               const contact = await getContact(contactId);
-              const pendingAppt = getPendingAppointmentFromContact(contact);
+              const cf = contact?.customField || contact?.customFields || {};
+              const holdAppointmentId = cf.hold_appointment_id;
+              
               let appointmentCreated = false;
               let appointmentSlotDisplay = null;
               let appointmentArtist = null;
 
-              if (pendingAppt && pendingAppt.slot) {
-                console.log("📅 Found pending appointment in GHL:", pendingAppt.slot.displayText);
-                
-                // Create the actual appointment now that deposit is paid
+              if (holdAppointmentId) {
+                // Use the hold appointment
                 try {
-                  const appointment = await createConsultAppointment({
-                    contactId,
-                    calendarId: pendingAppt.calendarId,
-                    startTime: pendingAppt.slot.startTime,
-                    endTime: pendingAppt.slot.endTime,
-                    artist: pendingAppt.artist,
-                    consultMode: pendingAppt.consultMode,
-                    contactProfile: {}, // Will be fetched by createConsultAppointment
-                  });
+                  const consultCalendarIds = Object.values(CALENDARS);
+                  const appointments = await getConsultAppointmentsForContact(contactId, consultCalendarIds);
+                  const holdAppointment = appointments.find(apt => apt.id === holdAppointmentId);
                   
-                  console.log("✅ Appointment created from pending:", appointment.id);
-                  appointmentCreated = true;
-                  appointmentSlotDisplay = pendingAppt.slot.displayText;
-                  appointmentArtist = pendingAppt.artist;
-                  
-                  // Clear the pending appointment from GHL
-                  await clearPendingAppointmentFromGHL(contactId);
+                  if (holdAppointment && holdAppointment.appointmentStatus === APPOINTMENT_STATUS.NEW) {
+                    // Confirm the hold appointment
+                    await updateAppointmentStatus(holdAppointmentId, APPOINTMENT_STATUS.CONFIRMED);
+                    
+                    appointmentCreated = true;
+                    appointmentSlotDisplay = formatSlotDisplay(new Date(holdAppointment.startTime));
+                    appointmentArtist = holdAppointment.assignedUserId || null;
+                    
+                    // Clear hold fields
+                    await updateSystemFields(contactId, {
+                      hold_appointment_id: null,
+                      hold_last_activity_at: null,
+                      hold_warning_sent: false,
+                    });
+                    
+                    console.log("✅ Confirmed hold appointment after deposit:", holdAppointmentId);
+                  } else {
+                    console.log(`⚠️ Hold appointment ${holdAppointmentId} not found or not NEW status`);
+                  }
                 } catch (apptErr) {
-                  console.error("❌ Error creating appointment from pending:", apptErr.message || apptErr);
+                  console.error("❌ Error confirming hold appointment:", apptErr.message || apptErr);
                 }
               }
 
-              // 📅 Also check GHL for any appointments with status "new"
+              // 📅 Fallback: Check GHL for any appointments with status "new" (if hold_appointment_id wasn't found)
               if (!appointmentCreated) {
                 try {
                   const consultCalendarIds = Object.values(CALENDARS);
@@ -627,6 +824,13 @@ app.post(
                     appointmentSlotDisplay = formatSlotDisplay(new Date(appointmentToConfirm.startTime));
                     // Try to get artist from appointment
                     appointmentArtist = appointmentToConfirm.assignedUserId || null;
+                    
+                    // Clear hold fields if they exist
+                    await updateSystemFields(contactId, {
+                      hold_appointment_id: null,
+                      hold_last_activity_at: null,
+                      hold_warning_sent: false,
+                    });
                   } else {
                     console.log(`ℹ️ No pending appointments found to confirm for contact ${contactId}`);
                   }
@@ -1211,6 +1415,38 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const timesSent = hasTimesSent(freshContact);
   const storedDepositUrl = getStoredDepositLinkUrl(freshContact);
 
+  // 🔄 Refresh hold timer on every inbound message
+  const freshCf = freshContact?.customField || freshContact?.customFields || {};
+  const holdAppointmentId = freshCf.hold_appointment_id;
+  
+  if (holdAppointmentId && !alreadyPaid) {
+    // Verify appointment still exists and is NEW status
+    try {
+      const consultCalendarIds = Object.values(CALENDARS);
+      const appointments = await getConsultAppointmentsForContact(contactId, consultCalendarIds);
+      const holdAppointment = appointments.find(apt => apt.id === holdAppointmentId);
+      
+      if (holdAppointment && holdAppointment.appointmentStatus === APPOINTMENT_STATUS.NEW) {
+        // Refresh hold timer
+        await updateSystemFields(contactId, {
+          hold_last_activity_at: new Date().toISOString(),
+          hold_warning_sent: false, // Reset warning since they're active
+        });
+        console.log(`🔄 Refreshed hold timer for contact ${contactId}`);
+      } else {
+        // Appointment doesn't exist or isn't NEW - clear hold fields
+        await updateSystemFields(contactId, {
+          hold_appointment_id: null,
+          hold_last_activity_at: null,
+          hold_warning_sent: false,
+        });
+        console.log(`🗑️ Cleared invalid hold fields for contact ${contactId}`);
+      }
+    } catch (holdErr) {
+      console.error("❌ Error refreshing hold timer:", holdErr.message || holdErr);
+    }
+  }
+
   // Detect consult mode preference from user's message (or default to online)
   const detectedConsultMode = detectConsultModePreference(messageText) || "online";
 
@@ -1237,60 +1473,72 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.log(`✅ Matched slot ${matchedIndex + 1}: ${appointmentOfferData.slots[matchedIndex].displayText}`);
           const selectedSlot = appointmentOfferData.slots[matchedIndex];
 
-          // Store pending appointment in GHL (persisted across restarts)
-          await storePendingAppointmentToGHL(contactId, {
-            slot: selectedSlot,
-            calendarId: appointmentOfferData.calendarId,
-            artist: appointmentOfferData.artist,
-            consultMode: appointmentOfferData.consultMode,
-            depositLinkUrl: storedDepositUrl,
-          });
+          // Create the hold appointment IMMEDIATELY (status NEW if deposit not paid, CONFIRMED if paid)
+          try {
+            const appointment = await createConsultAppointment({
+              contactId,
+              calendarId: appointmentOfferData.calendarId,
+              startTime: selectedSlot.startTime,
+              endTime: selectedSlot.endTime,
+              artist: appointmentOfferData.artist,
+              consultMode: appointmentOfferData.consultMode,
+              contactProfile,
+            });
 
-          // Send confirmation message - DO NOT ask "ready to lock it in?"
-          // User already committed by picking a time
-          let confirmMessage;
-          if (alreadyPaid) {
-            // Deposit already paid - fully confirm
-            confirmMessage = useEmojis
-              ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"} 🙌`
-              : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"}.`;
-            
-            // Create the actual appointment
-            try {
-              const appointment = await createConsultAppointment({
-                contactId,
-                calendarId: appointmentOfferData.calendarId,
-                startTime: selectedSlot.startTime,
-                endTime: selectedSlot.endTime,
-                artist: appointmentOfferData.artist,
-                consultMode: appointmentOfferData.consultMode,
-                contactProfile,
+            const now = new Date().toISOString();
+
+            if (alreadyPaid) {
+              // Deposit already paid - appointment is CONFIRMED, clear hold fields
+              await updateSystemFields(contactId, {
+                ai_phase: AI_PHASES.CLOSING,
+                last_phase_update_at: now,
+                // Clear any hold fields since deposit is paid
+                hold_appointment_id: null,
+                hold_last_activity_at: null,
+                hold_warning_sent: false,
+                // Clear last_released fields (fresh session)
+                last_released_slot_display: null,
+                last_released_slot_start: null,
+                last_released_slot_end: null,
               });
-              console.log("✅ Appointment created (deposit already paid):", appointment.id);
-              await clearPendingAppointmentFromGHL(contactId);
-            } catch (apptErr) {
-              console.error("❌ Error creating appointment:", apptErr.message || apptErr);
+              
+              // Send confirmation message (createConsultAppointment doesn't send message for CONFIRMED)
+              const confirmMessage = useEmojis
+                ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"} 🙌`
+                : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"}.`;
+              
+              await sendConversationMessage({
+                contactId,
+                body: confirmMessage,
+                channelContext,
+              });
+            } else {
+              // Deposit NOT paid - set up hold tracking
+              await updateSystemFields(contactId, {
+                hold_appointment_id: appointment.id,
+                hold_last_activity_at: now,
+                hold_warning_sent: false,
+                ai_phase: AI_PHASES.CLOSING,
+                last_phase_update_at: now,
+                // Clear last_released fields (fresh session)
+                last_released_slot_display: null,
+                last_released_slot_start: null,
+                last_released_slot_end: null,
+              });
+
+              // Hold message already sent by createConsultAppointment
             }
-          } else {
-            // Deposit not yet paid - hold the slot
-            confirmMessage = useEmojis
-              ? `Got you — I'll hold ${selectedSlot.displayText} for you.\nOnce the deposit comes through, you'll be officially locked in 🙌`
-              : `Got you — I'll hold ${selectedSlot.displayText} for you. Once the deposit comes through, you'll be officially locked in.`;
+
+            return res.status(200).json({ success: true, message: "Slot selected and held" });
+          } catch (apptErr) {
+            console.error("❌ Error creating hold appointment:", apptErr.message || apptErr);
+            await sendConversationMessage({
+              contactId,
+              body: "Sorry, I had trouble booking that time. Can you try picking another option?",
+              channelContext,
+            });
+            return res.status(200).json({ success: false, message: "Booking failed" });
           }
-
-          await sendConversationMessage({
-            contactId,
-            body: confirmMessage,
-            channelContext,
-          });
-
-          // Update phase
-          await updateSystemFields(contactId, {
-            ai_phase: AI_PHASES.CLOSING,
-            last_phase_update_at: new Date().toISOString(),
-          });
-
-          return res.status(200).json({ success: true, message: "Slot selected and held" });
         } else {
           // ⚠️ Could not match slot - DON'T call AI, just ask them to pick from the list
           console.log("⚠️ Could not match slot selection to available slots - asking to pick from list");
@@ -1314,6 +1562,92 @@ app.post("/ghl/message-webhook", async (req, res) => {
       }
     } catch (slotErr) {
       console.error("❌ Error handling slot selection:", slotErr.message || slotErr);
+      skipAIEntirely = false;
+    }
+  }
+
+  // 🔄 Check if user wants to re-hold previously released slot
+  const lastReleasedDisplay = freshCf.last_released_slot_display;
+  const lastReleasedStart = freshCf.last_released_slot_start;
+  const lastReleasedEnd = freshCf.last_released_slot_end;
+
+  if (!skipAIEntirely && !holdAppointmentId && !alreadyPaid && lastReleasedDisplay && wantsPreviousSlot(messageText, lastReleasedDisplay)) {
+    console.log("🔄 User wants to re-hold previously released slot:", lastReleasedDisplay);
+    skipAIEntirely = true;
+    
+    try {
+      // Need to get calendar/artist info - try from existing fields or generate slots
+      let calendarId = freshCf.pending_slot_calendar || freshCf.last_released_slot_calendar;
+      let artist = freshCf.pending_slot_artist || "Joan";
+      let consultMode = freshCf.pending_slot_mode || detectedConsultMode;
+      
+      // If we don't have calendar info, generate slots to get it
+      if (!calendarId) {
+        appointmentOfferData = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: { consultMode: detectedConsultMode },
+          contactProfile,
+        });
+        if (appointmentOfferData) {
+          calendarId = appointmentOfferData.calendarId;
+          artist = appointmentOfferData.artist;
+          consultMode = appointmentOfferData.consultMode;
+        }
+      }
+      
+      if (!calendarId || !lastReleasedStart || !lastReleasedEnd) {
+        throw new Error("Missing required slot information for re-hold");
+      }
+      
+      // Try to re-create the appointment (will fail if slot is taken)
+      const appointment = await createConsultAppointment({
+        contactId,
+        calendarId,
+        startTime: lastReleasedStart,
+        endTime: lastReleasedEnd,
+        artist,
+        consultMode,
+        contactProfile,
+      });
+      
+      // Success - slot was still available
+      const now = new Date().toISOString();
+      await updateSystemFields(contactId, {
+        hold_appointment_id: appointment.id,
+        hold_last_activity_at: now,
+        hold_warning_sent: false,
+        // Clear last_released fields since it's active again
+        last_released_slot_display: null,
+        last_released_slot_start: null,
+        last_released_slot_end: null,
+      });
+      
+      const reholdMessage = useEmojis
+        ? `Good news — ${lastReleasedDisplay} is still open, I just put you back on hold for that time 🙌\n\nLet's lock it in with the $100 deposit so it doesn't get taken.`
+        : `Good news — ${lastReleasedDisplay} is still open, I just put you back on hold for that time. Let's lock it in with the $100 deposit so it doesn't get taken.`;
+      
+      await sendConversationMessage({
+        contactId,
+        body: reholdMessage,
+        channelContext,
+      });
+      
+      return res.status(200).json({ success: true, message: "Re-held previous slot" });
+    } catch (reholdErr) {
+      // Slot is taken - offer fresh times
+      console.log("⚠️ Previous slot no longer available, offering fresh times:", reholdErr.message);
+      
+      const apologyMessage = useEmojis
+        ? `That exact time got grabbed, but I can still get you in around then.\n\nDo you want me to send over a couple of nearby times?`
+        : `That exact time got grabbed, but I can still get you in around then. Do you want me to send over a couple of nearby times?`;
+      
+      await sendConversationMessage({
+        contactId,
+        body: apologyMessage,
+        channelContext,
+      });
+      
+      // Fall through to booking intent flow to show fresh times
       skipAIEntirely = false;
     }
   }
