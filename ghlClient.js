@@ -609,20 +609,30 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     let finalConversationId = conversationId;
     let dmType = null;
 
+    let foundConversation = null;
     if (!finalConversationId) {
       console.log("🔍 No conversationId provided for DM, searching for existing conversation...");
-      const conversation = await findConversationForContact(contactId);
-      if (conversation) {
-        finalConversationId = conversation.id || conversation._id;
+      foundConversation = await findConversationForContact(contactId);
+      if (foundConversation) {
+        finalConversationId = foundConversation.id || foundConversation._id;
         
         // Check if this is actually a DM conversation (not SMS)
-        const convType = (conversation.type || "").toUpperCase();
+        const convType = (foundConversation.type || "").toUpperCase();
         if (convType.includes("SMS")) {
           console.warn("⚠️ Conversation type is SMS, but isDm=true. This might be a mismatch.");
           // Don't try to send SMS conversations as DM - fall through to error handling
         } else {
-          // Use the proper inference function to get the correct type enum
-          dmType = await inferConversationMessageType(contactId);
+          // If we found an existing conversation, infer type from the conversation itself first
+          // Trust GHL's conversation type - if it exists, GHL knows how to send to it
+          const lastType = (foundConversation.lastMessageType || foundConversation.type || "").toUpperCase();
+          if (lastType.includes("INSTAGRAM")) {
+            dmType = "IG";
+          } else if (lastType.includes("FACEBOOK")) {
+            dmType = "FB";
+          } else {
+            // Fall back to inference function if conversation type is unclear
+            dmType = await inferConversationMessageType(contactId);
+          }
           console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
         }
       }
@@ -633,74 +643,83 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
     // If we have a conversationId and valid DM type, use it
     if (finalConversationId && dmType && dmType !== "SMS") {
-      // Get contact once to check tags and social IDs
-      let contact = null;
-      try {
-        contact = await getContact(contactId);
-      } catch (err) {
-        console.error("❌ Error fetching contact for DM validation:", err.message);
-        throw err;
-      }
+      // If we found the conversation from GHL, trust that GHL knows the type
+      // Only validate contact IDs if we're inferring from other sources
+      const shouldValidateIds = !foundConversation; // Only validate if we didn't find conversation from GHL
       
-      // Helper function to check social IDs
-      const checkSocialIds = (contact) => {
-        const hasInstagramId = !!(
-          contact?.instagramId || 
-          contact?.instagram || 
-          contact?.socialProfiles?.instagram ||
-          contact?.customField?.instagram_id
-        );
-        const hasFacebookId = !!(
-          contact?.facebookId || 
-          contact?.facebook || 
-          contact?.socialProfiles?.facebook ||
-          contact?.customField?.facebook_id
-        );
-        return { hasInstagramId, hasFacebookId };
-      };
-      
-      // Ensure we have a valid type (IG or FB for social media DMs)
-      if (dmType !== "IG" && dmType !== "FB") {
-        // Try to infer from contact tags or check contact's social IDs
-        const tags = contact?.tags || [];
-        const hasInstagram = tags.some(t => String(t).toUpperCase().includes("INSTAGRAM"));
-        const hasFacebook = tags.some(t => String(t).toUpperCase().includes("FACEBOOK"));
-        
-        const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
-        
-        if (hasInstagramId || (hasInstagram && !hasFacebookId)) {
-          dmType = "IG";
-        } else if (hasFacebookId || hasFacebook) {
-          dmType = "FB";
-        } else {
-          // Default to FB as fallback (more common than IG, less likely to fail)
-          dmType = "FB";
+      if (shouldValidateIds) {
+        // Get contact once to check tags and social IDs
+        let contact = null;
+        try {
+          contact = await getContact(contactId);
+        } catch (err) {
+          console.error("❌ Error fetching contact for DM validation:", err.message);
+          throw err;
         }
-      }
-      
-      // Validate that contact has the required social ID before sending
-      const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
-      
-      if (dmType === "IG") {
-        if (!hasInstagramId) {
-          console.warn("⚠️ Contact has no Instagram ID, switching to FB");
-          if (hasFacebookId) {
+        
+        // Helper function to check social IDs
+        const checkSocialIds = (contact) => {
+          const hasInstagramId = !!(
+            contact?.instagramId || 
+            contact?.instagram || 
+            contact?.socialProfiles?.instagram ||
+            contact?.customField?.instagram_id
+          );
+          const hasFacebookId = !!(
+            contact?.facebookId || 
+            contact?.facebook || 
+            contact?.socialProfiles?.facebook ||
+            contact?.customField?.facebook_id
+          );
+          return { hasInstagramId, hasFacebookId };
+        };
+        
+        // Ensure we have a valid type (IG or FB for social media DMs)
+        if (dmType !== "IG" && dmType !== "FB") {
+          // Try to infer from contact tags or check contact's social IDs
+          const tags = contact?.tags || [];
+          const hasInstagram = tags.some(t => String(t).toUpperCase().includes("INSTAGRAM"));
+          const hasFacebook = tags.some(t => String(t).toUpperCase().includes("FACEBOOK"));
+          
+          const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
+          
+          if (hasInstagramId || (hasInstagram && !hasFacebookId)) {
+            dmType = "IG";
+          } else if (hasFacebookId || hasFacebook) {
             dmType = "FB";
           } else {
-            console.error("❌ Contact has no Instagram or Facebook ID, cannot send DM");
-            throw new Error("Contact has no social media ID for DM sending");
+            // Default to FB as fallback (more common than IG, less likely to fail)
+            dmType = "FB";
           }
         }
-      } else if (dmType === "FB") {
-        if (!hasFacebookId) {
-          console.warn("⚠️ Contact has no Facebook ID, switching to IG");
-          if (hasInstagramId) {
-            dmType = "IG";
-          } else {
-            console.error("❌ Contact has no Facebook or Instagram ID, cannot send DM");
-            throw new Error("Contact has no social media ID for DM sending");
+        
+        // Validate that contact has the required social ID before sending
+        const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
+        
+        if (dmType === "IG") {
+          if (!hasInstagramId) {
+            console.warn("⚠️ Contact has no Instagram ID, switching to FB");
+            if (hasFacebookId) {
+              dmType = "FB";
+            } else {
+              console.error("❌ Contact has no Instagram or Facebook ID, cannot send DM");
+              throw new Error("Contact has no social media ID for DM sending");
+            }
+          }
+        } else if (dmType === "FB") {
+          if (!hasFacebookId) {
+            console.warn("⚠️ Contact has no Facebook ID, switching to IG");
+            if (hasInstagramId) {
+              dmType = "IG";
+            } else {
+              console.error("❌ Contact has no Facebook or Instagram ID, cannot send DM");
+              throw new Error("Contact has no social media ID for DM sending");
+            }
           }
         }
+      } else {
+        // We found the conversation from GHL - trust that GHL knows the type
+        console.log(`✅ Using conversation type ${dmType} from GHL conversation - skipping ID validation`);
       }
 
       try {
