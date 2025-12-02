@@ -47,6 +47,98 @@ const {
 
 const app = express();
 
+// 🔹 Booking intent phrases that bypass AI and go directly to slot offering
+const BOOKING_INTENT_PHRASES = [
+  /^yes$/i,
+  /^yes\s*[!.?]*$/i,
+  /yes\s*what\s*time/i,
+  /what\s*time/i,
+  /what\s*times?\s*(do\s*you\s*have|are\s*available)/i,
+  /let'?s\s*(do\s*it|book)/i,
+  /send\s*(me\s*)?(the\s*)?link/i,
+  /i'?m\s*ready/i,
+  /sounds?\s*good/i,
+  /that\s*works/i,
+  /^sure$/i,
+  /^ok(ay)?$/i,
+  /^perfect$/i,
+  /what'?s\s*(your\s*)?availability/i,
+  /can\s*you\s*do\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
+  /when\s*can\s*(we|you)\s*(do\s*it|book|meet)/i,
+  /ready\s*to\s*(book|lock|schedule)/i,
+  /book\s*(it|me)/i,
+  /lock\s*(it\s*)?in/i,
+  /^(yep|yup|yeah)$/i,
+];
+
+/**
+ * Check if message indicates booking intent (should bypass AI)
+ */
+function isBookingIntent(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).trim();
+  return BOOKING_INTENT_PHRASES.some(pattern => pattern.test(text));
+}
+
+/**
+ * Determine if channel supports emojis (IG, FB, WhatsApp, Email - NOT SMS)
+ */
+function channelSupportsEmojis(channelContext, contact) {
+  // If it's a DM (Instagram/Facebook), emojis are OK
+  if (channelContext?.isDm) return true;
+  
+  // Check contact tags for channel type
+  const tags = contact?.tags || [];
+  const tagStr = tags.map(t => String(t).toUpperCase()).join(" ");
+  
+  if (tagStr.includes("INSTAGRAM") || tagStr.includes("FACEBOOK") || tagStr.includes("WHATSAPP") || tagStr.includes("EMAIL")) {
+    return true;
+  }
+  
+  // If it's SMS (has phone, not DM), no emojis
+  if (channelContext?.hasPhone && !channelContext?.isDm) {
+    return false;
+  }
+  
+  // Default: no emojis for safety
+  return false;
+}
+
+/**
+ * Strip emojis from text
+ */
+function stripEmojis(text) {
+  if (!text) return text;
+  // Remove common emoji ranges
+  return text.replace(/[\u{1F600}-\u{1F64F}]|[\u{1F300}-\u{1F5FF}]|[\u{1F680}-\u{1F6FF}]|[\u{1F1E0}-\u{1F1FF}]|[\u{2600}-\u{26FF}]|[\u{2700}-\u{27BF}]|[\u{1F900}-\u{1F9FF}]|[\u{1FA00}-\u{1FA6F}]|[\u{1FA70}-\u{1FAFF}]|[\u{231A}-\u{231B}]|[\u{23E9}-\u{23F3}]|[\u{23F8}-\u{23FA}]|[\u{25AA}-\u{25AB}]|[\u{25B6}]|[\u{25C0}]|[\u{25FB}-\u{25FE}]|[\u{2614}-\u{2615}]|[\u{2648}-\u{2653}]|[\u{267F}]|[\u{2693}]|[\u{26A1}]|[\u{26AA}-\u{26AB}]|[\u{26BD}-\u{26BE}]|[\u{26C4}-\u{26C5}]|[\u{26CE}]|[\u{26D4}]|[\u{26EA}]|[\u{26F2}-\u{26F3}]|[\u{26F5}]|[\u{26FA}]|[\u{26FD}]|[\u{2702}]|[\u{2705}]|[\u{2708}-\u{270D}]|[\u{270F}]|[\u{2712}]|[\u{2714}]|[\u{2716}]|[\u{271D}]|[\u{2721}]|[\u{2728}]|[\u{2733}-\u{2734}]|[\u{2744}]|[\u{2747}]|[\u{274C}]|[\u{274E}]|[\u{2753}-\u{2755}]|[\u{2757}]|[\u{2763}-\u{2764}]|[\u{2795}-\u{2797}]|[\u{27A1}]|[\u{27B0}]|[\u{27BF}]|[\u{2934}-\u{2935}]|[\u{2B05}-\u{2B07}]|[\u{2B1B}-\u{2B1C}]|[\u{2B50}]|[\u{2B55}]|[\u{3030}]|[\u{303D}]|[\u{3297}]|[\u{3299}]|🙌|🔥|💪|✨|👀|💯|👊|🤙|✅|❤️|💜|💙|🖤|🤍/gu, '').trim();
+}
+
+// 🔹 Per-contact generation tracking for canceling pending bubbles
+const contactGenerations = new Map();
+
+/**
+ * Get current generation ID for a contact
+ */
+function getContactGeneration(contactId) {
+  return contactGenerations.get(contactId) || 0;
+}
+
+/**
+ * Increment and get new generation ID for a contact
+ */
+function newContactGeneration(contactId) {
+  const newGen = (contactGenerations.get(contactId) || 0) + 1;
+  contactGenerations.set(contactId, newGen);
+  return newGen;
+}
+
+/**
+ * Check if a generation is still current (not superseded by new message)
+ */
+function isGenerationCurrent(contactId, generationId) {
+  return contactGenerations.get(contactId) === generationId;
+}
+
 // 🔹 Simple heuristic to detect Spanish messages
 function looksLikeSpanish(text) {
   if (!text) return false;
@@ -805,7 +897,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     contactProfile,
   };
 
-  console.log("🤖 Calling OpenAI for opener with payload summary:", cleanLogObject({
+  console.log("🤖 Processing message with payload summary:", cleanLogObject({
     contactId: aiPayload.contactId,
     leadTemperature: aiPayload.leadTemperature,
     aiPhase: aiPayload.aiPhase,
@@ -816,25 +908,114 @@ app.post("/ghl/message-webhook", async (req, res) => {
     depositLinkSent: contactProfile.depositLinkSent,
   }));
 
+  // 🔄 Create new generation ID for this message (cancels any pending bubbles from previous turn)
+  const currentGenerationId = newContactGeneration(contactId);
+  console.log(`🔄 New generation ${currentGenerationId} for contact ${contactId}`);
+
+  // Determine if channel supports emojis
+  const useEmojis = channelSupportsEmojis(channelContext, freshContact);
+  console.log(`📱 Channel emoji support: ${useEmojis ? "yes" : "no (SMS)"}`);
+
   // 📅 Check if user is selecting a time slot (before AI call to handle booking)
   let appointmentOfferData = null;
   let timeSelectionIndex = null;
-  let skipAIForTimeSelection = false;
+  let skipAIEntirely = false;
 
-  // Check if user is selecting a time BEFORE AI call
-  // If detected, we'll handle booking directly and skip AI to avoid redundant messages
+  // Check if user is in booking phase
   const isInBookingPhaseBeforeAI = 
     systemState.currentPhase === AI_PHASES.CLOSING || 
     systemState.currentPhase === AI_PHASES.QUALIFICATION;
 
-  if (isInBookingPhaseBeforeAI && isTimeSelection(messageText)) {
+  // 🚀 BOOKING INTENT BYPASS: Check if user is showing booking intent
+  // If so, bypass AI entirely and go straight to deposit link + time slots
+  if (isInBookingPhaseBeforeAI && isBookingIntent(messageText)) {
+    console.log("🚀 BOOKING INTENT DETECTED - bypassing AI, sending deposit link + slots directly");
+    skipAIEntirely = true;
+
+    try {
+      // Generate appointment slots
+      appointmentOfferData = await handleAppointmentOffer({
+        contact: freshContact,
+        aiMeta: { consultMode: "online" },
+        contactProfile,
+      });
+
+      // Check if deposit already sent
+      const alreadySent = contactProfile.depositLinkSent === true;
+      const alreadyPaid = contactProfile.depositPaid === true;
+
+      // Send deposit link if not already sent/paid
+      if (!alreadyPaid && !alreadySent) {
+        console.log("💳 Generating deposit link for booking intent...");
+        try {
+          const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
+            contactId,
+            amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+            description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+          });
+
+          if (depositUrl) {
+            await updateSystemFields(contactId, {
+              deposit_link_sent: true,
+              square_payment_link_id: paymentLinkId,
+              last_phase_update_at: new Date().toISOString(),
+            });
+
+            const depositMessage = useEmojis
+              ? `Perfect 🙌 Here's your $100 refundable deposit link — it goes straight toward your tattoo:\n${depositUrl}`
+              : `Perfect! Here's your $100 refundable deposit link — it goes straight toward your tattoo:\n${depositUrl}`;
+
+            await sendConversationMessage({
+              contactId,
+              body: depositMessage,
+              channelContext,
+            });
+            console.log("💳 Deposit link sent");
+          }
+        } catch (depositErr) {
+          console.error("❌ Error sending deposit link:", depositErr.message || depositErr);
+        }
+      }
+
+      // Send time slots
+      if (appointmentOfferData && appointmentOfferData.slots && appointmentOfferData.slots.length > 0) {
+        const slotsText = appointmentOfferData.slots
+          .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
+          .join("\n");
+
+        const slotsMessage = useEmojis
+          ? `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`
+          : `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`;
+
+        await sendConversationMessage({
+          contactId,
+          body: slotsMessage,
+          channelContext,
+        });
+        console.log("📅 Time slots sent directly (bypassed AI)");
+      }
+
+      // Update phase to closing
+      await updateSystemFields(contactId, {
+        ai_phase: AI_PHASES.CLOSING,
+        last_phase_update_at: new Date().toISOString(),
+      });
+
+      return res.status(200).json({ success: true, message: "Booking intent handled directly" });
+    } catch (bookingErr) {
+      console.error("❌ Error handling booking intent:", bookingErr.message || bookingErr);
+      // Fall through to normal AI flow if booking intent handling fails
+      skipAIEntirely = false;
+    }
+  }
+
+  // 📅 Check if user is selecting a specific time slot
+  if (isInBookingPhaseBeforeAI && isTimeSelection(messageText) && !skipAIEntirely) {
     console.log("🔍 Detected potential time selection - generating slots to check match");
     try {
-      // Generate slots to match against user's selection
-      // We'll use a default consult mode since we don't have AI meta yet
       const tempOfferData = await handleAppointmentOffer({
         contact: freshContact,
-        aiMeta: { consultMode: "online" }, // Default to online
+        aiMeta: { consultMode: "online" },
         contactProfile,
       });
 
@@ -844,17 +1025,47 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.log(`✅ User selected time slot option ${matchedIndex + 1} - handling booking directly`);
           timeSelectionIndex = matchedIndex;
           appointmentOfferData = tempOfferData;
-          skipAIForTimeSelection = true; // Skip AI to avoid redundant messages
+          skipAIEntirely = true;
         }
       }
     } catch (timeErr) {
       console.error("❌ Error checking time selection:", timeErr.message || timeErr);
-      // Continue with normal AI flow if time check fails
     }
   }
 
   // 🔹 Call AI Setter and send reply into the conversation
-  // Skip AI if user is selecting a time (we'll handle booking directly)
+  // Skip AI if we already handled booking intent or time selection
+  if (skipAIEntirely && timeSelectionIndex !== null) {
+    // Handle time selection directly
+    try {
+      const selectedSlot = appointmentOfferData.slots[timeSelectionIndex];
+      const appointment = await createConsultAppointment({
+        contactId,
+        calendarId: appointmentOfferData.calendarId,
+        startTime: selectedSlot.startTime,
+        endTime: selectedSlot.endTime,
+        artist: appointmentOfferData.artist,
+        consultMode: appointmentOfferData.consultMode,
+        contactProfile,
+      });
+
+      console.log("✅ Appointment created successfully (direct from time selection):", {
+        appointmentId: appointment.id,
+        startTime: selectedSlot.startTime,
+      });
+      
+      return res.status(200).json({ success: true, message: "Appointment booked" });
+    } catch (apptErr) {
+      console.error("❌ Error creating appointment:", apptErr.message || apptErr);
+      await sendConversationMessage({
+        contactId,
+        body: "Sorry, I had trouble booking that time. Can you try picking another option?",
+        channelContext,
+      });
+      return res.status(200).json({ success: false, message: "Booking failed" });
+    }
+  }
+
   try {
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
       await handleInboundMessage({
@@ -947,12 +1158,20 @@ app.post("/ghl/message-webhook", async (req, res) => {
     console.log("🤖 AI DM suggestion:", JSON.stringify(cleanedAiResult, null, 2));
 
     // If user selected a time, skip sending AI bubbles and go straight to booking
-    if (skipAIForTimeSelection && timeSelectionIndex !== null) {
+    if (skipAIEntirely && timeSelectionIndex !== null) {
       console.log("⏭️ Skipping AI bubbles - handling time selection directly");
     } else if (aiResult && Array.isArray(aiResult.bubbles)) {
       let bubblesToSend = aiResult.bubbles
         .map((b) => (b || "").trim())
         .filter(Boolean);
+
+      // 🔢 BUBBLE LIMITS: First message up to 3, subsequent messages max 2
+      const isFirstMessage = systemState.currentPhase === AI_PHASES.INTAKE;
+      const maxBubbles = isFirstMessage ? 3 : 2;
+      if (bubblesToSend.length > maxBubbles) {
+        console.log(`📝 Limiting bubbles from ${bubblesToSend.length} to ${maxBubbles}`);
+        bubblesToSend = bubblesToSend.slice(0, maxBubbles);
+      }
 
       // If we're about to send a deposit link this turn,
       // keep the conversation tight: only send the first bubble.
@@ -960,10 +1179,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
         bubblesToSend = bubblesToSend.slice(0, 1);
       }
 
+      // 📱 Strip emojis if channel doesn't support them (SMS)
+      if (!useEmojis) {
+        bubblesToSend = bubblesToSend.map(text => stripEmojis(text));
+      }
+
       if (bubblesToSend.length === 0) {
         console.warn("⚠️ AI bubbles were empty after trimming, nothing sent.");
       } else {
         for (let i = 0; i < bubblesToSend.length; i++) {
+          // 🔄 Check if this generation is still current before sending each bubble
+          if (!isGenerationCurrent(contactId, currentGenerationId)) {
+            console.log(`⏹️ Generation ${currentGenerationId} superseded - canceling remaining bubbles`);
+            break;
+          }
+
           const text = bubblesToSend[i];
 
           // Only wait before bubble #2 and beyond (more human)
@@ -971,6 +1201,12 @@ app.post("/ghl/message-webhook", async (req, res) => {
             const delayMs = calculateDelayForText(text);
             console.log(`⏱ Waiting ${delayMs}ms before sending bubble ${i + 1}...`);
             await sleep(delayMs);
+
+            // Check again after delay in case new message came in
+            if (!isGenerationCurrent(contactId, currentGenerationId)) {
+              console.log(`⏹️ Generation ${currentGenerationId} superseded during delay - canceling remaining bubbles`);
+              break;
+            }
           }
 
           await sendConversationMessage({
@@ -979,7 +1215,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
             channelContext,
           });
         }
-        console.log("📤 Sent delayed AI bubbles to GHL conversation.");
+        console.log("📤 Sent AI bubbles to GHL conversation.");
 
         // Update system fields from AI meta if present
         if (meta.aiPhase || meta.leadTemperature) {
