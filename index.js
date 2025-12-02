@@ -818,12 +818,42 @@ app.post("/ghl/message-webhook", async (req, res) => {
   // 📅 Check if user is selecting a time slot (before AI call to handle booking)
   let appointmentOfferData = null;
   let timeSelectionIndex = null;
+  let skipAIForTimeSelection = false;
 
-  // Check if there's a pending appointment offer by looking at recent messages/conversation state
-  // For now, we'll check after AI call if wantsAppointmentOffer was set previously
-  // In a more sophisticated version, you might store this in session/memory
+  // Check if user is selecting a time BEFORE AI call
+  // If detected, we'll handle booking directly and skip AI to avoid redundant messages
+  const isInBookingPhaseBeforeAI = 
+    systemState.currentPhase === AI_PHASES.CLOSING || 
+    systemState.currentPhase === AI_PHASES.QUALIFICATION;
+
+  if (isInBookingPhaseBeforeAI && isTimeSelection(messageText)) {
+    console.log("🔍 Detected potential time selection - generating slots to check match");
+    try {
+      // Generate slots to match against user's selection
+      // We'll use a default consult mode since we don't have AI meta yet
+      const tempOfferData = await handleAppointmentOffer({
+        contact: freshContact,
+        aiMeta: { consultMode: "online" }, // Default to online
+        contactProfile,
+      });
+
+      if (tempOfferData && tempOfferData.slots) {
+        const matchedIndex = parseTimeSelection(messageText, tempOfferData.slots);
+        if (matchedIndex !== null) {
+          console.log(`✅ User selected time slot option ${matchedIndex + 1} - handling booking directly`);
+          timeSelectionIndex = matchedIndex;
+          appointmentOfferData = tempOfferData;
+          skipAIForTimeSelection = true; // Skip AI to avoid redundant messages
+        }
+      }
+    } catch (timeErr) {
+      console.error("❌ Error checking time selection:", timeErr.message || timeErr);
+      // Continue with normal AI flow if time check fails
+    }
+  }
 
   // 🔹 Call AI Setter and send reply into the conversation
+  // Skip AI if user is selecting a time (we'll handle booking directly)
   try {
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
       await handleInboundMessage({
@@ -837,38 +867,26 @@ app.post("/ghl/message-webhook", async (req, res) => {
     const meta = aiResult?.meta || {};
     const fieldUpdates = aiResult?.field_updates || {};
 
-    // 📅 Check if user is selecting a time slot
-    // Check if message looks like a time selection AND we're in closing/qualification phase
+    // 📅 Determine if we're in booking phase
     const isInBookingPhase = 
       (systemState.currentPhase === AI_PHASES.CLOSING || 
        systemState.currentPhase === AI_PHASES.QUALIFICATION ||
        meta.aiPhase === AI_PHASES.CLOSING ||
        meta.aiPhase === AI_PHASES.QUALIFICATION);
 
-    if (isInBookingPhase && isTimeSelection(messageText)) {
-      // User is responding with a time preference (e.g., "Let's do Wednesday")
-      // Generate slots and try to match their selection
-      try {
-        const consultMode = meta.consultMode || "online";
+    // Check prerequisites before offering times:
+    // 1. Deposit must have been explained (depositLinkSent OR in closing/qualification phase)
+    // 2. User must have acknowledged readiness (implicit if they're responding positively)
+    const canOfferTimes = 
+      contactProfile.depositLinkSent === true ||
+      (systemState.currentPhase === AI_PHASES.CLOSING || meta.aiPhase === AI_PHASES.CLOSING) ||
+      (systemState.currentPhase === AI_PHASES.QUALIFICATION || meta.aiPhase === AI_PHASES.QUALIFICATION);
 
-        // handleAppointmentOffer will select artist by availability if none specified
-        const tempOfferData = await handleAppointmentOffer({
-          contact: freshContact,
-          aiMeta: { consultMode },
-          contactProfile,
-        });
+    // Check if user is selecting a time slot (heuristic check)
+    // We'll need to generate slots first to properly match their selection
+    const mightBeTimeSelection = isInBookingPhase && isTimeSelection(messageText);
 
-        if (tempOfferData && tempOfferData.slots) {
-          timeSelectionIndex = parseTimeSelection(messageText, tempOfferData.slots);
-          if (timeSelectionIndex !== null) {
-            console.log(`✅ User selected time slot option ${timeSelectionIndex + 1}`);
-            appointmentOfferData = tempOfferData; // Use this for appointment creation
-          }
-        }
-      } catch (parseErr) {
-        console.error("❌ Error parsing time selection:", parseErr.message || parseErr);
-      }
-    } else if (meta.wantsAppointmentOffer === true) {
+    if (meta.wantsAppointmentOffer === true && canOfferTimes) {
       // AI wants to offer times, but the user hasn't picked a specific slot yet.
       // Pre-generate slots now so we can show them AFTER the AI bubbles.
       try {
@@ -879,6 +897,31 @@ app.post("/ghl/message-webhook", async (req, res) => {
         });
       } catch (apptErr) {
         console.error("❌ Error preparing appointment offer:", apptErr.message || apptErr);
+      }
+    } else if (meta.wantsAppointmentOffer === true && !canOfferTimes) {
+      // AI wants to offer times but prerequisites not met - log warning
+      console.warn("⚠️ AI wants to offer times but prerequisites not met:", {
+        depositLinkSent: contactProfile.depositLinkSent,
+        currentPhase: systemState.currentPhase,
+        aiPhase: meta.aiPhase,
+      });
+      // Don't offer times yet - let AI explain deposit first
+    }
+
+    // If user might be selecting a time, generate slots to check against
+    if (mightBeTimeSelection && !appointmentOfferData) {
+      try {
+        const consultMode = meta.consultMode || "online";
+        const tempOfferData = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: { consultMode },
+          contactProfile,
+        });
+        if (tempOfferData && tempOfferData.slots) {
+          appointmentOfferData = tempOfferData;
+        }
+      } catch (parseErr) {
+        console.error("❌ Error generating slots for time selection check:", parseErr.message || parseErr);
       }
     }
 
@@ -899,7 +942,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
       JSON.stringify(aiResult, null, 2)
     );
 
-    if (aiResult && Array.isArray(aiResult.bubbles)) {
+    // If user selected a time, skip sending AI bubbles and go straight to booking
+    if (skipAIForTimeSelection && timeSelectionIndex !== null) {
+      console.log("⏭️ Skipping AI bubbles - handling time selection directly");
+    } else if (aiResult && Array.isArray(aiResult.bubbles)) {
       let bubblesToSend = aiResult.bubbles
         .map((b) => (b || "").trim())
         .filter(Boolean);
@@ -958,11 +1004,29 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.log("ℹ️ No field_updates from AI to apply this turn.");
         }
 
+        // 📅 Check if user is selecting a time slot AFTER AI call
+        // This handles cases where user responds to time options we just sent
+        if (isInBookingPhase && isTimeSelection(messageText) && appointmentOfferData && appointmentOfferData.slots) {
+          // User is responding with a time preference (e.g., "Let's do Wednesday")
+          // Try to match their selection against available slots
+          try {
+            timeSelectionIndex = parseTimeSelection(messageText, appointmentOfferData.slots);
+            if (timeSelectionIndex !== null) {
+              console.log(`✅ User selected time slot option ${timeSelectionIndex + 1}`);
+              // We have a valid time selection - will handle booking below
+            }
+          } catch (parseErr) {
+            console.error("❌ Error parsing time selection:", parseErr.message || parseErr);
+          }
+        }
+
         // 📅 If AI wants to offer times and the user hasn't selected a slot yet,
         // send the concrete time options *after* the acknowledgment/explanation bubbles.
+        // ONLY if prerequisites are met (deposit explained, user ready)
         if (
           meta.wantsAppointmentOffer === true &&
           timeSelectionIndex === null &&
+          canOfferTimes &&
           appointmentOfferData &&
           Array.isArray(appointmentOfferData.slots) &&
           appointmentOfferData.slots.length > 0
@@ -983,6 +1047,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
         }
 
         // 📅 Create appointment if user selected a time slot
+        // IMPORTANT: If we're creating an appointment, we've already sent the confirmation message
+        // so we should NOT send additional AI bubbles after this
         if (timeSelectionIndex !== null && appointmentOfferData && appointmentOfferData.slots) {
           try {
             const selectedSlot = appointmentOfferData.slots[timeSelectionIndex];
@@ -1000,6 +1066,11 @@ app.post("/ghl/message-webhook", async (req, res) => {
               appointmentId: appointment.id,
               startTime: selectedSlot.startTime,
             });
+            
+            // Appointment created - skip any remaining AI processing for this turn
+            // The confirmation message was already sent by createConsultAppointment
+            console.log("✅ Appointment booking complete - skipping further AI processing this turn");
+            return res.status(200).json({ success: true, message: "Appointment booked" });
           } catch (apptErr) {
             console.error("❌ Error creating appointment:", apptErr.message || apptErr);
             // Send error message to user
@@ -1072,9 +1143,38 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.error("❌ Error while handling AI deposit link logic:", err);
         }
       }
-    } else {
-      console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
-    }
+    } else if (skipAIForTimeSelection && timeSelectionIndex !== null) {
+        // User selected a time but we skipped AI - handle booking directly
+        try {
+          const selectedSlot = appointmentOfferData.slots[timeSelectionIndex];
+          const appointment = await createConsultAppointment({
+            contactId,
+            calendarId: appointmentOfferData.calendarId,
+            startTime: selectedSlot.startTime,
+            endTime: selectedSlot.endTime,
+            artist: appointmentOfferData.artist,
+            consultMode: appointmentOfferData.consultMode,
+            contactProfile,
+          });
+
+          console.log("✅ Appointment created successfully (direct booking):", {
+            appointmentId: appointment.id,
+            startTime: selectedSlot.startTime,
+          });
+          
+          return res.status(200).json({ success: true, message: "Appointment booked" });
+        } catch (apptErr) {
+          console.error("❌ Error creating appointment:", apptErr.message || apptErr);
+          await sendConversationMessage({
+            contactId,
+            body: "Sorry, I had trouble booking that time. Can you try picking another option?",
+            channelContext,
+          });
+          return res.status(200).json({ success: false, message: "Booking failed" });
+        }
+      } else {
+        console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
+      }
   } catch (err) {
     console.error(
       "❌ Error generating or sending AI DM suggestion:",
