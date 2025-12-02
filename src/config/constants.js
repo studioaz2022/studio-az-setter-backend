@@ -31,6 +31,15 @@ const SYSTEM_FIELDS = {
   DEPOSIT_PAID: "deposit_paid",
   SQUARE_PAYMENT_LINK_ID: "square_payment_link_id",
   LAST_PHASE_UPDATE_AT: "last_phase_update_at",
+  // Booking state fields (persisted for crash recovery)
+  TIMES_SENT: "times_sent", // Whether time options have been sent
+  DEPOSIT_LINK_URL: "deposit_link_url", // The actual deposit URL for reuse
+  PENDING_SLOT_START: "pending_slot_start", // ISO timestamp of pending slot
+  PENDING_SLOT_END: "pending_slot_end", // ISO timestamp of pending slot end
+  PENDING_SLOT_DISPLAY: "pending_slot_display", // Human-readable slot display
+  PENDING_SLOT_ARTIST: "pending_slot_artist", // Artist for pending slot
+  PENDING_SLOT_CALENDAR: "pending_slot_calendar", // Calendar ID for pending slot
+  PENDING_SLOT_MODE: "pending_slot_mode", // Consult mode (online/in-person)
 };
 
 // Tattoo Custom Field Keys
