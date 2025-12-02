@@ -219,7 +219,17 @@ function extractRequestedWeekday(messageText) {
  */
 function hasConsultBeenExplained(contact) {
   const cf = contact?.customField || contact?.customFields || {};
-  return cf.consult_explained === "Yes" || cf.consult_explained === true;
+  return cf.consult_explained === "Yes" || cf.consult_explained === true || cf.consult_explained === "true";
+}
+
+/**
+ * Mark consult as explained for a contact
+ */
+async function markConsultExplained(contactId) {
+  await updateSystemFields(contactId, {
+    consult_explained: true,
+  });
+  console.log(`✅ Marked consult as explained for contact ${contactId}`);
 }
 
 /**
@@ -1693,12 +1703,17 @@ app.post("/ghl/message-webhook", async (req, res) => {
           return res.status(200).json({ success: true, message: "Times reminder sent" });
         }
 
-        // Build combined message - deposit link + times in ONE message (compact)
-        let combinedMessage;
+        // Check if consult has already been explained (to avoid repetition)
+        const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+        console.log(`📋 Consult explained already: ${consultExplainedAlready}`);
+        
+        // Build message parts based on what's already been explained
+        let messageParts = [];
         let depositUrlToStore = storedDepositUrl;
+        let needsConsultExplained = false;
         
         if (!alreadyPaid && !alreadySent) {
-          // First time - send deposit link + times together
+          // First time sending deposit link - generate it
           console.log("💳 Generating deposit link for booking intent...");
           try {
             const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
@@ -1712,43 +1727,54 @@ app.post("/ghl/message-webhook", async (req, res) => {
               
               await updateSystemFields(contactId, {
                 deposit_link_sent: true,
-                deposit_link_url: depositUrl, // Store URL for reuse
-                times_sent: true, // Track that times were sent
-                consult_explained: true, // Mark consult as explained
+                deposit_link_url: depositUrl,
+                times_sent: true,
                 square_payment_link_id: paymentLinkId,
                 last_phase_update_at: new Date().toISOString(),
               });
 
-              // Combined message: deposit + times
-              combinedMessage = useEmojis
-                ? `Here are the consult times:\n\n${slotsText}\n\nTo hold a spot we do a $100 refundable deposit that goes straight toward your tattoo.\nHere's the link: ${depositUrl}`
-                : `Here are the consult times:\n\n${slotsText}\n\nTo hold a spot we do a $100 refundable deposit that goes straight toward your tattoo.\nHere's the link: ${depositUrl}`;
+              if (!consultExplainedAlready) {
+                // FULL explanation (only first time)
+                messageParts.push("We start with a quick 15–30 min consult to dial in your design, size, and placement.");
+                messageParts.push("To hold a spot, we do a $100 refundable deposit that goes straight toward your tattoo.");
+                needsConsultExplained = true;
+              } else {
+                // SHORT reference (consult already explained, maybe by AI)
+                messageParts.push("Same quick consult we mentioned — we'll go over your idea, placement, and details.");
+              }
+              
+              // Add times
+              messageParts.push(`Here are the times I've got:\n${slotsText}`);
+              
+              // Add deposit link
+              messageParts.push(`Here's your deposit link: ${depositUrl}`);
             }
           } catch (depositErr) {
             console.error("❌ Error creating deposit link:", depositErr.message || depositErr);
             // Still send times even if deposit link fails
-            combinedMessage = useEmojis
-              ? `Got you — here are the times we've got open:\n\n${slotsText}\n\nWhich one works for you?`
-              : `Got you — here are the times we've got open:\n\n${slotsText}\n\nWhich one works for you?`;
+            messageParts.push(`Got you — here are the times we've got open:\n${slotsText}`);
+            messageParts.push("Which one works for you?");
           }
         } else if (alreadySent && !alreadyPaid) {
-          // Deposit link already sent - just send times, remind about deposit
-          // Reuse the stored deposit URL if we have it
+          // Deposit link already sent - short reminder with times
+          messageParts.push(`Got you — here are the times:\n${slotsText}`);
+          
           if (storedDepositUrl) {
-            combinedMessage = useEmojis
-              ? `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot 🙌\nDeposit link: ${storedDepositUrl}`
-              : `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot.\nDeposit link: ${storedDepositUrl}`;
+            messageParts.push(useEmojis
+              ? `Once the deposit comes through I'll lock in your spot 🙌\nDeposit link: ${storedDepositUrl}`
+              : `Once the deposit comes through I'll lock in your spot.\nDeposit link: ${storedDepositUrl}`);
           } else {
-            combinedMessage = useEmojis
-              ? `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot 🙌`
-              : `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot.`;
+            messageParts.push(useEmojis
+              ? `Once the deposit comes through I'll lock in your spot 🙌`
+              : `Once the deposit comes through I'll lock in your spot.`);
           }
         } else {
           // Deposit already paid - just send times
-          combinedMessage = useEmojis
-            ? `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`
-            : `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`;
+          messageParts.push(`Here are the times I've got:\n${slotsText}`);
+          messageParts.push("Which one works for you?");
         }
+
+        const combinedMessage = messageParts.join("\n\n");
 
         await sendConversationMessage({
           contactId,
@@ -1757,13 +1783,16 @@ app.post("/ghl/message-webhook", async (req, res) => {
         });
         console.log("📅 Times sent directly (bypassed AI)");
         
-        // Mark times as sent and consult explained
-        await updateSystemFields(contactId, {
+        // Mark times as sent; mark consult explained only if we just explained it
+        const fieldsToUpdate = {
           times_sent: true,
-          consult_explained: true,
           ai_phase: AI_PHASES.CLOSING,
           last_phase_update_at: new Date().toISOString(),
-        });
+        };
+        if (needsConsultExplained) {
+          fieldsToUpdate.consult_explained = true;
+        }
+        await updateSystemFields(contactId, fieldsToUpdate);
       }
 
       return res.status(200).json({ success: true, message: "Booking intent handled directly" });
@@ -1777,6 +1806,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
   // From here on, we only call AI if skipAIEntirely is false
 
   try {
+    // Check if consult has been explained (to pass to AI for prompt enforcement)
+    const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+    
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
       await handleInboundMessage({
         contact: freshContact,
@@ -1784,6 +1816,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         leadTemperature: systemState.leadTemperature,
         latestMessageText: messageText,
         contactProfile,
+        consultExplained: consultExplainedAlready, // Pass to AI for prompt enforcement
       });
 
     const meta = aiResult?.meta || {};
@@ -1876,10 +1909,17 @@ app.post("/ghl/message-webhook", async (req, res) => {
           if (meta.aiPhase) updateFields.ai_phase = meta.aiPhase;
           if (meta.leadTemperature) updateFields.lead_temperature = meta.leadTemperature;
           updateFields.last_phase_update_at = new Date().toISOString();
+          
+          // If AI explained the consult/deposit this turn, mark it as explained
+          if (meta.depositPushedThisTurn === true && !consultExplainedAlready) {
+            updateFields.consult_explained = true;
+            console.log("📋 AI explained consult this turn - marking consult_explained = true");
+          }
 
           console.log("🧠 Updating contact system fields from AI meta:", {
             ai_phase: meta.aiPhase,
             lead_temperature: meta.leadTemperature,
+            consult_explained: updateFields.consult_explained,
           });
 
           await updateSystemFields(contactId, updateFields);

@@ -172,7 +172,7 @@ function detectLanguage(preferred) {
 
 
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
-function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature }) {
+function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature, consultExplained }) {
   // Normalize contact so we never blow up on missing fields
   const contactSafe = {
     id: contact.id || contact._id || null,
@@ -225,6 +225,17 @@ ${PHASE_PROMPTS_V3}
 - If you're in "closing" or "qualification" phase, you've likely already explained the consult + deposit process.
 - **DO NOT repeat information** that's already in contactProfile or that you've explained in previous messages.
 - **DO NOT repeat greetings** - only greet in the very first message of a new conversation.
+
+**CONSULT EXPLANATION RULE (CRITICAL):**
+- consultExplained = ${consultExplained ? 'true' : 'false'}
+- If consultExplained === true:
+  - You may NOT send the full consult + deposit explanation paragraph again.
+  - Do NOT explain "15–30 min consult", "refundable deposit", "goes toward your tattoo" etc.
+  - Instead, you may only say SHORT references like: "same quick consult we mentioned", "once the deposit's in", "your consult spot".
+  - Keep it brief and human — the lead already knows the process.
+- If consultExplained === false:
+  - You're allowed to explain the consult + deposit once (1–2 bubbles max).
+  - After you explain it, the backend will mark consultExplained = true for future messages.
 
 For THIS message:
 - If this is the first message (intake phase), generate an opener to start the conversation.
@@ -290,7 +301,7 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 
 
 // 🔹 Main: generate opener for a new intake (form webhook)
-async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile }) {
+async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile, consultExplained }) {
   if (!MASTER_PROMPT_V3) {
     console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
   }
@@ -307,11 +318,15 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature, lat
   if (contactProfile) {
     intake.contactProfile = contactProfile;
   }
+  // Add consultExplained flag to intake for prompt enforcement
+  intake.consultExplained = consultExplained || false;
+  
   const messages = buildOpenerMessages({
     contact,
     intake,
     aiPhase,
     leadTemperature,
+    consultExplained: intake.consultExplained,
   });
 
 
