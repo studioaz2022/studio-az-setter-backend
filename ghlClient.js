@@ -504,6 +504,40 @@ async function inferConversationMessageType(contactId) {
     return "SMS";
   }
 
+  // Check conversation type first - if it's SMS, return SMS (don't infer DM type)
+  const conversationType = (conversation.type || "").toUpperCase();
+  if (conversationType.includes("SMS")) {
+    return "SMS";
+  }
+
+  // For DM conversations, check contact's actual social IDs first
+  try {
+    const contact = await getContact(contactId);
+    // Check for social media IDs in contact object
+    // GHL stores these in various fields - check common patterns
+    const hasInstagramId = !!(
+      contact?.instagramId || 
+      contact?.instagram || 
+      contact?.socialProfiles?.instagram ||
+      contact?.customField?.instagram_id
+    );
+    const hasFacebookId = !!(
+      contact?.facebookId || 
+      contact?.facebook || 
+      contact?.socialProfiles?.facebook ||
+      contact?.customField?.facebook_id
+    );
+    
+    if (hasInstagramId) {
+      return "IG";
+    }
+    if (hasFacebookId) {
+      return "FB";
+    }
+  } catch (err) {
+    console.warn("Error checking contact for type inference:", err.message);
+  }
+
   const lastType = conversation.lastMessageType || conversation.type || "";
 
   if (!lastType || typeof lastType !== "string") {
@@ -538,11 +572,11 @@ async function inferConversationMessageType(contactId) {
     return "SMS";
   }
 
-  // Fallback
+  // Fallback - prefer FB over IG for DM contexts (more common, and less likely to fail)
   console.warn(
-    `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to SMS`
+    `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to FB for DM`
   );
-  return "SMS";
+  return "FB";
 }
 
 // Send a message in a contact's conversation
@@ -580,31 +614,92 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
       const conversation = await findConversationForContact(contactId);
       if (conversation) {
         finalConversationId = conversation.id || conversation._id;
-        // Use the proper inference function to get the correct type enum
-        dmType = await inferConversationMessageType(contactId);
-        console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
+        
+        // Check if this is actually a DM conversation (not SMS)
+        const convType = (conversation.type || "").toUpperCase();
+        if (convType.includes("SMS")) {
+          console.warn("⚠️ Conversation type is SMS, but isDm=true. This might be a mismatch.");
+          // Don't try to send SMS conversations as DM - fall through to error handling
+        } else {
+          // Use the proper inference function to get the correct type enum
+          dmType = await inferConversationMessageType(contactId);
+          console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
+        }
       }
     } else {
       // If conversationId was provided, still infer the type
       dmType = await inferConversationMessageType(contactId);
     }
 
-    // If we have a conversationId, use it
-    if (finalConversationId) {
+    // If we have a conversationId and valid DM type, use it
+    if (finalConversationId && dmType && dmType !== "SMS") {
+      // Get contact once to check tags and social IDs
+      let contact = null;
+      try {
+        contact = await getContact(contactId);
+      } catch (err) {
+        console.error("❌ Error fetching contact for DM validation:", err.message);
+        throw err;
+      }
+      
+      // Helper function to check social IDs
+      const checkSocialIds = (contact) => {
+        const hasInstagramId = !!(
+          contact?.instagramId || 
+          contact?.instagram || 
+          contact?.socialProfiles?.instagram ||
+          contact?.customField?.instagram_id
+        );
+        const hasFacebookId = !!(
+          contact?.facebookId || 
+          contact?.facebook || 
+          contact?.socialProfiles?.facebook ||
+          contact?.customField?.facebook_id
+        );
+        return { hasInstagramId, hasFacebookId };
+      };
+      
       // Ensure we have a valid type (IG or FB for social media DMs)
-      if (!dmType || (dmType !== "IG" && dmType !== "FB")) {
-        // Try to infer from contact tags or default to IG
-        const contact = await getContact(contactId);
+      if (dmType !== "IG" && dmType !== "FB") {
+        // Try to infer from contact tags or check contact's social IDs
         const tags = contact?.tags || [];
         const hasInstagram = tags.some(t => String(t).toUpperCase().includes("INSTAGRAM"));
         const hasFacebook = tags.some(t => String(t).toUpperCase().includes("FACEBOOK"));
         
-        if (hasInstagram) {
+        const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
+        
+        if (hasInstagramId || (hasInstagram && !hasFacebookId)) {
           dmType = "IG";
-        } else if (hasFacebook) {
+        } else if (hasFacebookId || hasFacebook) {
           dmType = "FB";
         } else {
-          dmType = "IG"; // Default to IG for social media DMs
+          // Default to FB as fallback (more common than IG, less likely to fail)
+          dmType = "FB";
+        }
+      }
+      
+      // Validate that contact has the required social ID before sending
+      const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
+      
+      if (dmType === "IG") {
+        if (!hasInstagramId) {
+          console.warn("⚠️ Contact has no Instagram ID, switching to FB");
+          if (hasFacebookId) {
+            dmType = "FB";
+          } else {
+            console.error("❌ Contact has no Instagram or Facebook ID, cannot send DM");
+            throw new Error("Contact has no social media ID for DM sending");
+          }
+        }
+      } else if (dmType === "FB") {
+        if (!hasFacebookId) {
+          console.warn("⚠️ Contact has no Facebook ID, switching to IG");
+          if (hasInstagramId) {
+            dmType = "IG";
+          } else {
+            console.error("❌ Contact has no Facebook or Instagram ID, cannot send DM");
+            throw new Error("Contact has no social media ID for DM sending");
+          }
         }
       }
 
