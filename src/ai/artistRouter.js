@@ -2,7 +2,12 @@
 // Style-based artist assignment and routing logic
 
 const { getContact, updateSystemFields, updateTattooFields } = require("../../ghlClient");
-const { SYSTEM_FIELDS, TATTOO_FIELDS, CALENDARS } = require("../config/constants");
+const {
+  SYSTEM_FIELDS,
+  TATTOO_FIELDS,
+  CALENDARS,
+  ARTIST_ASSIGNED_USER_IDS,
+} = require("../config/constants");
 
 /**
  * Artist style mappings
@@ -27,6 +32,27 @@ let artistWorkloads = {
   Artist3: 0,
   Artist4: 0,
 };
+
+/**
+ * Get assigned userId for an artist (used when creating GHL appointments)
+ * @param {string} artistName
+ * @returns {string|null}
+ */
+function getAssignedUserIdForArtist(artistName) {
+  if (!artistName) return null;
+
+  const normalized = String(artistName).toLowerCase().trim();
+
+  if (normalized.includes("joan")) {
+    return ARTIST_ASSIGNED_USER_IDS.JOAN || null;
+  }
+
+  if (normalized.includes("andrew")) {
+    return ARTIST_ASSIGNED_USER_IDS.ANDREW || null;
+  }
+
+  return null;
+}
 
 /**
  * Get artist preference from contact (from URL parameter, custom field, or tags)
@@ -263,5 +289,6 @@ module.exports = {
   getCalendarIdForArtist,
   ARTIST_STYLE_MAP,
   artistWorkloads,
+  getAssignedUserIdForArtist,
 };
 

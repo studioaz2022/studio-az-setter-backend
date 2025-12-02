@@ -103,6 +103,13 @@ const APPOINTMENT_STATUS = {
   INVALID: "invalid",
 };
 
+// Assigned user IDs for artists (used when creating GHL appointments)
+// These should match the "team member" IDs in GHL
+const ARTIST_ASSIGNED_USER_IDS = {
+  JOAN: "1wuLf50VMODExBSJ9xPI",
+  ANDREW: "O8ChoMYj1BmMWJJsDlvC",
+};
+
 module.exports = {
   AI_PHASES,
   LEAD_TEMPERATURES,
@@ -115,5 +122,6 @@ module.exports = {
   CALENDARS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
+  ARTIST_ASSIGNED_USER_IDS,
 };
 

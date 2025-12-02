@@ -837,43 +837,6 @@ app.post("/ghl/message-webhook", async (req, res) => {
     const meta = aiResult?.meta || {};
     const fieldUpdates = aiResult?.field_updates || {};
 
-    // 📅 Handle appointment offer if AI wants to offer times
-    if (meta.wantsAppointmentOffer === true) {
-      try {
-        appointmentOfferData = await handleAppointmentOffer({
-          contact: freshContact,
-          aiMeta: meta,
-          contactProfile,
-        });
-
-        if (appointmentOfferData && appointmentOfferData.slots) {
-          // Format slots for AI to present or send directly
-          const slotsText = appointmentOfferData.slots
-            .map((slot, idx) => `Option ${idx + 1}: ${slot.displayText}`)
-            .join("\n");
-
-          console.log("📅 Appointment slots generated:", slotsText);
-
-          // Send slots as additional message bubbles if AI didn't include them
-          // (AI should ideally include them, but this is a fallback)
-          const aiBubblesIncludeSlots = aiResult.bubbles?.some((bubble) =>
-            appointmentOfferData.slots.some((slot) => bubble.includes(slot.displayText))
-          );
-
-          if (!aiBubblesIncludeSlots && appointmentOfferData.slots.length > 0) {
-            const slotsMessage = `Here are some available times:\n${slotsText}\n\nWhich one works best for you?`;
-            await sendConversationMessage({
-              contactId,
-              body: slotsMessage,
-              channelContext,
-            });
-          }
-        }
-      } catch (apptErr) {
-        console.error("❌ Error handling appointment offer:", apptErr.message || apptErr);
-      }
-    }
-
     // 📅 Check if user is selecting a time slot
     // Check if message looks like a time selection AND we're in closing/qualification phase
     const isInBookingPhase = 
@@ -883,10 +846,11 @@ app.post("/ghl/message-webhook", async (req, res) => {
        meta.aiPhase === AI_PHASES.QUALIFICATION);
 
     if (isInBookingPhase && isTimeSelection(messageText)) {
-      // Regenerate slots to match against (deterministic based on artist/mode)
+      // User is responding with a time preference (e.g., "Let's do Wednesday")
+      // Generate slots and try to match their selection
       try {
         const consultMode = meta.consultMode || "online";
-        
+
         // handleAppointmentOffer will select artist by availability if none specified
         const tempOfferData = await handleAppointmentOffer({
           contact: freshContact,
@@ -903,6 +867,18 @@ app.post("/ghl/message-webhook", async (req, res) => {
         }
       } catch (parseErr) {
         console.error("❌ Error parsing time selection:", parseErr.message || parseErr);
+      }
+    } else if (meta.wantsAppointmentOffer === true) {
+      // AI wants to offer times, but the user hasn't picked a specific slot yet.
+      // Pre-generate slots now so we can show them AFTER the AI bubbles.
+      try {
+        appointmentOfferData = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: meta,
+          contactProfile,
+        });
+      } catch (apptErr) {
+        console.error("❌ Error preparing appointment offer:", apptErr.message || apptErr);
       }
     }
 
@@ -980,6 +956,30 @@ app.post("/ghl/message-webhook", async (req, res) => {
           }
         } else {
           console.log("ℹ️ No field_updates from AI to apply this turn.");
+        }
+
+        // 📅 If AI wants to offer times and the user hasn't selected a slot yet,
+        // send the concrete time options *after* the acknowledgment/explanation bubbles.
+        if (
+          meta.wantsAppointmentOffer === true &&
+          timeSelectionIndex === null &&
+          appointmentOfferData &&
+          Array.isArray(appointmentOfferData.slots) &&
+          appointmentOfferData.slots.length > 0
+        ) {
+          const slotsText = appointmentOfferData.slots
+            .map((slot, idx) => `Option ${idx + 1}: ${slot.displayText}`)
+            .join("\n");
+
+          console.log("📅 Appointment slots generated:", slotsText);
+
+          const slotsMessage = `Here are some available times:\n${slotsText}\n\nWhich one works best for you?`;
+
+          await sendConversationMessage({
+            contactId,
+            body: slotsMessage,
+            channelContext,
+          });
         }
 
         // 📅 Create appointment if user selected a time slot

@@ -2,7 +2,12 @@
 // Handles appointment booking orchestration
 
 const { getContact } = require("../../ghlClient");
-const { determineArtist, getCalendarIdForArtist, artistWorkloads } = require("./artistRouter");
+const {
+  determineArtist,
+  getCalendarIdForArtist,
+  artistWorkloads,
+  getAssignedUserIdForArtist,
+} = require("./artistRouter");
 const {
   createAppointment,
   listAppointmentsForContact,
@@ -231,6 +236,12 @@ async function createConsultAppointment({
     // Build description
     const description = `Consultation for ${tattooSummary}`;
 
+    // Determine assigned user for this artist (required by GHL)
+    const assignedUserId = getAssignedUserIdForArtist(artist);
+    if (!assignedUserId) {
+      console.warn(`⚠️ No assignedUserId found for artist "${artist}", appointment may fail`);
+    }
+
     // Create appointment with status "new" (on hold)
     const appointment = await createAppointment({
       calendarId,
@@ -240,6 +251,7 @@ async function createConsultAppointment({
       title,
       description,
       appointmentStatus: APPOINTMENT_STATUS.NEW,
+      assignedUserId,
       address: consultMode === "online" ? "Zoom" : null,
       meetingLocationType: consultMode === "online" ? "custom" : null,
     });
