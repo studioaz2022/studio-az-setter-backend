@@ -3,6 +3,7 @@ require("dotenv").config();
 // ghlClient.js
 const axios = require("axios");
 const FormData = require("form-data");
+const { cleanLogObject } = require("./src/utils/logger");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
@@ -596,12 +597,12 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     phone = null,
   } = channelContext;
 
-  console.log("✉️ sendConversationMessage context:", {
+  console.log("✉️ sendConversationMessage context:", cleanLogObject({
     contactId,
     isDm,
     hasPhone,
     conversationId,
-  });
+  }));
 
   // 1) DM reply path (no phone required)
   if (isDm) {

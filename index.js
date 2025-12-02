@@ -31,6 +31,7 @@ const { createDepositLinkForContact, getContactIdFromOrder } = require("./src/pa
 const { DEPOSIT_CONFIG, AI_PHASES, LEAD_TEMPERATURES, SYSTEM_FIELDS, CALENDARS, APPOINTMENT_STATUS } = require("./src/config/constants");
 const { autoAssignArtist, determineArtist } = require("./src/ai/artistRouter");
 const { errorHandler, notFoundHandler } = require("./src/middleware/errorHandler");
+const { cleanLogObject } = require("./src/utils/logger");
 const {
   handleAppointmentOffer,
   createConsultAppointment,
@@ -386,14 +387,14 @@ app.post("/ghl/form-webhook", async (req, res) => {
     return res.status(200).send("OK");
   }
 
-  console.log("✅ Loaded Contact from GHL (form webhook):", {
+  console.log("✅ Loaded Contact from GHL (form webhook):", cleanLogObject({
     id: contact.id || contact._id,
     firstName: contact.firstName || contact.first_name,
     lastName: contact.lastName || contact.last_name,
     email: contact.email,
     phone: contact.phone,
     tags: contact.tags,
-  });
+  }));
 
       // 🔹 Extract how_soon_is_client_deciding in a robust way
   const cfRaw = contact.customField || contact.customFields || {};
@@ -439,11 +440,11 @@ app.post("/ghl/form-webhook", async (req, res) => {
   const aiPhase = initialPhaseForNewIntake();
   const nowIso = new Date().toISOString();
 
-  console.log("🧠 Derived system state (form):", {
+  console.log("🧠 Derived system state (form):", cleanLogObject({
     leadTemperature,
     aiPhase,
     howSoonValue,
-  });
+  }));
 
   await updateSystemFields(contactId, {
     ai_phase: aiPhase,
@@ -627,14 +628,14 @@ app.post("/ghl/message-webhook", async (req, res) => {
     return res.status(200).send("OK");
   }
 
-  console.log("✅ Loaded Contact from GHL (message webhook):", {
+  console.log("✅ Loaded Contact from GHL (message webhook):", cleanLogObject({
     id: contact.id || contact._id,
     firstName: contact.firstName || contact.first_name,
     lastName: contact.lastName || contact.last_name,
     email: contact.email,
     phone: contact.phone,
     tags: contact.tags,
-  });
+  }));
 
   const cf = contact.customField || contact.customFields || {};
   const currentLanguage =
@@ -804,7 +805,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     contactProfile,
   };
 
-  console.log("🤖 Calling OpenAI for opener with payload summary:", {
+  console.log("🤖 Calling OpenAI for opener with payload summary:", cleanLogObject({
     contactId: aiPayload.contactId,
     leadTemperature: aiPayload.leadTemperature,
     aiPhase: aiPayload.aiPhase,
@@ -813,7 +814,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     hasTattooSize: !!contactProfile.tattooSize,
     depositPaid: contactProfile.depositPaid,
     depositLinkSent: contactProfile.depositLinkSent,
-  });
+  }));
 
   // 📅 Check if user is selecting a time slot (before AI call to handle booking)
   let appointmentOfferData = null;
@@ -925,22 +926,25 @@ app.post("/ghl/message-webhook", async (req, res) => {
       }
     }
 
-    console.log("🧠 AI DECISION SUMMARY", {
+    console.log("🧠 AI DECISION SUMMARY", cleanLogObject({
       aiPhaseFromAI: meta.aiPhase,
       leadTemperatureFromAI: meta.leadTemperature,
       wantsDepositLink: meta.wantsDepositLink,
+      wantsAppointmentOffer: meta.wantsAppointmentOffer,
+      consultMode: meta.consultMode,
       depositPushedThisTurn: meta.depositPushedThisTurn,
       mentionDecoyOffered: meta.mentionDecoyOffered,
       field_updates: fieldUpdates,
       bubblesPreview: Array.isArray(aiResult?.bubbles)
         ? aiResult.bubbles.map((b) => (b || "").slice(0, 80))
         : [],
-    });
+    }, ["wantsDepositLink", "wantsAppointmentOffer", "depositPushedThisTurn", "mentionDecoyOffered"]));
 
-    console.log(
-      "🤖 AI DM suggestion:",
-      JSON.stringify(aiResult, null, 2)
-    );
+    // Log cleaned AI result (remove empty fields but keep all decisions)
+    const cleanedAiResult = cleanLogObject(aiResult, [
+      "meta", "bubbles", "language", "internal_notes", "depositLinkMessage"
+    ]);
+    console.log("🤖 AI DM suggestion:", JSON.stringify(cleanedAiResult, null, 2));
 
     // If user selected a time, skip sending AI bubbles and go straight to booking
     if (skipAIForTimeSelection && timeSelectionIndex !== null) {

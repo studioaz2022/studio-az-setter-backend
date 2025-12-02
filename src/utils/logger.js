@@ -21,6 +21,59 @@ function shouldLog(level) {
 }
 
 /**
+ * Clean log object by removing null, undefined, empty strings, empty arrays, and empty objects
+ * Preserves important decision-making fields even if they're falsy
+ */
+function cleanLogObject(obj, preserveFields = []) {
+  if (obj === null || obj === undefined) {
+    return obj;
+  }
+
+  if (Array.isArray(obj)) {
+    const cleaned = obj
+      .map(item => cleanLogObject(item, preserveFields))
+      .filter(item => item !== null && item !== undefined && item !== "");
+    return cleaned.length > 0 ? cleaned : undefined;
+  }
+
+  if (typeof obj !== "object") {
+    return obj;
+  }
+
+  const cleaned = {};
+  for (const [key, value] of Object.entries(obj)) {
+    // Always preserve important fields even if they're falsy
+    if (preserveFields.includes(key)) {
+      cleaned[key] = value;
+      continue;
+    }
+
+    // Skip null, undefined, empty strings
+    if (value === null || value === undefined || value === "") {
+      continue;
+    }
+
+    // Recursively clean nested objects/arrays
+    const cleanedValue = cleanLogObject(value, preserveFields);
+    
+    // Skip if cleaned value is undefined, empty array, or empty object
+    if (cleanedValue === undefined) {
+      continue;
+    }
+    if (Array.isArray(cleanedValue) && cleanedValue.length === 0) {
+      continue;
+    }
+    if (typeof cleanedValue === "object" && Object.keys(cleanedValue).length === 0) {
+      continue;
+    }
+
+    cleaned[key] = cleanedValue;
+  }
+
+  return cleaned;
+}
+
+/**
  * Format log entry with timestamp and level
  */
 function formatLog(level, message, data = {}) {
@@ -79,5 +132,6 @@ module.exports = {
   info,
   debug,
   LOG_LEVELS,
+  cleanLogObject,
 };
 
