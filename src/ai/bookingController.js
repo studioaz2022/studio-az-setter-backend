@@ -2,7 +2,7 @@
 // Handles appointment booking orchestration
 
 const { getContact } = require("../../ghlClient");
-const { determineArtist, getCalendarIdForArtist } = require("./artistRouter");
+const { determineArtist, getCalendarIdForArtist, artistWorkloads } = require("./artistRouter");
 const {
   createAppointment,
   listAppointmentsForContact,
@@ -131,14 +131,45 @@ function parseTimeSelection(messageText, availableSlots) {
 }
 
 /**
+ * Select artist based on availability/workload when no preference is given
+ * Returns artist name or null
+ * 
+ * Logic:
+ * 1. If both artists have the same availability for the timeframe, select by workload (least busy)
+ * 2. Otherwise, select the artist with better availability
+ * 3. For now, we use workload comparison as a simple heuristic
+ */
+function selectArtistByAvailability(consultMode = "online") {
+  // Compare workloads - select artist with lower workload
+  const joanWorkload = artistWorkloads["Joan"] || 0;
+  const andrewWorkload = artistWorkloads["Andrew"] || 0;
+  
+  // TODO: Enhance this to check actual calendar availability for the requested timeframe
+  // For now, use workload as a simple balancing mechanism
+  if (joanWorkload <= andrewWorkload) {
+    return "Joan";
+  } else {
+    return "Andrew";
+  }
+}
+
+/**
  * Handle appointment booking when AI wants to offer times
  */
 async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
   try {
-    // Determine artist
-    const artist = determineArtist(contact);
+    // Determine artist - if not found, select by availability/workload
+    let artist = determineArtist(contact);
+    
     if (!artist) {
-      console.warn("⚠️ Could not determine artist for appointment offer");
+      console.log("ℹ️ No artist preference found, selecting by availability/workload");
+      const consultMode = aiMeta?.consultMode || "online";
+      artist = selectArtistByAvailability(consultMode);
+      console.log(`✅ Selected artist ${artist} based on availability/workload`);
+    }
+
+    if (!artist) {
+      console.warn("⚠️ Could not determine or select artist for appointment offer");
       return null;
     }
 
@@ -288,5 +319,6 @@ module.exports = {
   isTimeSelection,
   generateSuggestedSlots,
   formatSlotDisplay,
+  selectArtistByAvailability,
 };
 

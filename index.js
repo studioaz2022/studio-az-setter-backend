@@ -885,22 +885,20 @@ app.post("/ghl/message-webhook", async (req, res) => {
     if (isInBookingPhase && isTimeSelection(messageText)) {
       // Regenerate slots to match against (deterministic based on artist/mode)
       try {
-        const artist = determineArtist(freshContact);
         const consultMode = meta.consultMode || "online";
         
-        if (artist) {
-          const tempOfferData = await handleAppointmentOffer({
-            contact: freshContact,
-            aiMeta: { consultMode },
-            contactProfile,
-          });
+        // handleAppointmentOffer will select artist by availability if none specified
+        const tempOfferData = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: { consultMode },
+          contactProfile,
+        });
 
-          if (tempOfferData && tempOfferData.slots) {
-            timeSelectionIndex = parseTimeSelection(messageText, tempOfferData.slots);
-            if (timeSelectionIndex !== null) {
-              console.log(`✅ User selected time slot option ${timeSelectionIndex + 1}`);
-              appointmentOfferData = tempOfferData; // Use this for appointment creation
-            }
+        if (tempOfferData && tempOfferData.slots) {
+          timeSelectionIndex = parseTimeSelection(messageText, tempOfferData.slots);
+          if (timeSelectionIndex !== null) {
+            console.log(`✅ User selected time slot option ${timeSelectionIndex + 1}`);
+            appointmentOfferData = tempOfferData; // Use this for appointment creation
           }
         }
       } catch (parseErr) {
