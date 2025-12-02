@@ -580,28 +580,40 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
       const conversation = await findConversationForContact(contactId);
       if (conversation) {
         finalConversationId = conversation.id || conversation._id;
-        // Infer type from conversation
-        const lastType = conversation.lastMessageType || conversation.type || "";
-        const t = lastType.toUpperCase();
-        if (t.includes("INSTAGRAM")) {
-          dmType = "IG";
-        } else if (t.includes("FACEBOOK")) {
-          dmType = "FB";
-        } else {
-          dmType = "SOCIAL"; // Fallback
-        }
+        // Use the proper inference function to get the correct type enum
+        dmType = await inferConversationMessageType(contactId);
         console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
       }
+    } else {
+      // If conversationId was provided, still infer the type
+      dmType = await inferConversationMessageType(contactId);
     }
 
     // If we have a conversationId, use it
     if (finalConversationId) {
+      // Ensure we have a valid type (IG or FB for social media DMs)
+      if (!dmType || (dmType !== "IG" && dmType !== "FB")) {
+        // Try to infer from contact tags or default to IG
+        const contact = await getContact(contactId);
+        const tags = contact?.tags || [];
+        const hasInstagram = tags.some(t => String(t).toUpperCase().includes("INSTAGRAM"));
+        const hasFacebook = tags.some(t => String(t).toUpperCase().includes("FACEBOOK"));
+        
+        if (hasInstagram) {
+          dmType = "IG";
+        } else if (hasFacebook) {
+          dmType = "FB";
+        } else {
+          dmType = "IG"; // Default to IG for social media DMs
+        }
+      }
+
       try {
         const payload = {
           conversationId: finalConversationId,
           contactId,
           message: body,
-          type: dmType || "SOCIAL", // Use inferred type or fallback
+          type: dmType, // Use inferred type (IG or FB)
         };
 
         console.log("📨 Sending DM reply via GHL:", payload);
