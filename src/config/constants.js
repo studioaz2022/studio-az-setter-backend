@@ -40,6 +40,7 @@ const SYSTEM_FIELDS = {
   PENDING_SLOT_ARTIST: "pending_slot_artist", // Artist for pending slot
   PENDING_SLOT_CALENDAR: "pending_slot_calendar", // Calendar ID for pending slot
   PENDING_SLOT_MODE: "pending_slot_mode", // Consult mode (online/in-person)
+  CONSULT_EXPLAINED: "consult_explained", // Whether consult process has been explained
 };
 
 // Tattoo Custom Field Keys

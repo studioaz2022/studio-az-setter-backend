@@ -47,31 +47,39 @@ const {
 
 const app = express();
 
-// 🔹 Booking intent phrases that bypass AI and go directly to slot offering
-// These should trigger slot offering in ANY phase - user asking for times = give them times
-const BOOKING_INTENT_PHRASES = [
-  /^yes$/i,
-  /^yes\s*[!.?]*$/i,
-  /yes\s*what\s*time/i,
+// 🔹 STRONG booking intent phrases - explicit time/booking requests
+// These trigger in ANY phase - user is clearly asking for times
+const STRONG_BOOKING_INTENT_PHRASES = [
   /what\s*time/i,
   /what\s*times?\s*(do\s*you\s*have|are\s*available)/i,
   /what\s*availability/i,
   /what\s*days/i,
   /send\s*(me\s*)?(the\s*)?(times|link)/i,
-  /i'?m\s*ready/i,
-  /sounds?\s*good/i,
-  /that\s*works/i,
-  /^sure$/i,
-  /^ok(ay)?$/i,
-  /^perfect$/i,
   /what'?s\s*(your\s*)?availability/i,
   /can\s*you\s*do\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
   /when\s*can\s*(we|you)\s*(do\s*it|book|meet)/i,
   /when\s*is\s*the\s*consult/i,
   /ready\s*to\s*(book|lock|schedule)/i,
-  /book\s*(it|me)/i,
+  /book\s*(it|me|the\s*consult)/i,
   /lock\s*(it\s*)?in/i,
+  /let'?s\s*(do\s*it|book|schedule)/i,
+  /i\s*want\s*to\s*book/i,
+  /schedule\s*(a\s*)?(consult|appointment)/i,
+];
+
+// 🔹 WEAK booking intent phrases - generic affirmatives
+// These only trigger if we have core tattoo info OR are in late phase
+const WEAK_BOOKING_INTENT_PHRASES = [
+  /^yes$/i,
+  /^yes\s*[!.?]*$/i,
+  /^sure$/i,
+  /^ok(ay)?$/i,
+  /^perfect$/i,
   /^(yep|yup|yeah)$/i,
+  /sounds?\s*good/i,
+  /that\s*works/i,
+  /i'?m\s*ready/i,
+  /let'?s\s*do\s*it/i,
 ];
 
 // 🔹 Slot selection phrases - user is picking a specific time
@@ -87,13 +95,79 @@ const SLOT_SELECTION_PHRASES = [
   /i'?ll\s*take\s*(the\s*)?(first|second|third|1st|2nd|3rd|\d)/i,
 ];
 
+// 🔹 Weekday names for extraction
+const WEEKDAYS = [
+  { name: "sunday", abbr: "sun", index: 0 },
+  { name: "monday", abbr: "mon", index: 1 },
+  { name: "tuesday", abbr: "tue", index: 2 },
+  { name: "wednesday", abbr: "wed", index: 3 },
+  { name: "thursday", abbr: "thu", index: 4 },
+  { name: "friday", abbr: "fri", index: 5 },
+  { name: "saturday", abbr: "sat", index: 6 },
+];
+
 /**
- * Check if message indicates booking intent (should bypass AI and show times)
+ * Check if message indicates STRONG booking intent (explicit time request)
+ * These trigger in ANY phase
  */
-function isBookingIntent(messageText) {
+function isStrongBookingIntent(messageText) {
   if (!messageText) return false;
   const text = String(messageText).trim();
-  return BOOKING_INTENT_PHRASES.some(pattern => pattern.test(text));
+  return STRONG_BOOKING_INTENT_PHRASES.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if message indicates WEAK booking intent (generic affirmative)
+ * These only trigger if we have core info or are in late phase
+ */
+function isWeakBookingIntent(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).trim();
+  return WEAK_BOOKING_INTENT_PHRASES.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if it's safe to treat weak affirmatives as booking intent
+ * Only true if we have core tattoo info OR we're in a late phase
+ */
+function isSafeToTreatAsBookingIntent(contactProfile, currentPhase) {
+  // Must have core tattoo info (summary OR placement)
+  const hasCoreInfo = !!(
+    contactProfile?.tattooSummary || 
+    contactProfile?.tattooPlacement
+  );
+  
+  // Or be in a late phase
+  const inLatePhase = 
+    currentPhase === AI_PHASES.QUALIFICATION ||
+    currentPhase === AI_PHASES.CLOSING;
+  
+  return hasCoreInfo || inLatePhase;
+}
+
+/**
+ * Check if message indicates booking intent (combined logic)
+ * - Strong intent: triggers in any phase
+ * - Weak intent: only triggers if safe (has core info or late phase)
+ */
+function isBookingIntent(messageText, contactProfile = null, currentPhase = null) {
+  if (!messageText) return false;
+  
+  // Strong booking intent always triggers
+  if (isStrongBookingIntent(messageText)) {
+    return true;
+  }
+  
+  // Weak booking intent only triggers if safe
+  if (isWeakBookingIntent(messageText)) {
+    // If no context provided, default to false for safety
+    if (!contactProfile && !currentPhase) {
+      return false;
+    }
+    return isSafeToTreatAsBookingIntent(contactProfile, currentPhase);
+  }
+  
+  return false;
 }
 
 /**
@@ -103,6 +177,49 @@ function isSlotSelection(messageText) {
   if (!messageText) return false;
   const text = String(messageText).trim();
   return SLOT_SELECTION_PHRASES.some(pattern => pattern.test(text));
+}
+
+/**
+ * Detect user's consult mode preference from message
+ */
+function detectConsultModePreference(messageText) {
+  if (!messageText) return null;
+  const text = String(messageText).toLowerCase();
+  
+  if (text.includes("in person") || text.includes("in-person") || text.includes("come in") || text.includes("at the studio") || text.includes("face to face")) {
+    return "in-person";
+  }
+  if (text.includes("online") || text.includes("zoom") || text.includes("video") || text.includes("virtual") || text.includes("facetime")) {
+    return "online";
+  }
+  return null;
+}
+
+/**
+ * Extract requested weekday from message if user is asking for a specific day
+ */
+function extractRequestedWeekday(messageText) {
+  if (!messageText) return null;
+  const text = String(messageText).toLowerCase();
+  
+  for (const day of WEEKDAYS) {
+    // Check for full name or abbreviation
+    const fullMatch = new RegExp(`\\b${day.name}\\b`).test(text);
+    const abbrMatch = new RegExp(`\\b${day.abbr}\\b`).test(text);
+    
+    if (fullMatch || abbrMatch) {
+      return day;
+    }
+  }
+  return null;
+}
+
+/**
+ * Check if consult has been explained to this contact
+ */
+function hasConsultBeenExplained(contact) {
+  const cf = contact?.customField || contact?.customFields || {};
+  return cf.consult_explained === "Yes" || cf.consult_explained === true;
 }
 
 /**
@@ -1094,6 +1211,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const timesSent = hasTimesSent(freshContact);
   const storedDepositUrl = getStoredDepositLinkUrl(freshContact);
 
+  // Detect consult mode preference from user's message (or default to online)
+  const detectedConsultMode = detectConsultModePreference(messageText) || "online";
+
   // 🚀 SLOT SELECTION: User is picking a specific time (e.g., "Let's do Dec 3")
   // This should work in ANY phase - if they're picking a time, book it
   if (isSlotSelection(messageText) || isTimeSelection(messageText)) {
@@ -1101,10 +1221,13 @@ app.post("/ghl/message-webhook", async (req, res) => {
     skipAIEntirely = true;
 
     try {
-      // Generate slots to match against
+      // Check if user requested a specific weekday that might not be in our current slots
+      const requestedWeekday = extractRequestedWeekday(messageText);
+      
+      // Generate slots to match against (pass requested weekday if any)
       appointmentOfferData = await handleAppointmentOffer({
         contact: freshContact,
-        aiMeta: { consultMode: "online" },
+        aiMeta: { consultMode: detectedConsultMode, preferredDay: requestedWeekday?.name },
         contactProfile,
       });
 
@@ -1196,16 +1319,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
   }
 
   // 🚀 BOOKING INTENT: User is asking for times (e.g., "What times do you have?")
-  // This should work in ANY phase - if they're asking for times, give them times
-  if (!skipAIEntirely && isBookingIntent(messageText)) {
-    console.log("🚀 BOOKING INTENT DETECTED - bypassing AI, sending times directly");
+  // - Strong intent (explicit time request): triggers in any phase
+  // - Weak intent (generic "yes", "sounds good"): only triggers if we have core info or late phase
+  const bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
+  
+  if (!skipAIEntirely && bookingIntentDetected) {
+    // Log which type of intent was detected
+    const intentType = isStrongBookingIntent(messageText) ? "STRONG" : "WEAK (gated)";
+    console.log(`🚀 BOOKING INTENT DETECTED (${intentType}) - bypassing AI, sending times directly`);
     skipAIEntirely = true;
 
     try {
-      // Generate appointment slots
+      // Generate appointment slots with detected consult mode
       appointmentOfferData = await handleAppointmentOffer({
         contact: freshContact,
-        aiMeta: { consultMode: "online" },
+        aiMeta: { consultMode: detectedConsultMode },
         contactProfile,
       });
 
@@ -1213,6 +1341,23 @@ app.post("/ghl/message-webhook", async (req, res) => {
         const slotsText = appointmentOfferData.slots
           .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
           .join("\n");
+
+        // 📋 If times were already sent, use a shorter reminder message
+        if (timesSent) {
+          console.log("📅 Times already sent - sending short reminder");
+          
+          const reminderMessage = useEmojis
+            ? `For sure — here were the times I mentioned:\n\n${slotsText}\n\nWhich one works?`
+            : `For sure — here were the times I mentioned:\n\n${slotsText}\n\nWhich one works?`;
+          
+          await sendConversationMessage({
+            contactId,
+            body: reminderMessage,
+            channelContext,
+          });
+          
+          return res.status(200).json({ success: true, message: "Times reminder sent" });
+        }
 
         // Build combined message - deposit link + times in ONE message (compact)
         let combinedMessage;
@@ -1235,6 +1380,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
                 deposit_link_sent: true,
                 deposit_link_url: depositUrl, // Store URL for reuse
                 times_sent: true, // Track that times were sent
+                consult_explained: true, // Mark consult as explained
                 square_payment_link_id: paymentLinkId,
                 last_phase_update_at: new Date().toISOString(),
               });
@@ -1277,9 +1423,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
         });
         console.log("📅 Times sent directly (bypassed AI)");
         
-        // Mark times as sent
+        // Mark times as sent and consult explained
         await updateSystemFields(contactId, {
           times_sent: true,
+          consult_explained: true,
           ai_phase: AI_PHASES.CLOSING,
           last_phase_update_at: new Date().toISOString(),
         });

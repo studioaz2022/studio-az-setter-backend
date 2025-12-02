@@ -16,12 +16,28 @@ const {
 const { CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
 const { sendConversationMessage } = require("../../ghlClient");
 
+// Weekday name to index mapping
+const WEEKDAY_MAP = {
+  sunday: 0, sun: 0,
+  monday: 1, mon: 1,
+  tuesday: 2, tue: 2,
+  wednesday: 3, wed: 3,
+  thursday: 4, thu: 4,
+  friday: 5, fri: 5,
+  saturday: 6, sat: 6,
+};
+
 /**
  * Generate suggested time slots for a consult
- * For now, generates a simple set of options based on common availability
- * TODO: In the future, this could call a slots API or calendar availability endpoint
+ * Supports preferredDay (e.g., "wednesday") and preferredTimeWindow (e.g., "morning")
+ * 
+ * @param {Object} options
+ * @param {string} options.preferredTimeWindow - "morning", "afternoon", "evening"
+ * @param {string} options.preferredDay - Weekday name like "wednesday" or "friday"
  */
-function generateSuggestedSlots(preferredTimeWindow = null) {
+function generateSuggestedSlots(options = {}) {
+  const { preferredTimeWindow = null, preferredDay = null } = options;
+  
   const now = new Date();
   const slots = [];
 
@@ -29,20 +45,49 @@ function generateSuggestedSlots(preferredTimeWindow = null) {
   let currentDate = new Date(now);
   currentDate.setHours(0, 0, 0, 0);
 
-  // Skip to next weekday if today is weekend
-  while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
-    currentDate.setDate(currentDate.getDate() + 1);
+  // If user requested a specific weekday, start from the next occurrence of that day
+  if (preferredDay) {
+    const targetDayIndex = WEEKDAY_MAP[preferredDay.toLowerCase()];
+    if (targetDayIndex !== undefined) {
+      // Find next occurrence of the requested weekday
+      const currentDayIndex = currentDate.getDay();
+      let daysUntilTarget = targetDayIndex - currentDayIndex;
+      if (daysUntilTarget <= 0) {
+        daysUntilTarget += 7; // Move to next week if today or past
+      }
+      currentDate.setDate(currentDate.getDate() + daysUntilTarget);
+      
+      console.log(`📅 User requested ${preferredDay}, starting from ${currentDate.toDateString()}`);
+    }
+  } else {
+    // Default: Skip to next weekday if today is weekend
+    while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
+  }
+
+  // Determine hour based on time preference
+  let hour = 17; // Default: 5pm (evening)
+  if (preferredTimeWindow) {
+    const tw = preferredTimeWindow.toLowerCase();
+    if (tw.includes("morning")) {
+      hour = 10; // 10am
+    } else if (tw.includes("afternoon")) {
+      hour = 14; // 2pm
+    } else if (tw.includes("evening") || tw.includes("night")) {
+      hour = 17; // 5pm
+    }
   }
 
   // Generate 3 options
   for (let i = 0; i < 3; i++) {
-    // Find next weekday
-    while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
-      currentDate.setDate(currentDate.getDate() + 1);
+    // If not a specific day request, skip weekends
+    if (!preferredDay) {
+      while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+        currentDate.setDate(currentDate.getDate() + 1);
+      }
     }
 
-    // Default to evening (5pm) for weekdays, morning (10am) for weekends
-    const hour = preferredTimeWindow?.includes("morning") ? 10 : 17;
     const slotDate = new Date(currentDate);
     slotDate.setHours(hour, 0, 0, 0);
 
@@ -58,8 +103,12 @@ function generateSuggestedSlots(preferredTimeWindow = null) {
       });
     }
 
-    // Move to next day
-    currentDate.setDate(currentDate.getDate() + 1);
+    // Move to next day (or next week if specific day requested)
+    if (preferredDay) {
+      currentDate.setDate(currentDate.getDate() + 7); // Same day next week
+    } else {
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
   }
 
   return slots.slice(0, 3); // Return up to 3 options
@@ -217,6 +266,11 @@ function selectArtistByAvailability(consultMode = "online") {
 
 /**
  * Handle appointment booking when AI wants to offer times
+ * 
+ * @param {Object} params
+ * @param {Object} params.contact - GHL contact object
+ * @param {Object} params.aiMeta - AI metadata (consultMode, preferredTimeWindow, preferredDay)
+ * @param {Object} params.contactProfile - Contact profile with tattoo info
  */
 async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
   try {
@@ -238,6 +292,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
     // Determine consult mode (default to online)
     const consultMode = aiMeta?.consultMode || "online";
     const preferredTimeWindow = aiMeta?.preferredTimeWindow || null;
+    const preferredDay = aiMeta?.preferredDay || null;
 
     // Get calendar ID
     const calendarId = getCalendarIdForArtist(artist, consultMode);
@@ -246,14 +301,20 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
       return null;
     }
 
-    // Generate suggested slots
-    const slots = generateSuggestedSlots(preferredTimeWindow);
+    // Generate suggested slots with preferences
+    const slots = generateSuggestedSlots({
+      preferredTimeWindow,
+      preferredDay,
+    });
+    
     if (slots.length === 0) {
       console.warn("⚠️ Could not generate time slots");
       return null;
     }
 
-    console.log(`📅 Generated ${slots.length} time slots for ${artist} (${consultMode}):`, slots);
+    console.log(`📅 Generated ${slots.length} time slots for ${artist} (${consultMode}):`, 
+      preferredDay ? `(requested: ${preferredDay})` : "", 
+      slots.map(s => s.displayText));
 
     // Return slots for AI to present or backend to send
     return {
