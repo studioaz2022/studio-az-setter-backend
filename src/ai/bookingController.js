@@ -85,6 +85,12 @@ function formatSlotDisplay(date) {
 /**
  * Parse user's time selection from their message
  * Returns the selected slot index (0-based) or null if not found
+ * 
+ * Handles patterns like:
+ * - "option 1", "#2", "3"
+ * - "let's do Wednesday", "let's do Dec 3"
+ * - "Tuesday works", "I'll take the first one"
+ * - "5pm", "the evening one"
  */
 function parseTimeSelection(messageText, availableSlots) {
   if (!messageText || !availableSlots || availableSlots.length === 0) {
@@ -93,25 +99,65 @@ function parseTimeSelection(messageText, availableSlots) {
 
   const text = String(messageText).toLowerCase().trim();
 
-  // Check for explicit option numbers
+  // Check for explicit option numbers first
+  const optionMatch = text.match(/option\s*#?(\d)/i) || text.match(/^#?(\d)$/);
+  if (optionMatch) {
+    const num = parseInt(optionMatch[1], 10);
+    if (num >= 1 && num <= availableSlots.length) {
+      return num - 1;
+    }
+  }
+
+  // Check for ordinal references ("first", "second", "third")
+  const ordinals = ["first", "second", "third", "1st", "2nd", "3rd"];
+  for (let i = 0; i < ordinals.length && i < availableSlots.length; i++) {
+    if (text.includes(ordinals[i]) || text.includes(ordinals[i + 3])) {
+      return i % 3; // Map ordinals to 0, 1, 2
+    }
+  }
+
+  // Check for day names (full and abbreviated)
+  const daysFull = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const daysAbbr = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+  
   for (let i = 0; i < availableSlots.length; i++) {
-    if (
-      text.includes(`option ${i + 1}`) ||
-      text.includes(`#${i + 1}`) ||
-      text.includes(`${i + 1}`) ||
-      text === `${i + 1}`
-    ) {
+    const slotDate = new Date(availableSlots[i].startTime);
+    const dayIndex = slotDate.getDay();
+    const dayNameFull = daysFull[dayIndex];
+    const dayNameAbbr = daysAbbr[dayIndex];
+    
+    // Match full day name or abbreviation
+    if (text.includes(dayNameFull) || new RegExp(`\\b${dayNameAbbr}\\b`).test(text)) {
       return i;
     }
   }
 
-  // Check for day names
-  const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  // Check for month + day mentions (e.g., "Dec 3", "December 3rd")
+  const monthsFull = ["january", "february", "march", "april", "may", "june", 
+                      "july", "august", "september", "october", "november", "december"];
+  const monthsAbbr = ["jan", "feb", "mar", "apr", "may", "jun", 
+                      "jul", "aug", "sep", "oct", "nov", "dec"];
+  
   for (let i = 0; i < availableSlots.length; i++) {
     const slotDate = new Date(availableSlots[i].startTime);
-    const dayName = days[slotDate.getDay()];
-    if (text.includes(dayName)) {
-      return i;
+    const monthIndex = slotDate.getMonth();
+    const day = slotDate.getDate();
+    
+    const monthFull = monthsFull[monthIndex];
+    const monthAbbr = monthsAbbr[monthIndex];
+    
+    // Check for patterns like "dec 3", "december 3", "dec 3rd"
+    const dayPatterns = [
+      `${monthAbbr}\\s*${day}`,
+      `${monthFull}\\s*${day}`,
+      `${monthAbbr}\\s*${day}(st|nd|rd|th)?`,
+      `${monthFull}\\s*${day}(st|nd|rd|th)?`,
+    ];
+    
+    for (const pattern of dayPatterns) {
+      if (new RegExp(pattern, "i").test(text)) {
+        return i;
+      }
     }
   }
 
@@ -125,10 +171,21 @@ function parseTimeSelection(messageText, availableSlots) {
     if (
       text.includes(`${hour12}${ampm}`) ||
       text.includes(`${hour12}:00${ampm}`) ||
+      text.includes(`${hour12}:00 ${ampm}`) ||
       (hour >= 17 && text.includes("evening")) ||
+      (hour >= 12 && hour < 17 && text.includes("afternoon")) ||
       (hour < 12 && text.includes("morning"))
     ) {
       return i;
+    }
+  }
+
+  // Fallback: if message contains just a number that matches a slot
+  const justNumber = text.match(/^(\d)$/);
+  if (justNumber) {
+    const num = parseInt(justNumber[1], 10);
+    if (num >= 1 && num <= availableSlots.length) {
+      return num - 1;
     }
   }
 

@@ -48,14 +48,16 @@ const {
 const app = express();
 
 // 🔹 Booking intent phrases that bypass AI and go directly to slot offering
+// These should trigger slot offering in ANY phase - user asking for times = give them times
 const BOOKING_INTENT_PHRASES = [
   /^yes$/i,
   /^yes\s*[!.?]*$/i,
   /yes\s*what\s*time/i,
   /what\s*time/i,
   /what\s*times?\s*(do\s*you\s*have|are\s*available)/i,
-  /let'?s\s*(do\s*it|book)/i,
-  /send\s*(me\s*)?(the\s*)?link/i,
+  /what\s*availability/i,
+  /what\s*days/i,
+  /send\s*(me\s*)?(the\s*)?(times|link)/i,
   /i'?m\s*ready/i,
   /sounds?\s*good/i,
   /that\s*works/i,
@@ -65,19 +67,71 @@ const BOOKING_INTENT_PHRASES = [
   /what'?s\s*(your\s*)?availability/i,
   /can\s*you\s*do\s*(monday|tuesday|wednesday|thursday|friday|saturday|sunday)/i,
   /when\s*can\s*(we|you)\s*(do\s*it|book|meet)/i,
+  /when\s*is\s*the\s*consult/i,
   /ready\s*to\s*(book|lock|schedule)/i,
   /book\s*(it|me)/i,
   /lock\s*(it\s*)?in/i,
   /^(yep|yup|yeah)$/i,
 ];
 
+// 🔹 Slot selection phrases - user is picking a specific time
+const SLOT_SELECTION_PHRASES = [
+  /let'?s\s*(do|go\s*with|book)\s*(dec|december|jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|september|oct|october|nov|november)/i,
+  /let'?s\s*(do|go\s*with|book)\s*(mon|tue|wed|thu|fri|sat|sun)/i,
+  /let'?s\s*(do|go\s*with|book)\s*(option|#?\d)/i,
+  /i'?ll\s*(take|do|go\s*with)\s*(dec|december|option|#?\d|the\s*\d)/i,
+  /(dec|december|jan|january|feb|february|mon|tue|wed|thu|fri|sat|sun)\s*\d+/i,
+  /option\s*#?\d/i,
+  /#?\d\s*(works|is\s*good|please|sounds\s*good)/i,
+  /the\s*(first|second|third|1st|2nd|3rd)\s*(one|option|time)/i,
+  /i'?ll\s*take\s*(the\s*)?(first|second|third|1st|2nd|3rd|\d)/i,
+];
+
 /**
- * Check if message indicates booking intent (should bypass AI)
+ * Check if message indicates booking intent (should bypass AI and show times)
  */
 function isBookingIntent(messageText) {
   if (!messageText) return false;
   const text = String(messageText).trim();
   return BOOKING_INTENT_PHRASES.some(pattern => pattern.test(text));
+}
+
+/**
+ * Check if message is selecting a specific slot (should create appointment)
+ */
+function isSlotSelection(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).trim();
+  return SLOT_SELECTION_PHRASES.some(pattern => pattern.test(text));
+}
+
+// 🔹 In-memory store for pending appointments (before deposit)
+// Key: contactId, Value: { slot, calendarId, artist, consultMode, createdAt, depositLinkUrl }
+const pendingAppointments = new Map();
+
+/**
+ * Store a pending appointment for a contact
+ */
+function storePendingAppointment(contactId, appointmentData) {
+  pendingAppointments.set(contactId, {
+    ...appointmentData,
+    createdAt: new Date().toISOString(),
+  });
+  console.log(`📝 Stored pending appointment for contact ${contactId}:`, appointmentData.slot?.displayText);
+}
+
+/**
+ * Get pending appointment for a contact
+ */
+function getPendingAppointment(contactId) {
+  return pendingAppointments.get(contactId);
+}
+
+/**
+ * Clear pending appointment for a contact
+ */
+function clearPendingAppointment(contactId) {
+  pendingAppointments.delete(contactId);
 }
 
 /**
@@ -334,71 +388,128 @@ app.post(
                 // Don't fail the webhook if artist assignment fails
               }
 
-              // 📅 Confirm appointment after deposit is paid
-              try {
-                const consultCalendarIds = Object.values(CALENDARS);
-                const consultAppointments = await getConsultAppointmentsForContact(
-                  contactId,
-                  consultCalendarIds
-                );
+              // 📅 Check for pending appointment in memory first
+              const pendingApptInMemory = getPendingAppointment(contactId);
+              let appointmentCreated = false;
+              let appointmentSlotDisplay = null;
+              let appointmentArtist = null;
 
-                // Find the nearest future appointment with status "new"
-                const pendingAppointments = consultAppointments.filter(
-                  (apt) => apt.appointmentStatus === APPOINTMENT_STATUS.NEW
-                );
-
-                if (pendingAppointments.length > 0) {
-                  // Sort by startTime and get the earliest one
-                  pendingAppointments.sort(
-                    (a, b) => new Date(a.startTime) - new Date(b.startTime)
-                  );
-                  const appointmentToConfirm = pendingAppointments[0];
-
-                  // Update appointment status to "confirmed"
-                  await updateAppointmentStatus(
-                    appointmentToConfirm.id,
-                    APPOINTMENT_STATUS.CONFIRMED
-                  );
-
-                  console.log(`✅ Appointment confirmed after deposit:`, {
-                    appointmentId: appointmentToConfirm.id,
-                    startTime: appointmentToConfirm.startTime,
+              if (pendingApptInMemory && pendingApptInMemory.slot) {
+                console.log("📅 Found pending appointment in memory:", pendingApptInMemory.slot.displayText);
+                
+                // Create the actual appointment now that deposit is paid
+                try {
+                  const appointment = await createConsultAppointment({
+                    contactId,
+                    calendarId: pendingApptInMemory.calendarId,
+                    startTime: pendingApptInMemory.slot.startTime,
+                    endTime: pendingApptInMemory.slot.endTime,
+                    artist: pendingApptInMemory.artist,
+                    consultMode: pendingApptInMemory.consultMode,
+                    contactProfile: {}, // Will be fetched by createConsultAppointment
                   });
+                  
+                  console.log("✅ Appointment created from pending:", appointment.id);
+                  appointmentCreated = true;
+                  appointmentSlotDisplay = pendingApptInMemory.slot.displayText;
+                  appointmentArtist = pendingApptInMemory.artist;
+                  
+                  // Clear the pending appointment
+                  clearPendingAppointment(contactId);
+                } catch (apptErr) {
+                  console.error("❌ Error creating appointment from pending:", apptErr.message || apptErr);
+                }
+              }
 
-                  // Send confirmation message
-                  const confirmDate = new Date(appointmentToConfirm.startTime);
-                  const confirmMessage = `Perfect! Your consultation is now fully confirmed for ${formatSlotDisplay(confirmDate)}. We'll send you a reminder closer to the date.`;
+              // 📅 Also check GHL for any appointments with status "new"
+              if (!appointmentCreated) {
+                try {
+                  const consultCalendarIds = Object.values(CALENDARS);
+                  const consultAppointments = await getConsultAppointmentsForContact(
+                    contactId,
+                    consultCalendarIds
+                  );
 
-                  // Get contact to determine channel
-                  const contact = await getContact(contactId);
-                  if (contact) {
-                    const hasPhone = !!(contact.phone || contact.phoneNumber);
-                    const tags = contact.tags || [];
-                    const isDm = tags.some(
-                      (t) =>
-                        typeof t === "string" &&
-                        (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+                  // Find the nearest future appointment with status "new"
+                  const pendingGHLAppointments = consultAppointments.filter(
+                    (apt) => apt.appointmentStatus === APPOINTMENT_STATUS.NEW
+                  );
+
+                  if (pendingGHLAppointments.length > 0) {
+                    // Sort by startTime and get the earliest one
+                    pendingGHLAppointments.sort(
+                      (a, b) => new Date(a.startTime) - new Date(b.startTime)
+                    );
+                    const appointmentToConfirm = pendingGHLAppointments[0];
+
+                    // Update appointment status to "confirmed"
+                    await updateAppointmentStatus(
+                      appointmentToConfirm.id,
+                      APPOINTMENT_STATUS.CONFIRMED
                     );
 
-                    const channelContext = {
-                      isDm,
-                      hasPhone,
-                      conversationId: null,
-                      phone: contact.phone || contact.phoneNumber || null,
-                    };
-
-                    await sendConversationMessage({
-                      contactId,
-                      body: confirmMessage,
-                      channelContext,
+                    console.log(`✅ Appointment confirmed after deposit:`, {
+                      appointmentId: appointmentToConfirm.id,
+                      startTime: appointmentToConfirm.startTime,
                     });
+
+                    appointmentCreated = true;
+                    appointmentSlotDisplay = formatSlotDisplay(new Date(appointmentToConfirm.startTime));
+                    // Try to get artist from appointment
+                    appointmentArtist = appointmentToConfirm.assignedUserId || null;
+                  } else {
+                    console.log(`ℹ️ No pending appointments found to confirm for contact ${contactId}`);
                   }
-                } else {
-                  console.log(`ℹ️ No pending appointments found to confirm for contact ${contactId}`);
+                } catch (apptErr) {
+                  console.error("❌ Error checking/confirming GHL appointments:", apptErr.message || apptErr);
                 }
-              } catch (apptErr) {
-                console.error("❌ Error confirming appointment after deposit:", apptErr.message || apptErr);
-                // Don't fail the webhook if appointment confirmation fails
+              }
+
+              // 📬 Send confirmation DM - ALWAYS send this when deposit is paid
+              try {
+                const contact = await getContact(contactId);
+                if (contact) {
+                  const hasPhone = !!(contact.phone || contact.phoneNumber);
+                  const tags = contact.tags || [];
+                  const isDm = tags.some(
+                    (t) =>
+                      typeof t === "string" &&
+                      (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+                  );
+
+                  const channelContext = {
+                    isDm,
+                    hasPhone,
+                    conversationId: null,
+                    phone: contact.phone || contact.phoneNumber || null,
+                  };
+
+                  // Determine if channel supports emojis
+                  const useEmojis = channelSupportsEmojis(channelContext, contact);
+
+                  // Build confirmation message based on whether appointment was created
+                  let confirmMessage;
+                  if (appointmentCreated && appointmentSlotDisplay) {
+                    confirmMessage = useEmojis
+                      ? `Got your deposit 🙌\nYou're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}.\nYou'll get a reminder before your consult.`
+                      : `Got your deposit! You're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}. You'll get a reminder before your consult.`;
+                  } else {
+                    // Deposit paid but no appointment yet - prompt them to pick a time
+                    confirmMessage = useEmojis
+                      ? `Got your deposit 🙌\nNow let's lock in your consult time. What days work best for you?`
+                      : `Got your deposit! Now let's lock in your consult time. What days work best for you?`;
+                  }
+
+                  await sendConversationMessage({
+                    contactId,
+                    body: confirmMessage,
+                    channelContext,
+                  });
+                  console.log("📬 Deposit confirmation DM sent to contact");
+                }
+              } catch (dmErr) {
+                console.error("❌ Error sending deposit confirmation DM:", dmErr.message || dmErr);
+                // Don't fail the webhook if DM fails
               }
 
               // (Optional) Later we'll also move pipeline stage here once we have stage IDs nailed down.
@@ -916,20 +1027,107 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const useEmojis = channelSupportsEmojis(channelContext, freshContact);
   console.log(`📱 Channel emoji support: ${useEmojis ? "yes" : "no (SMS)"}`);
 
-  // 📅 Check if user is selecting a time slot (before AI call to handle booking)
+  // 📅 Check if user is selecting a time slot or showing booking intent
   let appointmentOfferData = null;
   let timeSelectionIndex = null;
   let skipAIEntirely = false;
 
-  // Check if user is in booking phase
-  const isInBookingPhaseBeforeAI = 
-    systemState.currentPhase === AI_PHASES.CLOSING || 
-    systemState.currentPhase === AI_PHASES.QUALIFICATION;
+  // Get any existing pending appointment for this contact
+  const existingPendingAppt = getPendingAppointment(contactId);
 
-  // 🚀 BOOKING INTENT BYPASS: Check if user is showing booking intent
-  // If so, bypass AI entirely and go straight to deposit link + time slots
-  if (isInBookingPhaseBeforeAI && isBookingIntent(messageText)) {
-    console.log("🚀 BOOKING INTENT DETECTED - bypassing AI, sending deposit link + slots directly");
+  // Check deposit status
+  const alreadySent = contactProfile.depositLinkSent === true;
+  const alreadyPaid = contactProfile.depositPaid === true;
+
+  // 🚀 SLOT SELECTION: User is picking a specific time (e.g., "Let's do Dec 3")
+  // This should work in ANY phase - if they're picking a time, book it
+  if (isSlotSelection(messageText) || isTimeSelection(messageText)) {
+    console.log("🎯 SLOT SELECTION DETECTED - user is picking a specific time");
+    skipAIEntirely = true;
+
+    try {
+      // Generate slots to match against
+      appointmentOfferData = await handleAppointmentOffer({
+        contact: freshContact,
+        aiMeta: { consultMode: "online" },
+        contactProfile,
+      });
+
+      if (appointmentOfferData && appointmentOfferData.slots) {
+        const matchedIndex = parseTimeSelection(messageText, appointmentOfferData.slots);
+        if (matchedIndex !== null) {
+          console.log(`✅ Matched slot ${matchedIndex + 1}: ${appointmentOfferData.slots[matchedIndex].displayText}`);
+          const selectedSlot = appointmentOfferData.slots[matchedIndex];
+
+          // Create a pending appointment record
+          storePendingAppointment(contactId, {
+            slot: selectedSlot,
+            calendarId: appointmentOfferData.calendarId,
+            artist: appointmentOfferData.artist,
+            consultMode: appointmentOfferData.consultMode,
+          });
+
+          // Send confirmation message - DO NOT ask "ready to lock it in?"
+          // User already committed by picking a time
+          let confirmMessage;
+          if (alreadyPaid) {
+            // Deposit already paid - fully confirm
+            confirmMessage = useEmojis
+              ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"} 🙌`
+              : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"}.`;
+            
+            // Create the actual appointment
+            try {
+              const appointment = await createConsultAppointment({
+                contactId,
+                calendarId: appointmentOfferData.calendarId,
+                startTime: selectedSlot.startTime,
+                endTime: selectedSlot.endTime,
+                artist: appointmentOfferData.artist,
+                consultMode: appointmentOfferData.consultMode,
+                contactProfile,
+              });
+              console.log("✅ Appointment created (deposit already paid):", appointment.id);
+              clearPendingAppointment(contactId);
+            } catch (apptErr) {
+              console.error("❌ Error creating appointment:", apptErr.message || apptErr);
+            }
+          } else {
+            // Deposit not yet paid - hold the slot
+            confirmMessage = useEmojis
+              ? `Got you — I'll hold ${selectedSlot.displayText} for you.\nOnce the deposit comes through, you'll be officially locked in 🙌`
+              : `Got you — I'll hold ${selectedSlot.displayText} for you. Once the deposit comes through, you'll be officially locked in.`;
+          }
+
+          await sendConversationMessage({
+            contactId,
+            body: confirmMessage,
+            channelContext,
+          });
+
+          // Update phase
+          await updateSystemFields(contactId, {
+            ai_phase: AI_PHASES.CLOSING,
+            last_phase_update_at: new Date().toISOString(),
+          });
+
+          return res.status(200).json({ success: true, message: "Slot selected and held" });
+        } else {
+          console.log("⚠️ Could not match slot selection to available slots");
+          // Fall through to AI if we couldn't match the slot
+          skipAIEntirely = false;
+        }
+      }
+    } catch (slotErr) {
+      console.error("❌ Error handling slot selection:", slotErr.message || slotErr);
+      skipAIEntirely = false;
+    }
+  }
+
+  // 🚀 BOOKING INTENT: User is asking for times (e.g., "What times do you have?")
+  // This should work in ANY phase - if they're asking for times, give them times
+  if (!skipAIEntirely && isBookingIntent(messageText)) {
+    console.log("🚀 BOOKING INTENT DETECTED - bypassing AI, sending times directly");
     skipAIEntirely = true;
 
     try {
@@ -940,59 +1138,67 @@ app.post("/ghl/message-webhook", async (req, res) => {
         contactProfile,
       });
 
-      // Check if deposit already sent
-      const alreadySent = contactProfile.depositLinkSent === true;
-      const alreadyPaid = contactProfile.depositPaid === true;
-
-      // Send deposit link if not already sent/paid
-      if (!alreadyPaid && !alreadySent) {
-        console.log("💳 Generating deposit link for booking intent...");
-        try {
-          const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
-            contactId,
-            amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
-            description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
-          });
-
-          if (depositUrl) {
-            await updateSystemFields(contactId, {
-              deposit_link_sent: true,
-              square_payment_link_id: paymentLinkId,
-              last_phase_update_at: new Date().toISOString(),
-            });
-
-            const depositMessage = useEmojis
-              ? `Perfect 🙌 Here's your $100 refundable deposit link — it goes straight toward your tattoo:\n${depositUrl}`
-              : `Perfect! Here's your $100 refundable deposit link — it goes straight toward your tattoo:\n${depositUrl}`;
-
-            await sendConversationMessage({
-              contactId,
-              body: depositMessage,
-              channelContext,
-            });
-            console.log("💳 Deposit link sent");
-          }
-        } catch (depositErr) {
-          console.error("❌ Error sending deposit link:", depositErr.message || depositErr);
-        }
-      }
-
-      // Send time slots
       if (appointmentOfferData && appointmentOfferData.slots && appointmentOfferData.slots.length > 0) {
         const slotsText = appointmentOfferData.slots
           .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
           .join("\n");
 
-        const slotsMessage = useEmojis
-          ? `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`
-          : `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`;
+        // Build combined message - deposit link + times in ONE message (compact)
+        let combinedMessage;
+        
+        if (!alreadyPaid && !alreadySent) {
+          // First time - send deposit link + times together
+          console.log("💳 Generating deposit link for booking intent...");
+          try {
+            const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
+              contactId,
+              amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+              description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+            });
+
+            if (depositUrl) {
+              await updateSystemFields(contactId, {
+                deposit_link_sent: true,
+                square_payment_link_id: paymentLinkId,
+                last_phase_update_at: new Date().toISOString(),
+              });
+
+              // Store the deposit URL for reuse
+              storePendingAppointment(contactId, {
+                ...existingPendingAppt,
+                depositLinkUrl: depositUrl,
+              });
+
+              // Combined message: deposit + times
+              combinedMessage = useEmojis
+                ? `Here are the consult times:\n\n${slotsText}\n\nTo hold a spot we do a $100 refundable deposit that goes straight toward your tattoo.\nHere's the link: ${depositUrl}`
+                : `Here are the consult times:\n\n${slotsText}\n\nTo hold a spot we do a $100 refundable deposit that goes straight toward your tattoo.\nHere's the link: ${depositUrl}`;
+            }
+          } catch (depositErr) {
+            console.error("❌ Error creating deposit link:", depositErr.message || depositErr);
+            // Still send times even if deposit link fails
+            combinedMessage = useEmojis
+              ? `Got you — here are the times we've got open:\n\n${slotsText}\n\nWhich one works for you?`
+              : `Got you — here are the times we've got open:\n\n${slotsText}\n\nWhich one works for you?`;
+          }
+        } else if (alreadySent && !alreadyPaid) {
+          // Deposit link already sent - just send times, remind about deposit
+          combinedMessage = useEmojis
+            ? `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot 🙌`
+            : `Got you — here are the times:\n\n${slotsText}\n\nOnce the deposit comes through I'll lock in your spot.`;
+        } else {
+          // Deposit already paid - just send times
+          combinedMessage = useEmojis
+            ? `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`
+            : `Here are the times I've got:\n\n${slotsText}\n\nWhich one works for you?`;
+        }
 
         await sendConversationMessage({
           contactId,
-          body: slotsMessage,
+          body: combinedMessage,
           channelContext,
         });
-        console.log("📅 Time slots sent directly (bypassed AI)");
+        console.log("📅 Times sent directly (bypassed AI)");
       }
 
       // Update phase to closing
@@ -1004,32 +1210,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
       return res.status(200).json({ success: true, message: "Booking intent handled directly" });
     } catch (bookingErr) {
       console.error("❌ Error handling booking intent:", bookingErr.message || bookingErr);
-      // Fall through to normal AI flow if booking intent handling fails
       skipAIEntirely = false;
-    }
-  }
-
-  // 📅 Check if user is selecting a specific time slot
-  if (isInBookingPhaseBeforeAI && isTimeSelection(messageText) && !skipAIEntirely) {
-    console.log("🔍 Detected potential time selection - generating slots to check match");
-    try {
-      const tempOfferData = await handleAppointmentOffer({
-        contact: freshContact,
-        aiMeta: { consultMode: "online" },
-        contactProfile,
-      });
-
-      if (tempOfferData && tempOfferData.slots) {
-        const matchedIndex = parseTimeSelection(messageText, tempOfferData.slots);
-        if (matchedIndex !== null) {
-          console.log(`✅ User selected time slot option ${matchedIndex + 1} - handling booking directly`);
-          timeSelectionIndex = matchedIndex;
-          appointmentOfferData = tempOfferData;
-          skipAIEntirely = true;
-        }
-      }
-    } catch (timeErr) {
-      console.error("❌ Error checking time selection:", timeErr.message || timeErr);
     }
   }
 
@@ -1383,38 +1564,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.error("❌ Error while handling AI deposit link logic:", err);
         }
       }
-    } else if (skipAIForTimeSelection && timeSelectionIndex !== null) {
-        // User selected a time but we skipped AI - handle booking directly
-        try {
-          const selectedSlot = appointmentOfferData.slots[timeSelectionIndex];
-          const appointment = await createConsultAppointment({
-            contactId,
-            calendarId: appointmentOfferData.calendarId,
-            startTime: selectedSlot.startTime,
-            endTime: selectedSlot.endTime,
-            artist: appointmentOfferData.artist,
-            consultMode: appointmentOfferData.consultMode,
-            contactProfile,
-          });
-
-          console.log("✅ Appointment created successfully (direct booking):", {
-            appointmentId: appointment.id,
-            startTime: selectedSlot.startTime,
-          });
-          
-          return res.status(200).json({ success: true, message: "Appointment booked" });
-        } catch (apptErr) {
-          console.error("❌ Error creating appointment:", apptErr.message || apptErr);
-          await sendConversationMessage({
-            contactId,
-            body: "Sorry, I had trouble booking that time. Can you try picking another option?",
-            channelContext,
-          });
-          return res.status(200).json({ success: false, message: "Booking failed" });
-        }
-      } else {
-        console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
-      }
+    } else {
+      console.warn("⚠️ AI result did not contain bubbles array, nothing sent.");
+    }
   } catch (err) {
     console.error(
       "❌ Error generating or sending AI DM suggestion:",
