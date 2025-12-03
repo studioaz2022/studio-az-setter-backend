@@ -1725,10 +1725,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
             if (depositUrl) {
               depositUrlToStore = depositUrl;
               
+              // Store deposit-related fields immediately (success path)
               await updateSystemFields(contactId, {
                 deposit_link_sent: true,
                 deposit_link_url: depositUrl,
-                times_sent: true,
                 square_payment_link_id: paymentLinkId,
                 last_phase_update_at: new Date().toISOString(),
               });
@@ -1751,9 +1751,12 @@ app.post("/ghl/message-webhook", async (req, res) => {
             }
           } catch (depositErr) {
             console.error("❌ Error creating deposit link:", depositErr.message || depositErr);
-            // Still send times even if deposit link fails
+            // Still send times even if deposit link fails (user saw them, so mark times_sent)
+            // But DON'T set deposit fields or consult_explained (we didn't explain it)
             messageParts.push(`Got you — here are the times we've got open:\n${slotsText}`);
             messageParts.push("Which one works for you?");
+            // Note: times_sent will be set at the end (line 1788) even on error
+            // This prevents re-showing times on next booking intent, but allows retry of deposit
           }
         } else if (alreadySent && !alreadyPaid) {
           // Deposit link already sent - short reminder with times
@@ -1783,13 +1786,19 @@ app.post("/ghl/message-webhook", async (req, res) => {
         });
         console.log("📅 Times sent directly (bypassed AI)");
         
-        // Mark times as sent; mark consult explained only if we just explained it
+        // Mark times as sent (even if deposit failed - user saw them, prevents re-showing)
+        // Mark consult explained ONLY if we actually explained it this turn
+        // This ensures:
+        // - User doesn't see times again on next booking intent (times_sent = true)
+        // - Deposit can retry on next booking intent (deposit_link_sent not set on error)
+        // - Consult explanation only marked if we actually sent it (needsConsultExplained)
         const fieldsToUpdate = {
-          times_sent: true,
+          times_sent: true, // Always set - user saw times regardless of deposit success/failure
           ai_phase: AI_PHASES.CLOSING,
           last_phase_update_at: new Date().toISOString(),
         };
         if (needsConsultExplained) {
+          // Only set if we actually explained consult this turn (not on error path)
           fieldsToUpdate.consult_explained = true;
         }
         await updateSystemFields(contactId, fieldsToUpdate);
