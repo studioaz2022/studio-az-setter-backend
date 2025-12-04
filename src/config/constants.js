@@ -31,6 +31,17 @@ const SYSTEM_FIELDS = {
   DEPOSIT_PAID: "deposit_paid",
   SQUARE_PAYMENT_LINK_ID: "square_payment_link_id",
   LAST_PHASE_UPDATE_AT: "last_phase_update_at",
+  OPPORTUNITY_ID: "opportunity_id",
+  OPPORTUNITY_STAGE: "opportunity_stage",
+  CONSULTATION_TYPE: "consultation_type",
+  ASSIGNED_ARTIST: "assigned_artist",
+  ARTIST_ASSIGNED_AT: "artist_assigned_at",
+  RETURNING_CLIENT: "returning_client",
+  CLIENT_LIFETIME_VALUE: "client_lifetime_value",
+  TOTAL_TATTOOS_COMPLETED: "total_tattoos_completed",
+  TATTOO_BOOKED: "tattoo_booked",
+  TATTOO_COMPLETED: "tattoo_completed",
+  COLD_NURTURE_LOST: "cold_nurture_lost",
   // Booking state fields (persisted for crash recovery)
   TIMES_SENT: "times_sent", // Whether time options have been sent
   DEPOSIT_LINK_URL: "deposit_link_url", // The actual deposit URL for reuse
@@ -104,6 +115,18 @@ const CALENDARS = {
   ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
 };
 
+const OPPORTUNITY_STAGES = {
+  INTAKE: "INTAKE",
+  DISCOVERY: "DISCOVERY",
+  DEPOSIT_PENDING: "DEPOSIT_PENDING",
+  QUALIFIED: "QUALIFIED",
+  CONSULT_APPOINTMENT: "CONSULT_APPOINTMENT",
+  CONSULT_MESSAGE: "CONSULT_MESSAGE",
+  TATTOO_BOOKED: "TATTOO_BOOKED",
+  COMPLETED: "COMPLETED",
+  COLD_NURTURE_LOST: "COLD_NURTURE_LOST",
+};
+
 // Appointment hold configuration
 const HOLD_CONFIG = {
   HOLD_MINUTES: 15, // Hold time before releasing slot
@@ -140,5 +163,6 @@ module.exports = {
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
   ARTIST_ASSIGNED_USER_IDS,
+  OPPORTUNITY_STAGES,
 };
 

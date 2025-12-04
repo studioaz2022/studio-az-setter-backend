@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "jest"
   },
   "keywords": [],
   "author": "",
@@ -19,5 +19,9 @@
     "multer": "^2.0.2",
     "openai": "^6.9.1",
     "square": "^43.2.1"
+  },
+  "devDependencies": {
+    "@jest/test-sequencer": "^30.2.0",
+    "jest": "^30.2.0"
   }
 }
