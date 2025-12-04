@@ -1,13 +1,25 @@
 // artistRouter.js
 // Style-based artist assignment and routing logic
 
-const { getContact, updateSystemFields, updateTattooFields } = require("../../ghlClient");
+const {
+  getContact,
+  updateSystemFields,
+  updateTattooFields,
+  updateContactAssignedUser,
+} = require("../../ghlClient");
 const {
   SYSTEM_FIELDS,
   TATTOO_FIELDS,
   CALENDARS,
   ARTIST_ASSIGNED_USER_IDS,
 } = require("../config/constants");
+const { searchOpportunities } = require("../clients/ghlOpportunityClient");
+
+function formatArtistKey(key) {
+  if (!key) return null;
+  const lower = String(key).toLowerCase();
+  return lower.charAt(0).toUpperCase() + lower.slice(1);
+}
 
 /**
  * Artist style mappings
@@ -22,16 +34,30 @@ const ARTIST_STYLE_MAP = {
   // Add more style mappings as needed
 };
 
+const TRACKED_ARTISTS = new Set([
+  "Joan",
+  "Andrew",
+  ...Object.keys(ARTIST_ASSIGNED_USER_IDS || {}).map((key) =>
+    formatArtistKey(key)
+  ),
+  ...Object.values(ARTIST_STYLE_MAP || {}).flat(),
+]);
+
+function buildInitialWorkloadMap() {
+  const base = {};
+  Array.from(TRACKED_ARTISTS)
+    .filter(Boolean)
+    .forEach((name) => {
+      base[name] = 0;
+    });
+  return base;
+}
+
 /**
  * Artist workload tracking (placeholder - should be fetched from GHL or external system)
  * Format: { artistName: currentWorkloadCount }
  */
-let artistWorkloads = {
-  Joan: 0,
-  Artist2: 0,
-  Artist3: 0,
-  Artist4: 0,
-};
+let artistWorkloads = buildInitialWorkloadMap();
 
 /**
  * Get assigned userId for an artist (used when creating GHL appointments)
@@ -111,33 +137,122 @@ function findArtistsForStyle(style) {
   return null;
 }
 
+function normalizeArtistName(name) {
+  if (!name) return null;
+  const trimmed = String(name).trim();
+  if (!trimmed) return null;
+  const lower = trimmed.toLowerCase();
+  if (lower.includes("joan")) return "Joan";
+  if (lower.includes("andrew")) return "Andrew";
+  return trimmed;
+}
+
+function detectArtistMention(messageText) {
+  if (!messageText) return null;
+  const text = String(messageText).toLowerCase();
+  const artists = ["joan", "andrew"];
+
+  for (const artist of artists) {
+    const patterns = [
+      new RegExp(`\\b${artist}\\b`, "i"),
+      new RegExp(`with\\s+${artist}`, "i"),
+      new RegExp(`${artist}'?s`, "i"),
+      new RegExp(`artist\\s+(named\\s+)?${artist}`, "i"),
+      new RegExp(`technician\\s+(named\\s+)?${artist}`, "i"),
+    ];
+
+    if (patterns.some((pattern) => pattern.test(text))) {
+      return normalizeArtistName(artist);
+    }
+  }
+  return null;
+}
+
+function mapAssignedUserIdToArtist(userId) {
+  if (!userId) return null;
+  const match = Object.entries(ARTIST_ASSIGNED_USER_IDS).find(
+    ([, value]) => value === userId
+  );
+  if (!match) return null;
+  return formatArtistKey(match[0]);
+}
+
+async function getArtistWorkloads() {
+  const base = buildInitialWorkloadMap();
+
+  try {
+    const opportunities = await searchOpportunities({
+      query: { status: "open" },
+      pagination: { limit: 500, page: 1 },
+    });
+
+    opportunities.forEach((opp) => {
+      const assignedUserId = opp.assignedUserId || opp.assigned_user_id;
+      const artistName = mapAssignedUserIdToArtist(assignedUserId);
+      if (artistName) {
+        base[artistName] = (base[artistName] || 0) + 1;
+      }
+    });
+
+    artistWorkloads = { ...base };
+  } catch (err) {
+    console.error(
+      "❌ Error fetching artist workloads:",
+      err.response?.data || err.message
+    );
+  }
+
+  return { ...artistWorkloads };
+}
+
+async function getArtistWithLowestWorkload(candidateArtists = null) {
+  const workloads = await getArtistWorkloads();
+  const pool =
+    Array.isArray(candidateArtists) && candidateArtists.length > 0
+      ? candidateArtists
+      : Object.keys(workloads);
+
+  let selected = null;
+  let lowest = Number.POSITIVE_INFINITY;
+
+  pool.forEach((artist) => {
+    const normalized = normalizeArtistName(artist);
+    if (!normalized) {
+      return;
+    }
+    const workload =
+      workloads[normalized] !== undefined
+        ? workloads[normalized]
+        : Number.POSITIVE_INFINITY;
+
+    if (workload < lowest) {
+      lowest = workload;
+      selected = normalized;
+    }
+  });
+
+  if (!selected) {
+    selected = "Joan"; // Default fallback
+  }
+
+  return selected;
+}
+
 /**
  * Select artist with workload balancing
  * Given a list of candidate artists, returns the one with the lowest workload
  */
-function selectArtistWithWorkloadBalancing(candidateArtists) {
+async function selectArtistWithWorkloadBalancing(candidateArtists) {
   if (!candidateArtists || candidateArtists.length === 0) {
     return null;
   }
 
   // If only one candidate, return it
   if (candidateArtists.length === 1) {
-    return candidateArtists[0];
+    return normalizeArtistName(candidateArtists[0]);
   }
 
-  // Find artist with lowest workload
-  let selectedArtist = candidateArtists[0];
-  let lowestWorkload = artistWorkloads[selectedArtist] || 0;
-
-  for (const artist of candidateArtists) {
-    const workload = artistWorkloads[artist] || 0;
-    if (workload < lowestWorkload) {
-      lowestWorkload = workload;
-      selectedArtist = artist;
-    }
-  }
-
-  return selectedArtist;
+  return getArtistWithLowestWorkload(candidateArtists);
 }
 
 /**
@@ -145,30 +260,68 @@ function selectArtistWithWorkloadBalancing(candidateArtists) {
  * Priority:
  * 1. URL parameter override (?tech=Joan)
  * 2. Contact's artist preference
- * 3. Style-based routing
- * 4. Workload balancing
+ * 3. Artist mention in recent conversation (if provided)
+ * 4. Style-based routing
+ * 5. Workload balancing
  */
-function determineArtist(contact) {
+async function determineArtist(contact, options = {}) {
+  if (!contact) return null;
+  const { messageText = null } = options;
+
   // 1. Check for URL parameter override or explicit preference
   const preferredArtist = getArtistPreferenceFromContact(contact);
   if (preferredArtist) {
     console.log(`✅ Using preferred artist from contact: ${preferredArtist}`);
-    return preferredArtist;
+    return normalizeArtistName(preferredArtist);
   }
 
-  // 2. Style-based routing
+  // 2. Artist mention in conversation (SMS/DM)
+  if (messageText) {
+    const mentionedArtist = detectArtistMention(messageText);
+    if (mentionedArtist) {
+      console.log(`✅ Detected artist mention in conversation: ${mentionedArtist}`);
+      const contactId = contact.id || contact._id;
+      if (contactId) {
+        try {
+          await assignArtistToContact(contactId, mentionedArtist);
+        } catch (err) {
+          console.error(
+            "❌ Failed to persist artist mention:",
+            err.message || err
+          );
+        }
+      }
+      return mentionedArtist;
+    }
+  }
+
+  // 3. Style-based routing
   const tattooStyle = getTattooStyleFromContact(contact);
   if (tattooStyle) {
     const candidateArtists = findArtistsForStyle(tattooStyle);
     if (candidateArtists && candidateArtists.length > 0) {
-      const selectedArtist = selectArtistWithWorkloadBalancing(candidateArtists);
+      const selectedArtist = await selectArtistWithWorkloadBalancing(
+        candidateArtists
+      );
       console.log(`✅ Selected artist based on style "${tattooStyle}": ${selectedArtist}`);
       return selectedArtist;
     }
   }
 
-  // 3. Default fallback (could be null or a general artist)
-  console.warn(`⚠️ Could not determine artist for contact ${contact.id || contact._id}`);
+  // 4. Default fallback (lowest workload)
+  const fallbackArtist = await getArtistWithLowestWorkload();
+  if (fallbackArtist) {
+    console.log(
+      `ℹ️ Falling back to lowest-workload artist: ${fallbackArtist} (contact ${
+        contact.id || contact._id
+      })`
+    );
+    return fallbackArtist;
+  }
+
+  console.warn(
+    `⚠️ Could not determine artist for contact ${contact.id || contact._id}`
+  );
   return null;
 }
 
@@ -181,23 +334,36 @@ async function assignArtistToContact(contactId, artistName) {
   }
 
   try {
+    const normalizedArtist = normalizeArtistName(artistName);
+
     // Update tattoo field with assigned artist
     await updateTattooFields(contactId, {
-      [TATTOO_FIELDS.INQUIRED_TECHNICIAN]: artistName,
+      [TATTOO_FIELDS.INQUIRED_TECHNICIAN]: normalizedArtist,
     });
 
     // Update system fields
     await updateSystemFields(contactId, {
-      assigned_artist: artistName,
+      assigned_artist: normalizedArtist,
       artist_assigned_at: new Date().toISOString(),
     });
 
-    // Increment artist workload (placeholder - should be persisted)
-    if (artistWorkloads[artistName] !== undefined) {
-      artistWorkloads[artistName] = (artistWorkloads[artistName] || 0) + 1;
+    // Update CRM owner
+    const assignedUserId = getAssignedUserIdForArtist(normalizedArtist);
+    if (assignedUserId) {
+      await updateContactAssignedUser(contactId, assignedUserId);
+    } else {
+      console.warn(
+        `⚠️ No assignedUserId found for artist "${normalizedArtist}", owner not updated`
+      );
     }
 
-    console.log(`✅ Assigned artist ${artistName} to contact ${contactId}`);
+    // Increment in-memory workload cache
+    if (artistWorkloads[normalizedArtist] === undefined) {
+      artistWorkloads[normalizedArtist] = 0;
+    }
+    artistWorkloads[normalizedArtist] = (artistWorkloads[normalizedArtist] || 0) + 1;
+
+    console.log(`✅ Assigned artist ${normalizedArtist} to contact ${contactId}`);
   } catch (err) {
     console.error(`❌ Error assigning artist to contact ${contactId}:`, err.message || err);
     throw err;
@@ -231,7 +397,7 @@ async function autoAssignArtist(contactId) {
     }
 
     // Determine and assign artist
-    const artist = determineArtist(contact);
+    const artist = await determineArtist(contact);
     if (artist) {
       await assignArtistToContact(contactId, artist);
       return artist;
@@ -248,9 +414,17 @@ async function autoAssignArtist(contactId) {
  * Update artist workload (should be called when artist completes work or gets new assignment)
  */
 function updateArtistWorkload(artistName, delta) {
-  if (artistWorkloads[artistName] !== undefined) {
-    artistWorkloads[artistName] = Math.max(0, (artistWorkloads[artistName] || 0) + delta);
+  const normalized = normalizeArtistName(artistName);
+  if (!normalized) return;
+
+  if (artistWorkloads[normalized] === undefined) {
+    artistWorkloads[normalized] = 0;
   }
+
+  artistWorkloads[normalized] = Math.max(
+    0,
+    (artistWorkloads[normalized] || 0) + delta
+  );
 }
 
 /**
@@ -290,5 +464,8 @@ module.exports = {
   ARTIST_STYLE_MAP,
   artistWorkloads,
   getAssignedUserIdForArtist,
+  getArtistWorkloads,
+  getArtistWithLowestWorkload,
+  detectArtistMention,
 };
 

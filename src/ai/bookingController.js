@@ -5,8 +5,8 @@ const { getContact } = require("../../ghlClient");
 const {
   determineArtist,
   getCalendarIdForArtist,
-  artistWorkloads,
   getAssignedUserIdForArtist,
+  getArtistWithLowestWorkload,
 } = require("./artistRouter");
 const {
   createAppointment,
@@ -250,18 +250,15 @@ function parseTimeSelection(messageText, availableSlots) {
  * 2. Otherwise, select the artist with better availability
  * 3. For now, we use workload comparison as a simple heuristic
  */
-function selectArtistByAvailability(consultMode = "online") {
-  // Compare workloads - select artist with lower workload
-  const joanWorkload = artistWorkloads["Joan"] || 0;
-  const andrewWorkload = artistWorkloads["Andrew"] || 0;
-  
-  // TODO: Enhance this to check actual calendar availability for the requested timeframe
-  // For now, use workload as a simple balancing mechanism
-  if (joanWorkload <= andrewWorkload) {
+async function selectArtistByAvailability(consultMode = "online") {
+  const artist = await getArtistWithLowestWorkload();
+  if (!artist) {
+    console.warn(
+      `⚠️ selectArtistByAvailability could not find artist for mode ${consultMode}, defaulting to Joan`
+    );
     return "Joan";
-  } else {
-    return "Andrew";
   }
+  return artist;
 }
 
 /**
@@ -275,12 +272,14 @@ function selectArtistByAvailability(consultMode = "online") {
 async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
   try {
     // Determine artist - if not found, select by availability/workload
-    let artist = determineArtist(contact);
+    let artist = await determineArtist(contact, {
+      messageText: aiMeta?.latestMessageText,
+    });
     
     if (!artist) {
       console.log("ℹ️ No artist preference found, selecting by availability/workload");
       const consultMode = aiMeta?.consultMode || "online";
-      artist = selectArtistByAvailability(consultMode);
+      artist = await selectArtistByAvailability(consultMode);
       console.log(`✅ Selected artist ${artist} based on availability/workload`);
     }
 

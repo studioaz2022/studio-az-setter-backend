@@ -251,6 +251,33 @@ async function updateContact(contactId, body) {
 }
 
 /**
+ * Update the CRM owner (assigned user) for a contact.
+ * Used when we decide which artist owns the lead.
+ */
+async function updateContactAssignedUser(contactId, assignedUserId) {
+  if (!contactId || !assignedUserId) {
+    console.warn("updateContactAssignedUser missing contactId or assignedUserId");
+    return null;
+  }
+
+  try {
+    const res = await updateContact(contactId, { assignedUserId });
+    console.log(
+      "✅ Updated contact owner",
+      cleanLogObject({ contactId, assignedUserId })
+    );
+    return res;
+  } catch (err) {
+    console.error(
+      "❌ Error updating assigned user in GHL:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
+/**
  * Upsert a contact from the widget payload.
  * - mode = "partial" → background create/update, no consultation tag
  * - mode = "final"   → ensure consultation tag present (triggers Workflow 1)
@@ -896,6 +923,7 @@ module.exports = {
   updateTattooFields,
   uploadFilesToTattooCustomField,
   sendConversationMessage,
+  updateContactAssignedUser,
 };
 
 

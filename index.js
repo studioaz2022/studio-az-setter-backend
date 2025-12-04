@@ -28,8 +28,16 @@ const {
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
 const { createDepositLinkForContact, getContactIdFromOrder } = require("./src/payments/squareClient");
-const { DEPOSIT_CONFIG, AI_PHASES, LEAD_TEMPERATURES, SYSTEM_FIELDS, CALENDARS, APPOINTMENT_STATUS } = require("./src/config/constants");
-const { autoAssignArtist, determineArtist } = require("./src/ai/artistRouter");
+const {
+  DEPOSIT_CONFIG,
+  AI_PHASES,
+  LEAD_TEMPERATURES,
+  SYSTEM_FIELDS,
+  CALENDARS,
+  APPOINTMENT_STATUS,
+  TATTOO_FIELDS,
+} = require("./src/config/constants");
+const { autoAssignArtist, determineArtist, assignArtistToContact } = require("./src/ai/artistRouter");
 const { errorHandler, notFoundHandler } = require("./src/middleware/errorHandler");
 const { cleanLogObject } = require("./src/utils/logger");
 const {
@@ -105,6 +113,64 @@ const WEEKDAYS = [
   { name: "friday", abbr: "fri", index: 5 },
   { name: "saturday", abbr: "sat", index: 6 },
 ];
+
+function extractPreferredArtistFromPayload(payload = {}) {
+  const customFields =
+    payload.customFields ||
+    payload.custom_fields ||
+    payload.customField ||
+    {};
+
+  const rawValue =
+    customFields.inquired_technician ||
+    customFields[TATTOO_FIELDS?.INQUIRED_TECHNICIAN];
+
+  if (!rawValue) return null;
+  const trimmed = String(rawValue).trim();
+  return trimmed.length ? trimmed : null;
+}
+
+async function ensureArtistAssignment(contactId, { contact, preferredArtist } = {}) {
+  if (!contactId) return null;
+
+  try {
+    let contactRecord = contact;
+    if (!contactRecord || typeof contactRecord !== "object") {
+      contactRecord = await getContact(contactId);
+    }
+
+    if (!contactRecord) {
+      console.warn(`⚠️ Unable to load contact ${contactId} for artist assignment`);
+      return null;
+    }
+
+    const cf = contactRecord.customField || contactRecord.customFields || {};
+    const currentArtist = cf[TATTOO_FIELDS.INQUIRED_TECHNICIAN];
+
+    let artistToAssign =
+      (preferredArtist && preferredArtist.trim()) ||
+      (currentArtist && String(currentArtist).trim()) ||
+      null;
+
+    if (!artistToAssign) {
+      artistToAssign = await determineArtist(contactRecord);
+    }
+
+    if (!artistToAssign) {
+      console.warn(`⚠️ No artist determined for contact ${contactId}`);
+      return null;
+    }
+
+    await assignArtistToContact(contactId, artistToAssign);
+    return artistToAssign;
+  } catch (err) {
+    console.error(
+      `❌ Failed to ensure artist assignment for contact ${contactId}:`,
+      err.message || err
+    );
+    return null;
+  }
+}
 
 /**
  * Check if message indicates STRONG booking intent (explicit time request)
@@ -1473,7 +1539,11 @@ app.post("/ghl/message-webhook", async (req, res) => {
       // Generate slots to match against (pass requested weekday if any)
       appointmentOfferData = await handleAppointmentOffer({
         contact: freshContact,
-        aiMeta: { consultMode: detectedConsultMode, preferredDay: requestedWeekday?.name },
+        aiMeta: {
+          consultMode: detectedConsultMode,
+          preferredDay: requestedWeekday?.name,
+          latestMessageText: messageText,
+        },
         contactProfile,
       });
 
@@ -1595,7 +1665,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
       if (!calendarId) {
         appointmentOfferData = await handleAppointmentOffer({
           contact: freshContact,
-          aiMeta: { consultMode: detectedConsultMode },
+          aiMeta: {
+            consultMode: detectedConsultMode,
+            latestMessageText: messageText,
+          },
           contactProfile,
         });
         if (appointmentOfferData) {
@@ -1677,7 +1750,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
       // Generate appointment slots with detected consult mode
       appointmentOfferData = await handleAppointmentOffer({
         contact: freshContact,
-        aiMeta: { consultMode: detectedConsultMode },
+        aiMeta: {
+          consultMode: detectedConsultMode,
+          latestMessageText: messageText,
+        },
         contactProfile,
       });
 
@@ -2077,6 +2153,12 @@ app.post("/lead/partial", async (req, res) => {
       "partial"
     );
 
+    const preferredArtist = extractPreferredArtistFromPayload(req.body);
+    const assignedArtist = await ensureArtistAssignment(contactId, {
+      contact,
+      preferredArtist,
+    });
+
     console.log("✅ Partial upsert complete:", {
       contactId,
       firstName: contact?.firstName || contact?.first_name,
@@ -2084,12 +2166,14 @@ app.post("/lead/partial", async (req, res) => {
       email: contact?.email,
       phone: contact?.phone,
       tags: contact?.tags,
+      assignedArtist,
     });
 
     return res.json({
       ok: true,
       mode: "partial",
       contactId,
+      assignedArtist,
     });
   } catch (err) {
     console.error(
@@ -2153,12 +2237,19 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
     // 1️⃣ Upsert contact with full info, ensure 'consultation request' tag, etc.
     const { contactId, contact } = await upsertContactFromWidget(payload, "final");
 
+    const preferredArtist = extractPreferredArtistFromPayload(payload);
+    const assignedArtist = await ensureArtistAssignment(contactId, {
+      contact,
+      preferredArtist,
+    });
+
     console.log("✅ Final upsert complete:", {
       contactId,
       firstName: contact?.firstName || contact?.first_name,
       lastName: contact?.lastName || contact?.last_name,
       email: contact?.email,
       phone: contact?.phone,
+      assignedArtist,
     });
 
     // 2️⃣ Upload files to custom file field, if any
@@ -2173,7 +2264,7 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
       }
     }
 
-    return res.json({ ok: true, contactId });
+    return res.json({ ok: true, contactId, assignedArtist });
   } catch (err) {
     console.error(
       "❌ Error in /lead/final:",
