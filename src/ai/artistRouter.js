@@ -467,5 +467,6 @@ module.exports = {
   getArtistWorkloads,
   getArtistWithLowestWorkload,
   detectArtistMention,
+  getArtistPreferenceFromContact,
 };
 

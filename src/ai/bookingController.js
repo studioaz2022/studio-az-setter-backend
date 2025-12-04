@@ -7,6 +7,10 @@ const {
   getCalendarIdForArtist,
   getAssignedUserIdForArtist,
   getArtistWithLowestWorkload,
+  getArtistWorkloads,
+  getArtistPreferenceFromContact,
+  detectArtistMention,
+  assignArtistToContact,
 } = require("./artistRouter");
 const {
   createAppointment,
@@ -15,6 +19,9 @@ const {
 } = require("../clients/ghlCalendarClient");
 const { CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
 const { sendConversationMessage } = require("../../ghlClient");
+
+// Active artists for time-first slot generation
+const ACTIVE_ARTISTS = ["Joan", "Andrew"];
 
 // Weekday name to index mapping
 const WEEKDAY_MAP = {
@@ -262,66 +269,240 @@ async function selectArtistByAvailability(consultMode = "online") {
 }
 
 /**
+ * Check if contact has an EXPLICIT artist preference
+ * Returns the artist name if explicit preference exists, null otherwise
+ * 
+ * Explicit preferences include:
+ * - URL parameter (?technician=Joan)
+ * - Custom field set (inquired_technician)
+ * - Artist mention in current message
+ */
+function getExplicitArtistPreference(contact, messageText = null) {
+  // 1. Check contact's stored preference (URL param or custom field)
+  const storedPreference = getArtistPreferenceFromContact(contact);
+  if (storedPreference) {
+    return storedPreference;
+  }
+
+  // 2. Check for artist mention in current message
+  if (messageText) {
+    const mentionedArtist = detectArtistMention(messageText);
+    if (mentionedArtist) {
+      return mentionedArtist;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Generate slots from ALL artists (time-first approach)
+ * Each slot is tagged with artist info, sorted by workload (lower-workload artist times first)
+ * 
+ * @param {Object} options
+ * @param {string} options.consultMode - "online" or "in_person"
+ * @param {string} options.preferredTimeWindow - "morning", "afternoon", "evening"
+ * @param {string} options.preferredDay - Weekday name
+ * @returns {Array} Array of slots with artist info attached
+ */
+async function generateSlotsFromAllArtists(options = {}) {
+  const { consultMode = "online", preferredTimeWindow = null, preferredDay = null } = options;
+
+  // Get workloads to sort artists
+  const workloads = await getArtistWorkloads();
+  
+  // Sort artists by workload (lowest first)
+  const sortedArtists = [...ACTIVE_ARTISTS].sort((a, b) => {
+    const workloadA = workloads[a] || 0;
+    const workloadB = workloads[b] || 0;
+    return workloadA - workloadB;
+  });
+
+  console.log(`📊 Artist workloads: ${JSON.stringify(workloads)}, sorted order: ${sortedArtists.join(", ")}`);
+
+  // Generate base time slots (same times for all artists)
+  const baseSlots = generateSuggestedSlots({
+    preferredTimeWindow,
+    preferredDay,
+  });
+
+  // Create slots for each artist, with artist info attached
+  const allSlots = [];
+  
+  for (const artist of sortedArtists) {
+    const calendarId = getCalendarIdForArtist(artist, consultMode);
+    if (!calendarId) {
+      console.warn(`⚠️ No calendar found for artist ${artist}, mode ${consultMode}`);
+      continue;
+    }
+
+    for (const slot of baseSlots) {
+      allSlots.push({
+        ...slot,
+        artist,
+        calendarId,
+        workload: workloads[artist] || 0,
+        displayTextWithArtist: `${slot.displayText} with ${artist}`,
+      });
+    }
+  }
+
+  // Sort slots: primary by time, secondary by workload (lower workload first for same time)
+  allSlots.sort((a, b) => {
+    const timeA = new Date(a.startTime).getTime();
+    const timeB = new Date(b.startTime).getTime();
+    
+    if (timeA !== timeB) {
+      return timeA - timeB; // Earlier times first
+    }
+    
+    return a.workload - b.workload; // Lower workload first for same time
+  });
+
+  return allSlots;
+}
+
+/**
+ * Select best slots to present to lead (time-first approach)
+ * Picks unique time slots, preferring lower-workload artists
+ * 
+ * @param {Array} allSlots - All slots from all artists
+ * @param {number} maxSlots - Maximum slots to return (default 3)
+ * @returns {Array} Selected slots to present
+ */
+function selectBestSlotsForPresentation(allSlots, maxSlots = 3) {
+  const selectedSlots = [];
+  const usedTimes = new Set();
+
+  for (const slot of allSlots) {
+    // Skip if we already have a slot at this time
+    const timeKey = slot.startTime;
+    if (usedTimes.has(timeKey)) {
+      continue;
+    }
+
+    selectedSlots.push(slot);
+    usedTimes.add(timeKey);
+
+    if (selectedSlots.length >= maxSlots) {
+      break;
+    }
+  }
+
+  return selectedSlots;
+}
+
+/**
  * Handle appointment booking when AI wants to offer times
+ * 
+ * TWO MODES:
+ * 1. ARTIST-FIRST: If lead has explicit artist preference (URL param, custom field, or DM mention)
+ *    → Only show that artist's calendar
+ * 2. TIME-FIRST: If no explicit preference
+ *    → Show times from ALL artists, sorted by workload (lower-workload artist times first)
+ *    → When lead picks a time, book with whichever artist owns that slot
  * 
  * @param {Object} params
  * @param {Object} params.contact - GHL contact object
- * @param {Object} params.aiMeta - AI metadata (consultMode, preferredTimeWindow, preferredDay)
+ * @param {Object} params.aiMeta - AI metadata (consultMode, preferredTimeWindow, preferredDay, latestMessageText)
  * @param {Object} params.contactProfile - Contact profile with tattoo info
  */
 async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
   try {
-    // Determine artist - if not found, select by availability/workload
-    let artist = await determineArtist(contact, {
-      messageText: aiMeta?.latestMessageText,
-    });
-    
-    if (!artist) {
-      console.log("ℹ️ No artist preference found, selecting by availability/workload");
-      const consultMode = aiMeta?.consultMode || "online";
-      artist = await selectArtistByAvailability(consultMode);
-      console.log(`✅ Selected artist ${artist} based on availability/workload`);
-    }
-
-    if (!artist) {
-      console.warn("⚠️ Could not determine or select artist for appointment offer");
-      return null;
-    }
-
-    // Determine consult mode (default to online)
     const consultMode = aiMeta?.consultMode || "online";
     const preferredTimeWindow = aiMeta?.preferredTimeWindow || null;
     const preferredDay = aiMeta?.preferredDay || null;
+    const messageText = aiMeta?.latestMessageText || null;
 
-    // Get calendar ID
-    const calendarId = getCalendarIdForArtist(artist, consultMode);
-    if (!calendarId) {
-      console.warn(`⚠️ Could not find calendar for artist ${artist}, mode ${consultMode}`);
-      return null;
+    // Check for EXPLICIT artist preference (URL param, custom field, DM mention)
+    const explicitArtist = getExplicitArtistPreference(contact, messageText);
+
+    if (explicitArtist) {
+      // ========== ARTIST-FIRST MODE ==========
+      // Lead specified an artist - only show that artist's calendar
+      console.log(`🎯 ARTIST-FIRST MODE: Lead explicitly requested ${explicitArtist}`);
+      
+      // If artist was mentioned in message, persist it to the contact
+      if (messageText && detectArtistMention(messageText)) {
+        const contactId = contact.id || contact._id;
+        if (contactId) {
+          try {
+            await assignArtistToContact(contactId, explicitArtist);
+          } catch (err) {
+            console.error("❌ Failed to persist artist preference:", err.message || err);
+          }
+        }
+      }
+
+      const calendarId = getCalendarIdForArtist(explicitArtist, consultMode);
+      if (!calendarId) {
+        console.warn(`⚠️ Could not find calendar for artist ${explicitArtist}, mode ${consultMode}`);
+        return null;
+      }
+
+      // Generate slots for this specific artist
+      const baseSlots = generateSuggestedSlots({
+        preferredTimeWindow,
+        preferredDay,
+      });
+
+      // Tag slots with artist info
+      const slots = baseSlots.map(slot => ({
+        ...slot,
+        artist: explicitArtist,
+        calendarId,
+      }));
+
+      if (slots.length === 0) {
+        console.warn("⚠️ Could not generate time slots");
+        return null;
+      }
+
+      console.log(`📅 ARTIST-FIRST: Generated ${slots.length} slots for ${explicitArtist} (${consultMode}):`, 
+        slots.map(s => s.displayText));
+
+      return {
+        mode: "artist-first",
+        artist: explicitArtist,
+        consultMode,
+        calendarId,
+        slots,
+      };
+    } else {
+      // ========== TIME-FIRST MODE ==========
+      // No explicit preference - show times from ALL artists, sorted by workload
+      console.log("🕐 TIME-FIRST MODE: No explicit artist preference, showing all artists' availability");
+
+      const allSlots = await generateSlotsFromAllArtists({
+        consultMode,
+        preferredTimeWindow,
+        preferredDay,
+      });
+
+      if (allSlots.length === 0) {
+        console.warn("⚠️ Could not generate time slots from any artist");
+        return null;
+      }
+
+      // Select best slots to present (unique times, prefer lower workload)
+      const slotsToPresent = selectBestSlotsForPresentation(allSlots, 3);
+
+      console.log(`📅 TIME-FIRST: Presenting ${slotsToPresent.length} slots (${consultMode}):`, 
+        slotsToPresent.map(s => `${s.displayText} [${s.artist}]`));
+
+      // For backward compatibility, use the first slot's artist as the "primary" artist
+      // But each slot has its own artist info for booking
+      const primaryArtist = slotsToPresent[0]?.artist || "Joan";
+
+      return {
+        mode: "time-first",
+        artist: primaryArtist, // Primary artist (for display purposes)
+        consultMode,
+        calendarId: slotsToPresent[0]?.calendarId, // Primary calendar (for backward compat)
+        slots: slotsToPresent,
+        allSlots, // Full list for matching if lead picks a different time
+      };
     }
-
-    // Generate suggested slots with preferences
-    const slots = generateSuggestedSlots({
-      preferredTimeWindow,
-      preferredDay,
-    });
-    
-    if (slots.length === 0) {
-      console.warn("⚠️ Could not generate time slots");
-      return null;
-    }
-
-    console.log(`📅 Generated ${slots.length} time slots for ${artist} (${consultMode}):`, 
-      preferredDay ? `(requested: ${preferredDay})` : "", 
-      slots.map(s => s.displayText));
-
-    // Return slots for AI to present or backend to send
-    return {
-      artist,
-      consultMode,
-      calendarId,
-      slots,
-    };
   } catch (err) {
     console.error("❌ Error handling appointment offer:", err.message || err);
     return null;
@@ -460,5 +641,8 @@ module.exports = {
   generateSuggestedSlots,
   formatSlotDisplay,
   selectArtistByAvailability,
+  generateSlotsFromAllArtists,
+  selectBestSlotsForPresentation,
+  getExplicitArtistPreference,
 };
 

@@ -1553,14 +1553,20 @@ app.post("/ghl/message-webhook", async (req, res) => {
           console.log(`✅ Matched slot ${matchedIndex + 1}: ${appointmentOfferData.slots[matchedIndex].displayText}`);
           const selectedSlot = appointmentOfferData.slots[matchedIndex];
 
+          // Use slot's artist/calendar (TIME-FIRST) or fall back to offer data (ARTIST-FIRST)
+          const slotArtist = selectedSlot.artist || appointmentOfferData.artist;
+          const slotCalendarId = selectedSlot.calendarId || appointmentOfferData.calendarId;
+          
+          console.log(`📅 Booking with artist: ${slotArtist}, calendar: ${slotCalendarId} (mode: ${appointmentOfferData.mode || "unknown"})`);
+
           // Create the hold appointment IMMEDIATELY (status NEW if deposit not paid, CONFIRMED if paid)
           try {
             const appointment = await createConsultAppointment({
               contactId,
-              calendarId: appointmentOfferData.calendarId,
+              calendarId: slotCalendarId,
               startTime: selectedSlot.startTime,
               endTime: selectedSlot.endTime,
-              artist: appointmentOfferData.artist,
+              artist: slotArtist,
               consultMode: appointmentOfferData.consultMode,
               contactProfile,
             });
@@ -1584,8 +1590,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
               
               // Send confirmation message (createConsultAppointment doesn't send message for CONFIRMED)
               const confirmMessage = useEmojis
-                ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"} 🙌`
-                : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${appointmentOfferData.artist || "our artist"}.`;
+                ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${slotArtist || "our artist"} 🙌`
+                : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${slotArtist || "our artist"}.`;
               
               await sendConversationMessage({
                 contactId,
@@ -1672,8 +1678,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
           contactProfile,
         });
         if (appointmentOfferData) {
-          calendarId = appointmentOfferData.calendarId;
-          artist = appointmentOfferData.artist;
+          // Use first slot's artist/calendar (works for both time-first and artist-first modes)
+          const firstSlot = appointmentOfferData.slots?.[0];
+          calendarId = firstSlot?.calendarId || appointmentOfferData.calendarId;
+          artist = firstSlot?.artist || appointmentOfferData.artist;
           consultMode = appointmentOfferData.consultMode;
         }
       }
