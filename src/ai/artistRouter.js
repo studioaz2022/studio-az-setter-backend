@@ -7,7 +7,10 @@ const {
   TATTOO_FIELDS,
   CALENDARS,
   ARTIST_ASSIGNED_USER_IDS,
+  OPPORTUNITY_STAGES,
 } = require("../config/constants");
+const { searchOpportunities } = require("../clients/ghlOpportunityClient");
+const { PIPELINE_ID, PIPELINE_STAGE_CONFIG } = require("../config/pipelineConfig");
 
 /**
  * Artist style mappings
@@ -32,6 +35,129 @@ let artistWorkloads = {
   Artist3: 0,
   Artist4: 0,
 };
+
+const WORKLOAD_STAGE_RULES = [
+  { stageKey: OPPORTUNITY_STAGES.CONSULT_MESSAGE, weight: 1 },
+  { stageKey: OPPORTUNITY_STAGES.CONSULT_APPOINTMENT, weight: 2 },
+  { stageKey: OPPORTUNITY_STAGES.TATTOO_BOOKED, weight: 3 },
+];
+
+const WORKLOAD_REFRESH_TTL_MS = 2 * 60 * 1000;
+let lastWorkloadRefreshAt = 0;
+
+const USER_ID_TO_ARTIST = Object.entries(ARTIST_ASSIGNED_USER_IDS || {}).reduce((acc, [name, id]) => {
+  if (id) {
+    const formattedName = name.charAt(0) + name.slice(1).toLowerCase();
+    acc[id] = formattedName;
+  }
+  return acc;
+}, {});
+
+function normalizeArtistLabel(name) {
+  if (!name) return null;
+  const trimmed = String(name).trim();
+  if (!trimmed) return null;
+  return trimmed.charAt(0).toUpperCase() + trimmed.slice(1);
+}
+
+function stageIdForKey(stageKey) {
+  return PIPELINE_STAGE_CONFIG[stageKey]?.id || null;
+}
+
+const DEFAULT_ARTISTS = Array.from(
+  new Set([
+    ...Object.keys(artistWorkloads),
+    ...Object.values(ARTIST_STYLE_MAP).flat(),
+    "Joan",
+    "Andrew",
+  ])
+).map(normalizeArtistLabel);
+
+function initializeWorkloadMap(overrides = {}) {
+  const map = {};
+  DEFAULT_ARTISTS.forEach((artist) => {
+    if (!artist) return;
+    map[artist] = overrides[artist] || 0;
+  });
+  Object.keys(overrides).forEach((artist) => {
+    map[artist] = overrides[artist];
+  });
+  return map;
+}
+
+function artistFromAssignedUserId(assignedUserId) {
+  if (!assignedUserId) return null;
+  return USER_ID_TO_ARTIST[assignedUserId] || null;
+}
+
+async function resolveArtistForOpportunity(opportunity, contactCache) {
+  const fromAssignedId = artistFromAssignedUserId(opportunity?.assignedUserId);
+  if (fromAssignedId) {
+    return normalizeArtistLabel(fromAssignedId);
+  }
+
+  const contactId = opportunity?.contactId || opportunity?.contact?.id || opportunity?.contact?._id;
+  if (!contactId) return null;
+
+  if (contactCache.has(contactId)) {
+    return contactCache.get(contactId);
+  }
+
+  const contact = await getContact(contactId);
+  const cf = contact?.customField || contact?.customFields || {};
+  const artistName =
+    cf[TATTOO_FIELDS.INQUIRED_TECHNICIAN] ||
+    cf[SYSTEM_FIELDS.ASSIGNED_ARTIST] ||
+    null;
+  const normalized = normalizeArtistLabel(artistName);
+  contactCache.set(contactId, normalized);
+  return normalized;
+}
+
+async function refreshArtistWorkloads({ force = false } = {}) {
+  const now = Date.now();
+  if (!force && now - lastWorkloadRefreshAt < WORKLOAD_REFRESH_TTL_MS) {
+    return artistWorkloads;
+  }
+
+  const newScores = {};
+  const contactCache = new Map();
+
+  for (const rule of WORKLOAD_STAGE_RULES) {
+    const stageId = stageIdForKey(rule.stageKey);
+    if (!stageId) continue;
+
+    try {
+      const opportunities = await searchOpportunities({
+        query: {
+          pipelineId: PIPELINE_ID,
+          pipelineStageId: stageId,
+          status: "open",
+        },
+        pagination: {
+          limit: 200,
+          page: 1,
+        },
+      });
+
+      for (const opp of opportunities) {
+        const artist = await resolveArtistForOpportunity(opp, contactCache);
+        if (!artist) continue;
+        newScores[artist] = (newScores[artist] || 0) + rule.weight;
+      }
+    } catch (err) {
+      console.error(
+        `❌ Failed to refresh workloads for stage ${rule.stageKey}:`,
+        err.response?.data || err.message || err
+      );
+    }
+  }
+
+  artistWorkloads = initializeWorkloadMap(newScores);
+  lastWorkloadRefreshAt = now;
+  console.log("📊 Artist workload scores updated:", artistWorkloads);
+  return artistWorkloads;
+}
 
 /**
  * Get assigned userId for an artist (used when creating GHL appointments)
@@ -230,6 +356,8 @@ async function autoAssignArtist(contactId) {
       return alreadyAssigned;
     }
 
+    await refreshArtistWorkloads({ force: true });
+
     // Determine and assign artist
     const artist = determineArtist(contact);
     if (artist) {
@@ -290,5 +418,6 @@ module.exports = {
   ARTIST_STYLE_MAP,
   artistWorkloads,
   getAssignedUserIdForArtist,
+  refreshArtistWorkloads,
 };
 

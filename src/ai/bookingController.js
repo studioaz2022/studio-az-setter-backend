@@ -7,6 +7,7 @@ const {
   getCalendarIdForArtist,
   artistWorkloads,
   getAssignedUserIdForArtist,
+  refreshArtistWorkloads,
 } = require("./artistRouter");
 const {
   createAppointment,
@@ -274,6 +275,7 @@ function selectArtistByAvailability(consultMode = "online") {
  */
 async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
   try {
+    await refreshArtistWorkloads();
     // Determine artist - if not found, select by availability/workload
     let artist = determineArtist(contact);
     

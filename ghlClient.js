@@ -4,6 +4,7 @@ require("dotenv").config();
 const axios = require("axios");
 const FormData = require("form-data");
 const { cleanLogObject } = require("./src/utils/logger");
+const { SYSTEM_FIELDS } = require("./src/config/constants");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
@@ -37,15 +38,12 @@ const CUSTOM_FIELD_MAP = {
 };
 
 // 🔹 System fields for AI Setter state tracking
-const SYSTEM_FIELD_MAP = {
-  ai_phase: "ai_phase",
-  lead_temperature: "lead_temperature",
-  language_preference: "language_preference",
-  deposit_link_sent: "deposit_link_sent",
-  deposit_paid: "deposit_paid",
-  square_payment_link_id: "square_payment_link_id",
-  last_phase_update_at: "last_phase_update_at",
-};
+const SYSTEM_FIELD_MAP = Object.values(SYSTEM_FIELDS || {}).reduce((acc, fieldId) => {
+  if (fieldId) {
+    acc[fieldId] = fieldId;
+  }
+  return acc;
+}, {});
 
 
 
@@ -323,57 +321,18 @@ async function updateSystemFields(contactId, fields = {}) {
 
   const customField = {};
 
-  // 🔹 NEW: language_preference mapping in the right place
-  if (
-    fields.language_preference !== undefined &&
-    SYSTEM_FIELD_MAP.language_preference
-  ) {
-    customField[SYSTEM_FIELD_MAP.language_preference] =
-      fields.language_preference;
-  }
+  Object.entries(fields).forEach(([key, value]) => {
+    if (value === undefined) return;
+    const fieldId = SYSTEM_FIELD_MAP[key] || key;
+    if (!fieldId) return;
 
-  if (fields.ai_phase !== undefined && SYSTEM_FIELD_MAP.ai_phase) {
-    customField[SYSTEM_FIELD_MAP.ai_phase] = fields.ai_phase;
-  }
+    let outboundValue = value;
+    if (typeof outboundValue === "boolean") {
+      outboundValue = outboundValue ? "Yes" : "No";
+    }
 
-  if (
-    fields.lead_temperature !== undefined &&
-    SYSTEM_FIELD_MAP.lead_temperature
-  ) {
-    customField[SYSTEM_FIELD_MAP.lead_temperature] =
-      fields.lead_temperature;
-  }
-
-  if (
-    fields.deposit_link_sent !== undefined &&
-    SYSTEM_FIELD_MAP.deposit_link_sent
-  ) {
-    customField[SYSTEM_FIELD_MAP.deposit_link_sent] = fields.deposit_link_sent
-      ? "Yes"
-      : "No";
-  }
-
-  if (fields.deposit_paid !== undefined && SYSTEM_FIELD_MAP.deposit_paid) {
-    customField[SYSTEM_FIELD_MAP.deposit_paid] = fields.deposit_paid
-      ? "Yes"
-      : "No";
-  }
-
-  if (
-    fields.square_payment_link_id !== undefined &&
-    SYSTEM_FIELD_MAP.square_payment_link_id
-  ) {
-    customField[SYSTEM_FIELD_MAP.square_payment_link_id] =
-      fields.square_payment_link_id;
-  }
-
-  if (
-    fields.last_phase_update_at !== undefined &&
-    SYSTEM_FIELD_MAP.last_phase_update_at
-  ) {
-    customField[SYSTEM_FIELD_MAP.last_phase_update_at] =
-      fields.last_phase_update_at;
-  }
+    customField[fieldId] = outboundValue;
+  });
 
   if (Object.keys(customField).length === 0) {
     console.log("updateSystemFields: nothing to update");

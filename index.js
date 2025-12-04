@@ -18,6 +18,11 @@ const {
   updateTattooFields,
   sendConversationMessage,
 } = require("./ghlClient");
+const {
+  ensureOpportunity,
+  transitionToStage,
+  syncOpportunityStageFromContact,
+} = require("./src/ai/opportunityManager");
 
 const {
   decideLeadTemperature,
@@ -28,7 +33,7 @@ const {
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
 const { createDepositLinkForContact, getContactIdFromOrder } = require("./src/payments/squareClient");
-const { DEPOSIT_CONFIG, AI_PHASES, LEAD_TEMPERATURES, SYSTEM_FIELDS, CALENDARS, APPOINTMENT_STATUS } = require("./src/config/constants");
+const { DEPOSIT_CONFIG, AI_PHASES, LEAD_TEMPERATURES, SYSTEM_FIELDS, CALENDARS, APPOINTMENT_STATUS, OPPORTUNITY_STAGES } = require("./src/config/constants");
 const { autoAssignArtist, determineArtist } = require("./src/ai/artistRouter");
 const { errorHandler, notFoundHandler } = require("./src/middleware/errorHandler");
 const { cleanLogObject } = require("./src/utils/logger");
@@ -745,6 +750,17 @@ app.post(
                 console.error("❌ Error updating GHL after deposit:", ghlErr.message || ghlErr);
               }
 
+              try {
+                await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED, {
+                  contact,
+                  monetaryValue: typeof amount === "number" ? amount / 100 : undefined,
+                  note: `Deposit paid via Square (${currency || "USD"} ${typeof amount === "number" ? (amount / 100).toFixed(2) : "N/A"})`,
+                });
+                console.log("🏆 Opportunity moved to QUALIFIED");
+              } catch (oppErr) {
+                console.error("❌ Failed to move opportunity to QUALIFIED:", oppErr.message || oppErr);
+              }
+
               // Auto-assign artist after deposit is paid
               try {
                 const assignedArtist = await autoAssignArtist(contactId);
@@ -846,6 +862,33 @@ app.post(
                   }
                 } catch (apptErr) {
                   console.error("❌ Error checking/confirming GHL appointments:", apptErr.message || apptErr);
+                }
+              }
+
+              if (appointmentCreated && appointmentSlotDisplay) {
+                const consultModeValue = String(
+                  cf.consultation_type ||
+                    cf.pending_slot_mode ||
+                    cf.last_released_slot_mode ||
+                    "online"
+                ).toLowerCase();
+
+                try {
+                  await updateSystemFields(contactId, {
+                    consultation_type: consultModeValue,
+                  });
+                } catch (consultFieldErr) {
+                  console.error("❌ Failed to store consultation_type:", consultFieldErr.message || consultFieldErr);
+                }
+
+                try {
+                  await transitionToStage(contactId, consultModeValue === "message" ? OPPORTUNITY_STAGES.CONSULT_MESSAGE : OPPORTUNITY_STAGES.CONSULT_APPOINTMENT, {
+                    contact,
+                    note: `Consult scheduled for ${appointmentSlotDisplay}`,
+                  });
+                  console.log("📌 Opportunity moved to consult stage after appointment confirmation");
+                } catch (oppErr) {
+                  console.error("❌ Failed to move opportunity to consult stage:", oppErr.message || oppErr);
                 }
               }
 
@@ -1041,6 +1084,13 @@ app.post("/ghl/form-webhook", async (req, res) => {
   });
 
   console.log("✅ System fields updated for form webhook");
+
+  try {
+    await ensureOpportunity({ contactId, stageKey: OPPORTUNITY_STAGES.INTAKE, contact });
+    console.log("🏗️ Opportunity ensured for intake stage");
+  } catch (oppErr) {
+    console.error("❌ Failed to ensure opportunity for intake:", oppErr.message || oppErr);
+  }
 
   // 🔹 Call AI Setter for Opener and send it
   try {
@@ -1328,6 +1378,14 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   console.log("✅ System fields updated for message webhook");
 
+  try {
+    await syncOpportunityStageFromContact(contactId, {
+      aiPhase: systemState.newPhase,
+    });
+  } catch (oppErr) {
+    console.error("❌ Failed to sync opportunity stage from message webhook:", oppErr.message || oppErr);
+  }
+
   // 🔄 Refetch contact so intake sees latest language_preference
   let freshContact = contact;
   try {
@@ -1496,12 +1554,18 @@ app.post("/ghl/message-webhook", async (req, res) => {
             });
 
             const now = new Date().toISOString();
+            const consultModeValue = (appointmentOfferData.consultMode || detectedConsultMode || "online").toLowerCase();
+            const consultStageKey =
+              consultModeValue === "message"
+                ? OPPORTUNITY_STAGES.CONSULT_MESSAGE
+                : OPPORTUNITY_STAGES.CONSULT_APPOINTMENT;
 
             if (alreadyPaid) {
               // Deposit already paid - appointment is CONFIRMED, clear hold fields
               await updateSystemFields(contactId, {
                 ai_phase: AI_PHASES.CLOSING,
                 last_phase_update_at: now,
+                consultation_type: consultModeValue,
                 // Clear any hold fields since deposit is paid
                 hold_appointment_id: null,
                 hold_last_activity_at: null,
@@ -1522,6 +1586,15 @@ app.post("/ghl/message-webhook", async (req, res) => {
                 body: confirmMessage,
                 channelContext,
               });
+
+              try {
+                await transitionToStage(contactId, consultStageKey, {
+                  contact: freshContact,
+                  note: `Consult scheduled for ${selectedSlot.displayText}`,
+                });
+              } catch (oppErr) {
+                console.error("❌ Failed to move opportunity to consult stage:", oppErr.message || oppErr);
+              }
             } else {
               // Deposit NOT paid - set up hold tracking
               await updateSystemFields(contactId, {
@@ -1530,6 +1603,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
                 hold_warning_sent: false,
                 ai_phase: AI_PHASES.CLOSING,
                 last_phase_update_at: now,
+                 consultation_type: consultModeValue,
                 // Clear last_released fields (fresh session)
                 last_released_slot_display: null,
                 last_released_slot_start: null,
@@ -1622,10 +1696,12 @@ app.post("/ghl/message-webhook", async (req, res) => {
       
       // Success - slot was still available
       const now = new Date().toISOString();
+      const consultModeValue = (consultMode || detectedConsultMode || "online").toLowerCase();
       await updateSystemFields(contactId, {
         hold_appointment_id: appointment.id,
         hold_last_activity_at: now,
         hold_warning_sent: false,
+        consultation_type: consultModeValue,
         // Clear last_released fields since it's active again
         last_released_slot_display: null,
         last_released_slot_start: null,
