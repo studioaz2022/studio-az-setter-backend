@@ -243,6 +243,17 @@ function isBookingIntent(messageText, contactProfile = null, currentPhase = null
 }
 
 /**
+ * Detect intent to reschedule an existing appointment
+ */
+function isRescheduleIntent(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).toLowerCase();
+  return /\b(reschedule|change.*time|different.*time|move.*appointment|can't make it|cannot make|something came up|need to change|push.*appointment|switch.*time)\b/i.test(
+    text
+  );
+}
+
+/**
  * Check if message is selecting a specific slot (should create appointment)
  */
 function isSlotSelection(messageText) {
@@ -1763,6 +1774,112 @@ app.post("/ghl/message-webhook", async (req, res) => {
           
           console.log(`📅 Booking with artist: ${slotArtist}, calendar: ${slotCalendarId} (mode: ${appointmentOfferData.mode || "unknown"})`);
 
+          const reschedulePending =
+            contactCustomFields?.reschedule_pending === "Yes" ||
+            contactCustomFields?.reschedule_pending === true;
+          const rescheduleTargetId =
+            contactCustomFields?.reschedule_target_appointment_id ||
+            contactCustomFields?.rescheduleTargetAppointmentId ||
+            null;
+          const rescheduleTranslatorTargetId =
+            contactCustomFields?.reschedule_target_translator_appointment_id ||
+            contactCustomFields?.rescheduleTargetTranslatorAppointmentId ||
+            null;
+
+          // RESCHEDULE FLOW: move existing appointment (and translator if present)
+          if (reschedulePending && rescheduleTargetId) {
+            try {
+              const existingAppointments = await listAppointmentsForContact(contactId);
+              const target = existingAppointments.find((apt) => apt.id === rescheduleTargetId);
+              const isConfirmedTarget =
+                (target && target.appointmentStatus === "confirmed") || alreadyPaid;
+
+              await rescheduleAppointment(rescheduleTargetId, {
+                startTime: selectedSlot.startTime,
+                endTime: selectedSlot.endTime,
+                appointmentStatus: isConfirmedTarget ? "confirmed" : "new",
+              });
+
+              if (rescheduleTranslatorTargetId) {
+                try {
+                  await rescheduleAppointment(rescheduleTranslatorTargetId, {
+                    startTime: selectedSlot.startTime,
+                    endTime: selectedSlot.endTime,
+                    appointmentStatus: isConfirmedTarget ? "confirmed" : "new",
+                  });
+                } catch (translatorRescheduleErr) {
+                  console.error(
+                    "❌ Error rescheduling translator appointment:",
+                    translatorRescheduleErr.message || translatorRescheduleErr
+                  );
+                }
+              }
+
+              const now = new Date().toISOString();
+              const display = selectedSlot.displayText;
+
+              if (isConfirmedTarget) {
+                await updateSystemFields(contactId, {
+                  ai_phase: AI_PHASES.CLOSING,
+                  last_phase_update_at: now,
+                  reschedule_pending: false,
+                  reschedule_target_appointment_id: null,
+                  reschedule_target_translator_appointment_id: null,
+                  hold_appointment_id: null,
+                  hold_last_activity_at: null,
+                  hold_warning_sent: false,
+                  last_released_slot_display: null,
+                  last_released_slot_start: null,
+                  last_released_slot_end: null,
+                });
+
+                const confirmMessage = useEmojis
+                  ? `All set — I moved your consult to ${display} with ${slotArtist || "our artist"} 🙌`
+                  : `All set — I moved your consult to ${display} with ${slotArtist || "our artist"}.`;
+
+                await sendConversationMessage({
+                  contactId,
+                  body: confirmMessage,
+                  channelContext,
+                });
+              } else {
+                await updateSystemFields(contactId, {
+                  reschedule_pending: false,
+                  reschedule_target_appointment_id: null,
+                  reschedule_target_translator_appointment_id: null,
+                  hold_appointment_id: rescheduleTargetId,
+                  hold_last_activity_at: now,
+                  hold_warning_sent: false,
+                  ai_phase: AI_PHASES.CLOSING,
+                  last_phase_update_at: now,
+                  last_released_slot_display: null,
+                  last_released_slot_start: null,
+                  last_released_slot_end: null,
+                });
+
+                const holdMessage = useEmojis
+                  ? `Got it — I moved your hold to ${display}. To lock it in, just finish the $100 refundable deposit I sent.`
+                  : `Got it — I moved your hold to ${display}. To lock it in, just finish the $100 refundable deposit I sent.`;
+
+                await sendConversationMessage({
+                  contactId,
+                  body: holdMessage,
+                  channelContext,
+                });
+              }
+
+              return res
+                .status(200)
+                .json({ success: true, message: "Appointment rescheduled" });
+            } catch (rescheduleErr) {
+              console.error(
+                "❌ Error rescheduling appointment:",
+                rescheduleErr.message || rescheduleErr
+              );
+              // Fall back to normal booking flow
+            }
+          }
+
           // Create the hold appointment IMMEDIATELY (status NEW if deposit not paid, CONFIRMED if paid)
           try {
             const appointment = await createConsultAppointment({
@@ -1951,10 +2068,92 @@ app.post("/ghl/message-webhook", async (req, res) => {
     }
   }
 
+  // 🔁 RESCHEDULE INTENT: User wants to move an existing appointment/hold
+  const rescheduleRequested = isRescheduleIntent(messageText);
+
+  if (rescheduleRequested) {
+    console.log("📅 Reschedule intent detected");
+    const consultCalendarIds = Object.values(CALENDARS);
+    const translatorApptId =
+      contactCustomFields?.translator_appointment_id ||
+      contactCustomFields?.translatorAppointmentId ||
+      null;
+
+    const consultAppointments = await getConsultAppointmentsForContact(
+      contactId,
+      consultCalendarIds
+    );
+
+    const existingAppointment = consultAppointments[0] || null;
+
+    if (!existingAppointment) {
+      console.log("⚠️ No existing appointment to reschedule; falling through to normal flow");
+    } else {
+      skipAIEntirely = true;
+
+      const currentDisplay = formatSlotDisplay(new Date(existingAppointment.startTime));
+
+      // Offer fresh times (respecting any dates mentioned in the same message)
+      appointmentOfferData = await handleAppointmentOffer({
+        contact: freshContact,
+        aiMeta: {
+          consultMode: detectedConsultMode,
+          latestMessageText: messageText,
+          translatorNeeded: contactProfile.translatorNeeded,
+        },
+        contactProfile,
+      });
+
+      if (appointmentOfferData?.slots?.length) {
+        const slotsText = appointmentOfferData.slots
+          .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
+          .join("\n");
+
+        const rescheduleMessage = useEmojis
+          ? `No problem — you’re currently set for ${currentDisplay}. Here are some other times:\n\n${slotsText}\n\nWhich one should I move you to?`
+          : `No problem — you're currently set for ${currentDisplay}. Here are some other times:\n\n${slotsText}\n\nWhich one should I move you to?`;
+
+        await sendConversationMessage({
+          contactId,
+          body: rescheduleMessage,
+          channelContext,
+        });
+
+        await updateSystemFields(contactId, {
+          reschedule_pending: true,
+          reschedule_target_appointment_id: existingAppointment.id,
+          reschedule_target_translator_appointment_id: translatorApptId || null,
+        });
+
+        return res
+          .status(200)
+          .json({ success: true, message: "Reschedule options sent" });
+      }
+    }
+  }
+
   // 🚀 BOOKING INTENT: User is asking for times (e.g., "What times do you have?")
   // - Strong intent (explicit time request): triggers in any phase
   // - Weak intent (generic "yes", "sounds good"): only triggers if we have core info or late phase
-  const bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
+  let bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
+  const weakIntentDetected = isWeakBookingIntent(messageText);
+  const consultModeChosen = ["appointment", "message"].includes(
+    String(contactCustomFields?.consultation_type || "").toLowerCase()
+  );
+  const depositAlreadyPaid =
+    contactProfile?.depositPaid === true ||
+    contactSystemFields?.deposit_paid === "Yes" ||
+    contactSystemFields?.deposit_paid === true;
+
+  if (bookingIntentDetected && weakIntentDetected && !consultModeChosen) {
+    console.log("⏳ Weak booking intent but consult mode not chosen yet — gating times");
+    bookingIntentDetected = false;
+  }
+
+  if (bookingIntentDetected && depositAlreadyPaid && !rescheduleRequested) {
+    console.log("💰 Deposit already paid — blocking booking intent flow");
+    bookingIntentDetected = false;
+  }
   
   if (!skipAIEntirely && bookingIntentDetected) {
     const leadSpanishComfortable =

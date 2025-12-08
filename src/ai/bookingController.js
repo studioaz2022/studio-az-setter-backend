@@ -40,6 +40,122 @@ const WEEKDAY_MAP = {
   saturday: 6, sat: 6,
 };
 
+const MONTH_MAP = {
+  january: 0, jan: 0,
+  february: 1, feb: 1,
+  march: 2, mar: 2,
+  april: 3, apr: 3,
+  may: 4,
+  june: 5, jun: 5,
+  july: 6, jul: 6,
+  august: 7, aug: 7,
+  september: 8, sep: 8, sept: 8,
+  october: 9, oct: 9,
+  november: 10, nov: 10,
+  december: 11, dec: 11,
+};
+
+function hoursForWindow(preferredTimeWindow = null) {
+  if (!preferredTimeWindow) return [17, 18]; // default: early evening options
+  const tw = preferredTimeWindow.toLowerCase();
+  if (tw.includes("morning")) return [10, 11];
+  if (tw.includes("afternoon")) return [14, 15];
+  if (tw.includes("evening") || tw.includes("night")) return [17, 18, 19];
+  return [17];
+}
+
+function nextDateFromMonthDay(monthIndex, day, now = new Date()) {
+  const candidate = new Date(now);
+  candidate.setHours(0, 0, 0, 0);
+  candidate.setMonth(monthIndex, day);
+  if (candidate <= now) {
+    candidate.setFullYear(candidate.getFullYear() + 1);
+  }
+  return candidate;
+}
+
+/**
+ * Extract explicit dates from a message (supports "Dec 10", "December 11th", "10th or 11th")
+ * Returns an array of Date objects (deduped, future-dated)
+ */
+function extractDatesFromMessage(messageText) {
+  if (!messageText) return [];
+  const now = new Date();
+  const dates = [];
+  const seen = new Set();
+  const text = String(messageText);
+
+  // Month + day (e.g., "Dec 10", "December 11th")
+  const monthDayRegex = /\b(jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\s*(\d{1,2})(st|nd|rd|th)?\b/gi;
+  let match;
+  while ((match = monthDayRegex.exec(text)) !== null) {
+    const monthStr = match[1].toLowerCase().slice(0, 3);
+    const day = parseInt(match[2], 10);
+    const monthIndex = MONTH_MAP[monthStr];
+    if (monthIndex !== undefined && day >= 1 && day <= 31) {
+      const d = nextDateFromMonthDay(monthIndex, day, now);
+      const key = d.toISOString().slice(0, 10);
+      if (!seen.has(key)) {
+        seen.add(key);
+        dates.push(d);
+      }
+    }
+  }
+
+  // Bare day-of-month with suffix (e.g., "10th", "11th") when no month is provided
+  const dayOnlyRegex = /\b(\d{1,2})(st|nd|rd|th)\b/gi;
+  while ((match = dayOnlyRegex.exec(text)) !== null) {
+    const day = parseInt(match[1], 10);
+    if (day < 1 || day > 31) continue;
+    const candidate = new Date(now);
+    candidate.setHours(0, 0, 0, 0);
+    candidate.setDate(day);
+    // If already passed this month, bump to next month
+    if (candidate <= now) {
+      candidate.setMonth(candidate.getMonth() + 1);
+    }
+    const key = candidate.toISOString().slice(0, 10);
+    if (!seen.has(key)) {
+      seen.add(key);
+      dates.push(candidate);
+    }
+  }
+
+  // Sort ascending
+  dates.sort((a, b) => a.getTime() - b.getTime());
+  return dates;
+}
+
+/**
+ * Generate slots for specific dates (multiple days), respecting preferred time window
+ */
+function generateSlotsForSpecificDates({ dates = [], preferredTimeWindow = null, maxPerDate = 2 }) {
+  const now = new Date();
+  const slots = [];
+  const hours = hoursForWindow(preferredTimeWindow);
+
+  for (const date of dates) {
+    for (let i = 0; i < hours.length && i < maxPerDate; i++) {
+      const hour = hours[i];
+      const slotDate = new Date(date);
+      slotDate.setHours(hour, 0, 0, 0);
+
+      if (slotDate > now) {
+        const endTime = new Date(slotDate);
+        endTime.setMinutes(endTime.getMinutes() + 30);
+
+        slots.push({
+          startTime: slotDate.toISOString(),
+          endTime: endTime.toISOString(),
+          displayText: formatSlotDisplay(slotDate),
+        });
+      }
+    }
+  }
+
+  return slots;
+}
+
 /**
  * Generate suggested time slots for a consult
  * Supports preferredDay (e.g., "wednesday") and preferredTimeWindow (e.g., "morning")
@@ -174,6 +290,9 @@ function parseTimeSelection(messageText, availableSlots) {
   }
 
   const text = String(messageText).toLowerCase().trim();
+  const hasExplicitTime =
+    /(\d{1,2})(?::\d{2})?\s*(am|pm)/i.test(text) ||
+    /\b(morning|afternoon|evening|night)\b/i.test(text);
 
   // === GUARD: Don't treat availability questions or multiple dates as selections ===
   const isAskingForAvailability = /\b(what times|when are you|available|availability|what works|what days)\b/i.test(text);
@@ -185,6 +304,12 @@ function parseTimeSelection(messageText, availableSlots) {
     return null;
   }
   
+  const isAskingForTimesOnDate = /\b(what times|times on|available on|free on)\b.*\d{1,2}/i.test(text);
+  if (isAskingForTimesOnDate) {
+    console.log("📅 Asking for times on a specific date - not a slot selection");
+    return null;
+  }
+
   if (dateMatches.length > 1 || dayMatches.length > 1) {
     console.log("📅 Detected multiple dates mentioned - not a slot selection, asking for clarification");
     return null;
@@ -221,7 +346,11 @@ function parseTimeSelection(messageText, availableSlots) {
     const dayNameAbbr = daysAbbr[dayIndex];
     
     if (text.includes(dayNameFull) || new RegExp(`\\b${dayNameAbbr}\\b`).test(text)) {
-      console.log(`✅ Matched day name: ${dayNameFull} → slot ${i + 1}`);
+      if (!hasExplicitTime) {
+        console.log(`📅 Day name mentioned without time (${dayNameFull}) - not selecting`);
+        return null;
+      }
+      console.log(`✅ Matched day name with time: ${dayNameFull} → slot ${i + 1}`);
       return i;
     }
   }
@@ -247,7 +376,11 @@ function parseTimeSelection(messageText, availableSlots) {
     
     for (const pattern of dayPatterns) {
       if (new RegExp(pattern, "i").test(text)) {
-        console.log(`✅ Matched month+day: ${monthAbbr} ${day} → slot ${i + 1}`);
+        if (!hasExplicitTime) {
+          console.log(`📅 Month+day mentioned without time (${monthAbbr} ${day}) - not selecting`);
+          return null;
+        }
+        console.log(`✅ Matched month+day with time: ${monthAbbr} ${day} → slot ${i + 1}`);
         return i;
       }
     }
@@ -261,6 +394,11 @@ function parseTimeSelection(messageText, availableSlots) {
     
     console.log(`📅 Looking for day-of-month: ${requestedDay}${timeMatch ? ` at ${timeMatch[1]}${timeMatch[2]}` : ''}`);
     
+    if (!timeMatch) {
+      console.log(`📅 Day-of-month mentioned without time (${requestedDay}) - not selecting`);
+      return null;
+    }
+    
     for (let i = 0; i < availableSlots.length; i++) {
       const slotDate = new Date(availableSlots[i].startTime);
       const slotDay = slotDate.getDate();
@@ -269,10 +407,6 @@ function parseTimeSelection(messageText, availableSlots) {
       const slotAmpm = slotHour >= 12 ? "pm" : "am";
 
       if (slotDay === requestedDay) {
-        if (!timeMatch) {
-          console.log(`✅ Matched day-of-month ${requestedDay} → slot ${i + 1}`);
-          return i; // Day matches and no specific time given
-        }
         const reqHour = parseInt(timeMatch[1], 10);
         const reqAmpm = timeMatch[2].toLowerCase();
         if (reqHour === slotHour12 && reqAmpm === slotAmpm) {
@@ -379,7 +513,12 @@ function getExplicitArtistPreference(contact, messageText = null) {
  * @returns {Array} Array of slots with artist info attached
  */
 async function generateSlotsFromAllArtists(options = {}) {
-  const { consultMode = "online", preferredTimeWindow = null, preferredDay = null } = options;
+  const {
+    consultMode = "online",
+    preferredTimeWindow = null,
+    preferredDay = null,
+    baseSlots = null,
+  } = options;
 
   // Get workloads to sort artists
   const workloads = await getArtistWorkloads();
@@ -394,10 +533,12 @@ async function generateSlotsFromAllArtists(options = {}) {
   console.log(`📊 Artist workloads: ${JSON.stringify(workloads)}, sorted order: ${sortedArtists.join(", ")}`);
 
   // Generate base time slots (same times for all artists)
-  const baseSlots = generateSuggestedSlots({
-    preferredTimeWindow,
-    preferredDay,
-  });
+  const baseSlotsToUse = Array.isArray(baseSlots) && baseSlots.length > 0
+    ? baseSlots
+    : generateSuggestedSlots({
+        preferredTimeWindow,
+        preferredDay,
+      });
 
   // Create slots for each artist, with artist info attached
   const allSlots = [];
@@ -409,7 +550,7 @@ async function generateSlotsFromAllArtists(options = {}) {
       continue;
     }
 
-    for (const slot of baseSlots) {
+    for (const slot of baseSlotsToUse) {
       allSlots.push({
         ...slot,
         artist,
@@ -439,12 +580,19 @@ async function generateSlotsFromAllArtists(options = {}) {
  * Generate slots that include translator pairing (both in-person and online variants)
  */
 function generateSlotsWithTranslator(options = {}) {
-  const { consultMode = "online", preferredTimeWindow = null, preferredDay = null } = options;
-  const baseSlots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  const {
+    consultMode = "online",
+    preferredTimeWindow = null,
+    preferredDay = null,
+    baseSlots = null,
+  } = options;
+  const baseSlotsToUse = Array.isArray(baseSlots) && baseSlots.length > 0
+    ? baseSlots
+    : generateSuggestedSlots({ preferredTimeWindow, preferredDay });
   const translators = getTranslatorCalendarsForMode(consultMode);
 
   const slots = [];
-  for (const slot of baseSlots) {
+  for (const slot of baseSlotsToUse) {
     for (const t of translators) {
       slots.push({
         ...slot,
@@ -508,6 +656,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
     const preferredTimeWindow = aiMeta?.preferredTimeWindow || null;
     const preferredDay = aiMeta?.preferredDay || null;
     const messageText = aiMeta?.latestMessageText || null;
+    const extractedDates = extractDatesFromMessage(messageText);
     const translatorNeeded =
       aiMeta?.translatorNeeded === true ||
       contactProfile?.translatorNeeded === true ||
@@ -540,12 +689,23 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
       }
 
       // Generate slots for this specific artist
-      const baseSlots = generateSuggestedSlots({
-        preferredTimeWindow,
-        preferredDay,
-      });
+      const baseSlots = extractedDates.length > 0
+        ? generateSlotsForSpecificDates({
+            dates: extractedDates,
+            preferredTimeWindow,
+            maxPerDate: 2,
+          })
+        : generateSuggestedSlots({
+            preferredTimeWindow,
+            preferredDay,
+          });
       const translatorSlots = translatorNeeded
-        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        ? generateSlotsWithTranslator({
+            consultMode,
+            preferredTimeWindow,
+            preferredDay,
+            baseSlots,
+          })
         : null;
 
       // Tag slots with artist info
@@ -579,13 +739,30 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
       // No explicit preference - show times from ALL artists, sorted by workload
       console.log("🕐 TIME-FIRST MODE: No explicit artist preference, showing all artists' availability");
 
+      const baseSlots = extractedDates.length > 0
+        ? generateSlotsForSpecificDates({
+            dates: extractedDates,
+            preferredTimeWindow,
+            maxPerDate: 2,
+          })
+        : generateSuggestedSlots({
+            preferredTimeWindow,
+            preferredDay,
+          });
+
       const allSlots = await generateSlotsFromAllArtists({
         consultMode,
         preferredTimeWindow,
         preferredDay,
+        baseSlots,
       });
       const translatorSlots = translatorNeeded
-        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        ? generateSlotsWithTranslator({
+            consultMode,
+            preferredTimeWindow,
+            preferredDay,
+            baseSlots,
+          })
         : null;
 
       if (translatorNeeded && translatorSlots && translatorSlots.length > 0) {
@@ -612,7 +789,8 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
       }
 
       // Select best slots to present (unique times, prefer lower workload)
-      const slotsToPresent = selectBestSlotsForPresentation(allSlots, 3);
+      const maxSlots = extractedDates.length > 1 ? Math.min(6, extractedDates.length * 2) : 3;
+      const slotsToPresent = selectBestSlotsForPresentation(allSlots, maxSlots);
 
       console.log(`📅 TIME-FIRST: Presenting ${slotsToPresent.length} slots (${consultMode}):`, 
         slotsToPresent.map(s => `${s.displayText} [${s.artist}]`));
