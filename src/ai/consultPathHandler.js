@@ -5,6 +5,7 @@
 // Helpers to detect and route consultation path preferences (Message vs Video w/ translator)
 
 const { updateSystemFields, createTaskForContact } = require("../../ghlClient");
+const { syncOpportunityStageFromContact } = require("./opportunityManager");
 
 function detectPathChoice(messageText) {
   if (!messageText) return null;
@@ -63,6 +64,14 @@ async function handlePathChoice({
       channelContext,
     });
 
+    // 🔁 Sync pipeline: message-based consult → CONSULT_MESSAGE stage
+    try {
+      await syncOpportunityStageFromContact(contactId, { aiPhase: "consult_support" });
+      console.log("🏗️ Pipeline stage synced after consult mode = message");
+    } catch (oppErr) {
+      console.error("❌ Error syncing opportunity stage after consult mode = message:", oppErr.message || oppErr);
+    }
+
     return { choice: "message" };
   }
 
@@ -79,6 +88,14 @@ async function handlePathChoice({
       body: "Got it — I'll set up a video consult with a translator.",
       channelContext,
     });
+
+    // 🔁 Sync pipeline: appointment-based consult → CONSULT_APPOINTMENT stage
+    try {
+      await syncOpportunityStageFromContact(contactId, { aiPhase: "consult_support" });
+      console.log("🏗️ Pipeline stage synced after consult mode = appointment/translator");
+    } catch (oppErr) {
+      console.error("❌ Error syncing opportunity stage after consult mode = appointment:", oppErr.message || oppErr);
+    }
 
     // Trigger slot generation immediately
     if (triggerAppointmentOffer) {

@@ -24,6 +24,9 @@ const {
   initialPhaseForNewIntake,
   decidePhaseForMessage,
 } = require("./src/ai/stateMachine");
+const {
+  syncOpportunityStageFromContact,
+} = require("./src/ai/opportunityManager");
 
 const { generateOpenerForContact } = require("./src/ai/aiClient");
 const { handleInboundMessage } = require("./src/ai/controller");
@@ -939,6 +942,14 @@ app.post(
                   ai_phase: AI_PHASES.HANDOFF, // Move to handoff phase after deposit paid
                 });
                 console.log("✅ System fields updated after deposit payment");
+
+                // 🔁 Sync pipeline: deposit paid → move to QUALIFIED or later
+                try {
+                  await syncOpportunityStageFromContact(contactId, { aiPhase: AI_PHASES.HANDOFF });
+                  console.log("🏗️ Pipeline stage synced after deposit payment");
+                } catch (oppErr) {
+                  console.error("❌ Error syncing opportunity stage after deposit payment:", oppErr.message || oppErr);
+                }
               } catch (ghlErr) {
                 console.error("❌ Error updating GHL after deposit:", ghlErr.message || ghlErr);
               }
@@ -1249,6 +1260,14 @@ app.post("/ghl/form-webhook", async (req, res) => {
   });
 
   console.log("✅ System fields updated for form webhook");
+
+  // 🔁 Sync pipeline stage based on new intake context
+  try {
+    await syncOpportunityStageFromContact(contactId, { aiPhase });
+    console.log("🏗️ Pipeline stage synced from form webhook context");
+  } catch (oppErr) {
+    console.error("❌ Error syncing opportunity stage from form webhook:", oppErr.message || oppErr);
+  }
 
   // 🔹 Call AI Setter for Opener and send it
   try {
@@ -1565,6 +1584,14 @@ app.post("/ghl/message-webhook", async (req, res) => {
   });
 
   console.log("✅ System fields updated for message webhook");
+
+  // 🔁 Sync pipeline stage based on latest message context
+  try {
+    await syncOpportunityStageFromContact(contactId, { aiPhase: systemState.newPhase });
+    console.log("🏗️ Pipeline stage synced from message webhook context");
+  } catch (oppErr) {
+    console.error("❌ Error syncing opportunity stage from message webhook:", oppErr.message || oppErr);
+  }
 
   // 🔄 Refetch contact so intake sees latest language_preference
   let freshContact = contact;
@@ -2272,6 +2299,14 @@ app.post("/ghl/message-webhook", async (req, res) => {
                 last_phase_update_at: new Date().toISOString(),
               });
 
+              // 🔁 Sync pipeline: deposit link sent → DEPOSIT_PENDING
+              try {
+                await syncOpportunityStageFromContact(contactId, { aiPhase: AI_PHASES.QUALIFICATION });
+                console.log("🏗️ Pipeline stage synced after deposit link generation (booking intent path)");
+              } catch (oppErr) {
+                console.error("❌ Error syncing opportunity stage after deposit link generation:", oppErr.message || oppErr);
+              }
+
               if (!consultExplainedAlready) {
                 // FULL explanation (only first time)
                 messageParts.push("We start with a quick 15–30 min consult to dial in your design, size, and placement.");
@@ -2564,6 +2599,14 @@ app.post("/ghl/message-webhook", async (req, res) => {
               });
 
               console.log("💳 Deposit link sent to lead and system fields updated");
+
+              // 🔁 Sync pipeline: deposit link sent via AI flow → DEPOSIT_PENDING
+              try {
+                await syncOpportunityStageFromContact(contactId, { aiPhase: AI_PHASES.CLOSING });
+                console.log("🏗️ Pipeline stage synced after deposit link send (AI flow)");
+              } catch (oppErr) {
+                console.error("❌ Error syncing opportunity stage after AI deposit link send:", oppErr.message || oppErr);
+              }
             }
           } else {
             console.log("ℹ️ No deposit link created (either not requested, already sent, or already paid).", {
