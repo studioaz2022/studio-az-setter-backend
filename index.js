@@ -248,9 +248,23 @@ function isBookingIntent(messageText, contactProfile = null, currentPhase = null
 function isRescheduleIntent(messageText) {
   if (!messageText) return false;
   const text = String(messageText).toLowerCase();
-  return /\b(reschedule|change.*time|different.*time|move.*appointment|can't make it|cannot make|something came up|need to change|push.*appointment|switch.*time)\b/i.test(
-    text
+  const detected = (
+    /\bresched(ule|uling)?\b/.test(text) ||
+    /\b(change\b.*\b(time|day|date)\b|\btime\b.*\bchange\b)/.test(text) ||
+    /\b(move\b.*\b(appointment|consult)\b|\bpush\b.*\b(appointment|consult)\b)/.test(text) ||
+    /\b(different|another|new)\s+(time|day|date)\b/.test(text) ||
+    /\b(can'?t|cannot)\s+make\s+it\b/.test(text) ||
+    /\bsomething\s+came\s+up\b/.test(text) ||
+    /\bneed\s+to\s+(change|move|switch)\b.*\b(time|day|date|appointment|consult)\b/.test(text) ||
+    /\bthat\s+time\s+won'?t\s+work\b/.test(text) ||
+    /\bthat\s+day\s+won'?t\s+work\b/.test(text)
   );
+  
+  if (detected) {
+    console.log(`🔄 [RESCHEDULE_INTENT] Detected reschedule intent from message: "${messageText}"`);
+  }
+  
+  return detected;
 }
 
 /**

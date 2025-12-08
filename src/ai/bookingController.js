@@ -134,6 +134,8 @@ function generateSlotsForSpecificDates({ dates = [], preferredTimeWindow = null,
   const slots = [];
   const hours = hoursForWindow(preferredTimeWindow);
 
+  console.log(`📅 [SLOT_GENERATION] Generating slots for ${dates.length} specific date(s) using SYNTHETIC times (GHL availability not yet integrated)`);
+
   for (const date of dates) {
     for (let i = 0; i < hours.length && i < maxPerDate; i++) {
       const hour = hours[i];
@@ -153,6 +155,7 @@ function generateSlotsForSpecificDates({ dates = [], preferredTimeWindow = null,
     }
   }
 
+  console.log(`📅 [SLOT_GENERATION] Generated ${slots.length} synthetic slots for dates: ${dates.map(d => d.toISOString().slice(0, 10)).join(", ")}`);
   return slots;
 }
 
@@ -209,6 +212,8 @@ function generateSuggestedSlots(options = {}) {
   }
 
   // Generate 3 options
+  console.log(`📅 [SLOT_GENERATION] Generating synthetic slots (preferredDay: ${preferredDay || "none"}, preferredTimeWindow: ${preferredTimeWindow || "none"})`);
+  
   for (let i = 0; i < 3; i++) {
     // If not a specific day request, skip weekends
     if (!preferredDay) {
@@ -240,6 +245,7 @@ function generateSuggestedSlots(options = {}) {
     }
   }
 
+  console.log(`📅 [SLOT_GENERATION] Generated ${slots.length} synthetic slots`);
   return slots.slice(0, 3); // Return up to 3 options
 }
 

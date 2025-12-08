@@ -39,6 +39,7 @@ async function handlePathChoice({
   if (!choice) return null;
 
   if (choice === "message") {
+    console.log(`📝 [CONSULTATION_TYPE] Setting consultation_type="message" for contact ${contactId} (detected from: "${messageText}")`);
     await updateSystemFields(contactId, {
       consultation_type: "message",
       translator_needed: false,
@@ -66,6 +67,7 @@ async function handlePathChoice({
   }
 
   if (choice === "translator") {
+    console.log(`📝 [CONSULTATION_TYPE] Setting consultation_type="appointment" (translator needed) for contact ${contactId} (detected from: "${messageText}")`);
     await updateSystemFields(contactId, {
       consultation_type: "appointment",
       translator_needed: true,
