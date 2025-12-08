@@ -1475,6 +1475,11 @@ app.post("/ghl/message-webhook", async (req, res) => {
   }
 
   // Passive bilingual/Spanish comfort detection for English leads
+  const contactLanguagePreference =
+    currentLanguage ||
+    existingLanguagePreference ||
+    "English";
+
   const currentComfort =
     cf.lead_spanish_comfortable ||
     cf.leadSpanishComfortable ||
@@ -1546,10 +1551,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const contactSystemFields = contactCustomFields; // System fields are also in customField
   
   // Get language preference from fresh contact
-  const contactLanguagePreference =
+  const contactLanguagePreferenceFresh =
     contactCustomFields["language_preference"] ||
     contactCustomFields["Language Preference"] ||
-    currentLanguage ||
+    contactLanguagePreference ||
     "English";
 
   // Build merged contactProfile (webhook values take precedence)
@@ -1594,7 +1599,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     contactId,
     aiPhase: systemState.currentPhase || "intake",
     leadTemperature: systemState.leadTemperature,
-    language: contactLanguagePreference,
+    language: contactLanguagePreferenceFresh,
     contactProfile,
   };
 
