@@ -34,6 +34,7 @@ const {
   LEAD_TEMPERATURES,
   SYSTEM_FIELDS,
   CALENDARS,
+  TRANSLATOR_CALENDARS,
   APPOINTMENT_STATUS,
   TATTOO_FIELDS,
 } = require("./src/config/constants");
@@ -51,7 +52,12 @@ const {
   listAppointmentsForContact,
   updateAppointmentStatus,
   getConsultAppointmentsForContact,
+  rescheduleAppointment,
 } = require("./src/clients/ghlCalendarClient");
+const {
+  detectPathChoice,
+  handlePathChoice,
+} = require("./src/ai/consultPathHandler");
 
 const app = express();
 
@@ -525,6 +531,24 @@ function looksLikeSpanish(text) {
   return hasAccent || hits >= 2;
 }
 
+// Detect if an English lead expresses comfort speaking Spanish/bilingual
+function detectsSpanishComfort(text) {
+  if (!text) return false;
+  const v = String(text).toLowerCase();
+  const patterns = [
+    /hablo\s+espa[nñ]ol/,
+    /puedo\s+hablar\s+espa[nñ]ol/,
+    /se[eé]\s+espa[nñ]ol/,
+    /\bi\s+spea?k?\s+spanish\b/,
+    /\bi'?m\s+bilingual\b/,
+    /spanish\s+is\s+fine/,
+    /no\s+problem\s+with\s+spanish/,
+    /spanish\s+works/,
+    /espa[nñ]ol\s+est[aá]\s+bien/,
+  ];
+  return patterns.some((p) => p.test(v));
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -728,6 +752,89 @@ app.post("/internal/holds/sweep", async (req, res) => {
   }
 });
 
+// Appointment sync webhook (artist <-> translator)
+app.post("/webhooks/ghl/appointment", async (req, res) => {
+  const sharedSecret = process.env.GHL_APPOINTMENT_WEBHOOK_SECRET;
+  const providedSecret =
+    req.headers["x-webhook-secret"] ||
+    req.headers["x-ghl-signature"] ||
+    null;
+
+  if (sharedSecret && providedSecret && sharedSecret !== providedSecret) {
+    console.warn("⚠️ Appointment webhook rejected: invalid secret");
+    return res.status(401).json({ ok: false });
+  }
+
+  try {
+    const payload = req.body || {};
+    const appointment = payload.appointment || payload || {};
+
+    const appointmentId = appointment.id || appointment.appointmentId;
+    const contactId = appointment.contactId || appointment.contact_id;
+    const calendarId = appointment.calendarId || appointment.calendar_id;
+    const rawStatus = appointment.appointmentStatus || appointment.status;
+    const startISO = appointment.startTime || appointment.start_time;
+    const endISO = appointment.endTime || appointment.end_time;
+
+    if (!appointmentId || !contactId || !calendarId || !startISO || !endISO) {
+      console.warn("⚠️ Appointment webhook missing required fields");
+      return res.status(200).json({ ok: true });
+    }
+
+    const translatorCalSet = new Set(Object.values(TRANSLATOR_CALENDARS));
+    const artistCalSet = new Set(Object.values(CALENDARS));
+    const actorIsTranslator = translatorCalSet.has(calendarId);
+    const siblingCalIds = actorIsTranslator ? Array.from(artistCalSet) : Array.from(translatorCalSet);
+
+    const isCancelled = ["cancelled", "canceled"].includes(String(rawStatus || "").toLowerCase());
+
+    const allEvents = await listAppointmentsForContact(contactId);
+    const baseStart = new Date(startISO).getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const siblings = allEvents.filter((ev) => {
+      if (!ev || !ev.id || ev.id === appointmentId) return false;
+      if (!siblingCalIds.includes(ev.calendarId)) return false;
+      if (ev.contactId !== contactId) return false;
+      const evStart = new Date(ev.startTime).getTime();
+      return Math.abs(evStart - baseStart) <= dayMs;
+    });
+
+    if (!siblings.length) {
+      console.log("ℹ️ Appointment webhook: no sibling events to sync");
+      return res.status(200).json({ ok: true, synced: 0 });
+    }
+
+    if (isCancelled) {
+      await Promise.all(
+        siblings.map((ev) =>
+          updateAppointmentStatus(ev.id, APPOINTMENT_STATUS.CANCELLED).catch((err) =>
+            console.error("❌ Failed to cancel sibling appointment:", err.response?.data || err.message)
+          )
+        )
+      );
+      return res.status(200).json({ ok: true, synced: siblings.length, action: "cancelled" });
+    }
+
+    await Promise.all(
+      siblings.map((ev) =>
+        rescheduleAppointment(ev.id, {
+          startTime: startISO,
+          endTime: endISO,
+          appointmentStatus: ev.appointmentStatus || "confirmed",
+        }).catch((err) =>
+          console.error("❌ Failed to reschedule sibling appointment:", err.response?.data || err.message)
+        )
+      )
+    );
+
+    return res.status(200).json({ ok: true, synced: siblings.length, action: "rescheduled" });
+  } catch (err) {
+    console.error("❌ Error in appointment sync webhook:", err.response?.data || err.message);
+    return res.status(200).json({ ok: false });
+  }
+});
+
 app.post(
   "/square/webhook",
   express.raw({ type: "application/json" }),
@@ -915,48 +1022,58 @@ app.post(
                 }
               }
 
-              // 📬 Send confirmation DM - ALWAYS send this when deposit is paid
+              // 📬 Send confirmation DM - ONLY if not already sent
               try {
-                // Reuse contact from above or fetch if not available
-                const contactForDm = contact || await getContact(contactId);
+                const contactForDm = contact || (await getContact(contactId));
                 if (contactForDm) {
-                  const hasPhone = !!(contactForDm.phone || contactForDm.phoneNumber);
-                  const tags = contactForDm.tags || [];
-                  const isDm = tags.some(
-                    (t) =>
-                      typeof t === "string" &&
-                      (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
-                  );
+                  const cfForDm = contactForDm.customField || contactForDm.customFields || {};
+                  const alreadySent =
+                    cfForDm.deposit_confirmation_sent === "Yes" ||
+                    cfForDm.deposit_confirmation_sent === true;
 
-                  const channelContext = {
-                    isDm,
-                    hasPhone,
-                    conversationId: null,
-                    phone: contactForDm.phone || contactForDm.phoneNumber || null,
-                  };
-
-                  // Determine if channel supports emojis
-                  const useEmojis = channelSupportsEmojis(channelContext, contactForDm);
-
-                  // Build confirmation message based on whether appointment was created
-                  let confirmMessage;
-                  if (appointmentCreated && appointmentSlotDisplay) {
-                    confirmMessage = useEmojis
-                      ? `Got your deposit 🙌\nYou're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}.\nYou'll get a reminder before your consult.`
-                      : `Got your deposit! You're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}. You'll get a reminder before your consult.`;
+                  if (alreadySent) {
+                    console.log("ℹ️ Deposit confirmation already sent, skipping duplicate DM");
                   } else {
-                    // Deposit paid but no appointment yet - prompt them to pick a time
-                    confirmMessage = useEmojis
-                      ? `Got your deposit 🙌\nNow let's lock in your consult time. What days work best for you?`
-                      : `Got your deposit! Now let's lock in your consult time. What days work best for you?`;
-                  }
+                    const hasPhone = !!(contactForDm.phone || contactForDm.phoneNumber);
+                    const tags = contactForDm.tags || [];
+                    const isDm = tags.some(
+                      (t) =>
+                        typeof t === "string" &&
+                        (t.includes("INSTAGRAM") || t.includes("FACEBOOK") || t.includes("DM"))
+                    );
 
-                  await sendConversationMessage({
-                    contactId,
-                    body: confirmMessage,
-                    channelContext,
-                  });
-                  console.log("📬 Deposit confirmation DM sent to contact");
+                    const channelContext = {
+                      isDm,
+                      hasPhone,
+                      conversationId: null,
+                      phone: contactForDm.phone || contactForDm.phoneNumber || null,
+                    };
+
+                    const useEmojis = channelSupportsEmojis(channelContext, contactForDm);
+
+                    let confirmMessage;
+                    if (appointmentCreated && appointmentSlotDisplay) {
+                      confirmMessage = useEmojis
+                        ? `Got your deposit 🙌\nYou're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}.\nYou'll get a reminder before your consult.`
+                        : `Got your deposit! You're officially locked in for ${appointmentSlotDisplay}${appointmentArtist ? ` with ${appointmentArtist}` : ""}. You'll get a reminder before your consult.`;
+                    } else {
+                      confirmMessage = useEmojis
+                        ? `Got your deposit 🙌\nNow let's lock in your consult time. What days work best for you?`
+                        : `Got your deposit! Now let's lock in your consult time. What days work best for you?`;
+                    }
+
+                    await sendConversationMessage({
+                      contactId,
+                      body: confirmMessage,
+                      channelContext,
+                    });
+
+                    await updateSystemFields(contactId, {
+                      deposit_confirmation_sent: true,
+                    });
+
+                    console.log("📬 Deposit confirmation DM sent to contact");
+                  }
                 }
               } catch (dmErr) {
                 console.error("❌ Error sending deposit confirmation DM:", dmErr.message || dmErr);
@@ -1367,6 +1484,36 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
   }
 
+  // Passive bilingual/Spanish comfort detection for English leads
+  const contactLanguagePreference =
+    currentLanguage ||
+    existingLanguagePreference ||
+    "English";
+
+  const currentComfort =
+    cf.lead_spanish_comfortable ||
+    cf.leadSpanishComfortable ||
+    null;
+  const spanishComfortDetected = detectsSpanishComfort(messageText);
+  const isEnglishLead =
+    (contactLanguagePreference || "English").toLowerCase().includes("english");
+
+  if (isEnglishLead && spanishComfortDetected && currentComfort !== "Yes") {
+    try {
+      await updateSystemFields(contactId, {
+        lead_spanish_comfortable: true,
+      });
+      console.log(
+        "✅ Detected Spanish comfort for English lead; updated lead_spanish_comfortable = Yes"
+      );
+    } catch (err) {
+      console.error(
+        "❌ Failed to update lead_spanish_comfortable:",
+        err.response?.data || err.message
+      );
+    }
+  }
+
   // Derive system state from webhook + contact fields
   const currentPhase =
     rawBody["AI Phase"] ||
@@ -1414,10 +1561,10 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const contactSystemFields = contactCustomFields; // System fields are also in customField
   
   // Get language preference from fresh contact
-  const contactLanguagePreference =
+  const contactLanguagePreferenceFresh =
     contactCustomFields["language_preference"] ||
     contactCustomFields["Language Preference"] ||
-    currentLanguage ||
+    contactLanguagePreference ||
     "English";
 
   // Build merged contactProfile (webhook values take precedence)
@@ -1442,12 +1589,23 @@ app.post("/ghl/message-webhook", async (req, res) => {
       contactProfileFromWebhook.tattooColor ||
       contactCustomFields?.tattoo_color_preference ||
       null,
+    leadSpanishComfortable:
+      contactCustomFields?.lead_spanish_comfortable ||
+      contactCustomFields?.leadSpanishComfortable ||
+      null,
+    translatorNeeded:
+      contactCustomFields?.translator_needed === "Yes" ||
+      contactCustomFields?.translatorNeeded === true,
     depositPaid:
       contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
     depositLinkSent:
       contactProfileFromWebhook.depositLinkSent ||
       contactSystemFields?.deposit_link_sent === "Yes",
+    tattooDescriptionAcknowledged:
+      !!(contactProfileFromWebhook.tattooSummary ||
+        contactCustomFields?.tattoo_summary ||
+        contactCustomFields?.["Tattoo Summary"]),
   };
 
   // Build enriched AI payload
@@ -1455,7 +1613,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     contactId,
     aiPhase: systemState.currentPhase || "intake",
     leadTemperature: systemState.leadTemperature,
-    language: contactLanguagePreference,
+    language: contactLanguagePreferenceFresh,
     contactProfile,
   };
 
@@ -1526,6 +1684,48 @@ app.post("/ghl/message-webhook", async (req, res) => {
   // Detect consult mode preference from user's message (or default to online)
   const detectedConsultMode = detectConsultModePreference(messageText) || "online";
 
+  // 🔀 Path choice handling (Message vs Translator/Video)
+  const pathChoice = detectPathChoice(messageText);
+  if (pathChoice && !skipAIEntirely) {
+    const handled = await handlePathChoice({
+      contactId,
+      messageText,
+      channelContext,
+      sendConversationMessage,
+      triggerAppointmentOffer: async ({ contactId: cid, channelContext: ctx, translatorNeeded }) => {
+        // Generate appointment slots after translator choice
+        const offer = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: {
+            consultMode: detectedConsultMode,
+            latestMessageText: messageText,
+            translatorNeeded,
+          },
+          contactProfile,
+        });
+
+        if (offer && offer.slots && offer.slots.length > 0) {
+          appointmentOfferData = offer;
+          const slotsText = offer.slots
+            .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
+            .join("\n");
+
+          await sendConversationMessage({
+            contactId: cid,
+            body: `Here are some times that work:\n\n${slotsText}\n\nWhich one works for you?`,
+            channelContext: ctx,
+          });
+        }
+      },
+    });
+    if (handled) {
+      return res.status(200).json({
+        success: true,
+        message: `Consult path recorded: ${handled.choice}`,
+      });
+    }
+  }
+
   // 🚀 SLOT SELECTION: User is picking a specific time (e.g., "Let's do Dec 3")
   // This should work in ANY phase - if they're picking a time, book it
   if (isSlotSelection(messageText) || isTimeSelection(messageText)) {
@@ -1543,6 +1743,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           consultMode: detectedConsultMode,
           preferredDay: requestedWeekday?.name,
           latestMessageText: messageText,
+          translatorNeeded: contactProfile.translatorNeeded,
         },
         contactProfile,
       });
@@ -1556,6 +1757,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
           // Use slot's artist/calendar (TIME-FIRST) or fall back to offer data (ARTIST-FIRST)
           const slotArtist = selectedSlot.artist || appointmentOfferData.artist;
           const slotCalendarId = selectedSlot.calendarId || appointmentOfferData.calendarId;
+          const translatorCalendarId =
+            selectedSlot.translatorCalendarId || appointmentOfferData.translatorCalendarId || null;
+          const translatorName = selectedSlot.translator || null;
           
           console.log(`📅 Booking with artist: ${slotArtist}, calendar: ${slotCalendarId} (mode: ${appointmentOfferData.mode || "unknown"})`);
 
@@ -1569,6 +1773,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
               artist: slotArtist,
               consultMode: appointmentOfferData.consultMode,
               contactProfile,
+              translatorNeeded: appointmentOfferData.translatorNeeded || !!translatorCalendarId,
+              translatorCalendarId,
+              translatorName,
             });
 
             const now = new Date().toISOString();
@@ -1674,6 +1881,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           aiMeta: {
             consultMode: detectedConsultMode,
             latestMessageText: messageText,
+            translatorNeeded: contactProfile.translatorNeeded,
           },
           contactProfile,
         });
@@ -1749,6 +1957,39 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
   
   if (!skipAIEntirely && bookingIntentDetected) {
+    const leadSpanishComfortable =
+      String(contactProfile.leadSpanishComfortable || "").toLowerCase() === "yes";
+    const isEnglishLead =
+      (contactLanguagePreference || "English").toLowerCase().includes("english");
+    const needsLanguageBarrierMessage = isEnglishLead && !leadSpanishComfortable;
+
+    // Language barrier gating: default to message consult, offer translator if requested
+    if (needsLanguageBarrierMessage) {
+      const cf = contact.customField || contact.customFields || {};
+
+      if (cf.language_barrier_explained === "Yes" || cf.language_barrier_explained === true) {
+        console.log("ℹ️ Language barrier already explained, continuing to booking intent flow");
+      } else {
+        const barrierMessage =
+          "Our artist's native language is Spanish. Most clients either do a quick video call with a translator or message the artist directly about the design details — both have worked great!\n\nWhich would you prefer?";
+
+        await sendConversationMessage({
+          contactId,
+          body: barrierMessage,
+          channelContext,
+        });
+
+        await updateSystemFields(contactId, {
+          language_barrier_explained: true,
+        });
+
+        return res.status(200).json({
+          success: true,
+          message: "Language barrier message sent prior to booking options",
+        });
+      }
+    }
+
     // Log which type of intent was detected
     const intentType = isStrongBookingIntent(messageText) ? "STRONG" : "WEAK (gated)";
     console.log(`🚀 BOOKING INTENT DETECTED (${intentType}) - bypassing AI, sending times directly`);
@@ -1761,6 +2002,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         aiMeta: {
           consultMode: detectedConsultMode,
           latestMessageText: messageText,
+          translatorNeeded: contactProfile.translatorNeeded,
         },
         contactProfile,
       });
@@ -1950,6 +2192,33 @@ app.post("/ghl/message-webhook", async (req, res) => {
       if (bubblesToSend.length > maxBubbles) {
         console.log(`📝 Limiting bubbles from ${bubblesToSend.length} to ${maxBubbles}`);
         bubblesToSend = bubblesToSend.slice(0, maxBubbles);
+      }
+
+      // 🔒 VALIDATION: Remove bubbles that claim to send deposit link if backend won't actually send it
+      // Check if any bubble claims to send a deposit link
+      const depositLinkClaimPatterns = [
+        /(sent|sending|sending you|here's|here is).*deposit.*link/i,
+        /deposit.*link.*(sent|sending|here)/i,
+        /just sent.*deposit/i,
+      ];
+      
+      const claimsToSendLink = bubblesToSend.some(bubble => 
+        depositLinkClaimPatterns.some(pattern => pattern.test(bubble))
+      );
+      
+      if (claimsToSendLink) {
+        // Verify backend will actually create/send the link
+        const willCreateLink = aiResult.meta?.wantsDepositLink === true && 
+          !alreadyPaid && 
+          !alreadySent;
+        
+        if (!willCreateLink) {
+          console.warn("⚠️ AI claimed to send deposit link but backend won't create it - removing claim from bubbles");
+          // Remove bubbles that claim to send the link
+          bubblesToSend = bubblesToSend.filter(bubble => 
+            !depositLinkClaimPatterns.some(pattern => pattern.test(bubble))
+          );
+        }
       }
 
       // If we're about to send a deposit link this turn,

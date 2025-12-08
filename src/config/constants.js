@@ -36,6 +36,9 @@ const SYSTEM_FIELDS = {
   CONSULTATION_TYPE: "consultation_type",
   ASSIGNED_ARTIST: "assigned_artist",
   ARTIST_ASSIGNED_AT: "artist_assigned_at",
+  LEAD_SPANISH_COMFORTABLE: "lead_spanish_comfortable",
+  TRANSLATOR_NEEDED: "translator_needed",
+  TRANSLATOR_APPOINTMENT_ID: "translator_appointment_id",
   RETURNING_CLIENT: "returning_client",
   CLIENT_LIFETIME_VALUE: "client_lifetime_value",
   TOTAL_TATTOOS_COMPLETED: "total_tattoos_completed",
@@ -108,11 +111,20 @@ const MESSAGE_DELAYS = {
 };
 
 // Calendar IDs for consult appointments
+// TEMP: Using test calendar for troubleshooting (will revert to real calendars later)
 const CALENDARS = {
-  JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
-  JOAN_ONLINE: "Y13HIK8jFgO45zyq4sk7",
-  ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
-  ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
+  JOAN_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
+  JOAN_ONLINE: "2EJcAtrllnYOtuSx4Dua",
+  ANDREW_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
+  ANDREW_ONLINE: "2EJcAtrllnYOtuSx4Dua",
+};
+
+// Translator calendars (hardcoded)
+const TRANSLATOR_CALENDARS = {
+  LIONEL_IN_PERSON: "qmjQJranj3zQqFqipCl4",
+  LIONEL_ONLINE: "wDyotwOVW0fhgwKJGJxc",
+  MARIA_IN_PERSON: "mmLWt370a94tbaNQIgNw",
+  MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
 };
 
 const OPPORTUNITY_STAGES = {
@@ -150,6 +162,12 @@ const ARTIST_ASSIGNED_USER_IDS = {
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
 };
 
+// Artist language capabilities (hardcoded)
+const ARTIST_LANGUAGES = {
+  Joan: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
+  Andrew: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
+};
+
 module.exports = {
   AI_PHASES,
   LEAD_TEMPERATURES,
@@ -160,9 +178,11 @@ module.exports = {
   TAGS,
   MESSAGE_DELAYS,
   CALENDARS,
+  TRANSLATOR_CALENDARS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
   ARTIST_ASSIGNED_USER_IDS,
+  ARTIST_LANGUAGES,
   OPPORTUNITY_STAGES,
 };
 

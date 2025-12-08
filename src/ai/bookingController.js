@@ -1,7 +1,7 @@
 // bookingController.js
 // Handles appointment booking orchestration
 
-const { getContact } = require("../../ghlClient");
+const { getContact, updateSystemFields } = require("../../ghlClient");
 const {
   determineArtist,
   getCalendarIdForArtist,
@@ -17,8 +17,14 @@ const {
   listAppointmentsForContact,
   getConsultAppointmentsForContact,
 } = require("../clients/ghlCalendarClient");
-const { CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
+const {
+  CALENDARS,
+  TRANSLATOR_CALENDARS,
+  HOLD_CONFIG,
+  APPOINTMENT_STATUS,
+} = require("../config/constants");
 const { sendConversationMessage } = require("../../ghlClient");
+const { boolField, normalizeCustomFields } = require("./opportunityManager");
 
 // Active artists for time-first slot generation
 const ACTIVE_ARTISTS = ["Joan", "Andrew"];
@@ -138,6 +144,19 @@ function formatSlotDisplay(date) {
   return `${dayName}, ${month} ${day} at ${displayHour}${displayMinute}${ampm}`;
 }
 
+function getTranslatorCalendarsForMode(consultMode = "online") {
+  const isInPerson = consultMode === "in_person" || consultMode === "in-person";
+  return isInPerson
+    ? [
+        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_IN_PERSON },
+        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_IN_PERSON },
+      ]
+    : [
+        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_ONLINE },
+        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_ONLINE },
+      ];
+}
+
 /**
  * Parse user's time selection from their message
  * Returns the selected slot index (0-based) or null if not found
@@ -147,6 +166,7 @@ function formatSlotDisplay(date) {
  * - "let's do Wednesday", "let's do Dec 3"
  * - "Tuesday works", "I'll take the first one"
  * - "5pm", "the evening one"
+ * - "the 10th", "10th at 5pm"
  */
 function parseTimeSelection(messageText, availableSlots) {
   if (!messageText || !availableSlots || availableSlots.length === 0) {
@@ -155,24 +175,42 @@ function parseTimeSelection(messageText, availableSlots) {
 
   const text = String(messageText).toLowerCase().trim();
 
-  // Check for explicit option numbers first
+  // === GUARD: Don't treat availability questions or multiple dates as selections ===
+  const isAskingForAvailability = /\b(what times|when are you|available|availability|what works|what days)\b/i.test(text);
+  const dateMatches = text.match(/\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s*\d{1,2}/gi) || [];
+  const dayMatches = text.match(/\b\d{1,2}(st|nd|rd|th)\b/gi) || [];
+  
+  if (isAskingForAvailability) {
+    console.log("📅 Detected availability question - not a slot selection");
+    return null;
+  }
+  
+  if (dateMatches.length > 1 || dayMatches.length > 1) {
+    console.log("📅 Detected multiple dates mentioned - not a slot selection, asking for clarification");
+    return null;
+  }
+
+  // === Check for explicit option numbers first ===
   const optionMatch = text.match(/option\s*#?(\d)/i) || text.match(/^#?(\d)$/);
   if (optionMatch) {
     const num = parseInt(optionMatch[1], 10);
     if (num >= 1 && num <= availableSlots.length) {
+      console.log(`✅ Matched option number: ${num}`);
       return num - 1;
     }
   }
 
-  // Check for ordinal references ("first", "second", "third")
+  // === Check for ordinal references ("first", "second", "third") ===
   const ordinals = ["first", "second", "third", "1st", "2nd", "3rd"];
-  for (let i = 0; i < ordinals.length && i < availableSlots.length; i++) {
-    if (text.includes(ordinals[i]) || text.includes(ordinals[i + 3])) {
-      return i % 3; // Map ordinals to 0, 1, 2
+  for (let i = 0; i < Math.min(ordinals.length, availableSlots.length); i++) {
+    const ordinalIdx = i % 3;
+    if (text.includes(ordinals[ordinalIdx]) || text.includes(ordinals[ordinalIdx + 3])) {
+      console.log(`✅ Matched ordinal: ${ordinals[ordinalIdx]}`);
+      return ordinalIdx;
     }
   }
 
-  // Check for day names (full and abbreviated)
+  // === Check for day names (full and abbreviated) ===
   const daysFull = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   const daysAbbr = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
   
@@ -182,13 +220,13 @@ function parseTimeSelection(messageText, availableSlots) {
     const dayNameFull = daysFull[dayIndex];
     const dayNameAbbr = daysAbbr[dayIndex];
     
-    // Match full day name or abbreviation
     if (text.includes(dayNameFull) || new RegExp(`\\b${dayNameAbbr}\\b`).test(text)) {
+      console.log(`✅ Matched day name: ${dayNameFull} → slot ${i + 1}`);
       return i;
     }
   }
 
-  // Check for month + day mentions (e.g., "Dec 3", "December 3rd")
+  // === Check for month + day mentions (e.g., "Dec 3", "December 3rd") ===
   const monthsFull = ["january", "february", "march", "april", "may", "june", 
                       "july", "august", "september", "october", "november", "december"];
   const monthsAbbr = ["jan", "feb", "mar", "apr", "may", "jun", 
@@ -202,22 +240,54 @@ function parseTimeSelection(messageText, availableSlots) {
     const monthFull = monthsFull[monthIndex];
     const monthAbbr = monthsAbbr[monthIndex];
     
-    // Check for patterns like "dec 3", "december 3", "dec 3rd"
     const dayPatterns = [
-      `${monthAbbr}\\s*${day}`,
-      `${monthFull}\\s*${day}`,
-      `${monthAbbr}\\s*${day}(st|nd|rd|th)?`,
-      `${monthFull}\\s*${day}(st|nd|rd|th)?`,
+      `${monthAbbr}\\s*${day}(st|nd|rd|th)?\\b`,
+      `${monthFull}\\s*${day}(st|nd|rd|th)?\\b`,
     ];
     
     for (const pattern of dayPatterns) {
       if (new RegExp(pattern, "i").test(text)) {
+        console.log(`✅ Matched month+day: ${monthAbbr} ${day} → slot ${i + 1}`);
         return i;
       }
     }
   }
 
-  // Check for time mentions (e.g. "5pm", "5:00", "evening")
+  // === NEW: Handle bare day-of-month like "the 10th", "10th at 5pm" ===
+  const dayOfMonthMatch = text.match(/\bthe?\s*(\d{1,2})(st|nd|rd|th)?\b/i);
+  if (dayOfMonthMatch) {
+    const requestedDay = parseInt(dayOfMonthMatch[1], 10);
+    const timeMatch = text.match(/(\d{1,2})(?::\d{2})?\s*(am|pm)/i);
+    
+    console.log(`📅 Looking for day-of-month: ${requestedDay}${timeMatch ? ` at ${timeMatch[1]}${timeMatch[2]}` : ''}`);
+    
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slotDate = new Date(availableSlots[i].startTime);
+      const slotDay = slotDate.getDate();
+      const slotHour = slotDate.getHours();
+      const slotHour12 = slotHour > 12 ? slotHour - 12 : slotHour === 0 ? 12 : slotHour;
+      const slotAmpm = slotHour >= 12 ? "pm" : "am";
+
+      if (slotDay === requestedDay) {
+        if (!timeMatch) {
+          console.log(`✅ Matched day-of-month ${requestedDay} → slot ${i + 1}`);
+          return i; // Day matches and no specific time given
+        }
+        const reqHour = parseInt(timeMatch[1], 10);
+        const reqAmpm = timeMatch[2].toLowerCase();
+        if (reqHour === slotHour12 && reqAmpm === slotAmpm) {
+          console.log(`✅ Matched day-of-month ${requestedDay} at ${reqHour}${reqAmpm} → slot ${i + 1}`);
+          return i; // Exact day+time match
+        }
+      }
+    }
+    
+    // If they specified a day-of-month but no slot matches, return null to trigger clarification
+    console.log(`⚠️ Day-of-month ${requestedDay} not found in available slots`);
+    return null;
+  }
+
+  // === Check for time mentions (e.g. "5pm", "5:00", "evening") - LAST RESORT ===
   for (let i = 0; i < availableSlots.length; i++) {
     const slotDate = new Date(availableSlots[i].startTime);
     const hour = slotDate.getHours();
@@ -232,19 +302,22 @@ function parseTimeSelection(messageText, availableSlots) {
       (hour >= 12 && hour < 17 && text.includes("afternoon")) ||
       (hour < 12 && text.includes("morning"))
     ) {
+      console.log(`✅ Matched time ${hour12}${ampm} → slot ${i + 1}`);
       return i;
     }
   }
 
-  // Fallback: if message contains just a number that matches a slot
+  // === Fallback: if message contains just a number that matches a slot ===
   const justNumber = text.match(/^(\d)$/);
   if (justNumber) {
     const num = parseInt(justNumber[1], 10);
     if (num >= 1 && num <= availableSlots.length) {
+      console.log(`✅ Matched bare number: ${num}`);
       return num - 1;
     }
   }
 
+  console.log("⚠️ Could not parse time selection from message");
   return null;
 }
 
@@ -363,6 +436,28 @@ async function generateSlotsFromAllArtists(options = {}) {
 }
 
 /**
+ * Generate slots that include translator pairing (both in-person and online variants)
+ */
+function generateSlotsWithTranslator(options = {}) {
+  const { consultMode = "online", preferredTimeWindow = null, preferredDay = null } = options;
+  const baseSlots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  const translators = getTranslatorCalendarsForMode(consultMode);
+
+  const slots = [];
+  for (const slot of baseSlots) {
+    for (const t of translators) {
+      slots.push({
+        ...slot,
+        translator: t.name,
+        translatorCalendarId: t.calendarId,
+      });
+    }
+  }
+
+  return slots;
+}
+
+/**
  * Select best slots to present to lead (time-first approach)
  * Picks unique time slots, preferring lower-workload artists
  * 
@@ -413,6 +508,10 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
     const preferredTimeWindow = aiMeta?.preferredTimeWindow || null;
     const preferredDay = aiMeta?.preferredDay || null;
     const messageText = aiMeta?.latestMessageText || null;
+    const translatorNeeded =
+      aiMeta?.translatorNeeded === true ||
+      contactProfile?.translatorNeeded === true ||
+      contactProfile?.translatorNeeded === "Yes";
 
     // Check for EXPLICIT artist preference (URL param, custom field, DM mention)
     const explicitArtist = getExplicitArtistPreference(contact, messageText);
@@ -445,12 +544,18 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         preferredTimeWindow,
         preferredDay,
       });
+      const translatorSlots = translatorNeeded
+        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        : null;
 
       // Tag slots with artist info
-      const slots = baseSlots.map(slot => ({
+      const sourceSlots = translatorNeeded && translatorSlots ? translatorSlots : baseSlots;
+      const slots = sourceSlots.map((slot) => ({
         ...slot,
         artist: explicitArtist,
         calendarId,
+        translator: slot.translator || null,
+        translatorCalendarId: slot.translatorCalendarId || null,
       }));
 
       if (slots.length === 0) {
@@ -467,6 +572,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         consultMode,
         calendarId,
         slots,
+        translatorNeeded,
       };
     } else {
       // ========== TIME-FIRST MODE ==========
@@ -478,6 +584,27 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         preferredTimeWindow,
         preferredDay,
       });
+      const translatorSlots = translatorNeeded
+        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        : null;
+
+      if (translatorNeeded && translatorSlots && translatorSlots.length > 0) {
+        const slotsWithTranslators = [];
+        const translators = getTranslatorCalendarsForMode(consultMode);
+
+        for (const base of allSlots) {
+          for (const t of translators) {
+            slotsWithTranslators.push({
+              ...base,
+              translator: t.name,
+              translatorCalendarId: t.calendarId,
+            });
+          }
+        }
+        // Replace with translated slots
+        allSlots.length = 0;
+        slotsWithTranslators.forEach((s) => allSlots.push(s));
+      }
 
       if (allSlots.length === 0) {
         console.warn("⚠️ Could not generate time slots from any artist");
@@ -501,6 +628,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         calendarId: slotsToPresent[0]?.calendarId, // Primary calendar (for backward compat)
         slots: slotsToPresent,
         allSlots, // Full list for matching if lead picks a different time
+        translatorNeeded,
       };
     }
   } catch (err) {
@@ -521,6 +649,9 @@ async function createConsultAppointment({
   artist,
   consultMode,
   contactProfile,
+  translatorNeeded = false,
+  translatorCalendarId = null,
+  translatorName = null,
 }) {
   try {
     const contact = await getContact(contactId);
@@ -528,9 +659,13 @@ async function createConsultAppointment({
       throw new Error(`Contact ${contactId} not found`);
     }
 
-    // Check if deposit is already paid
-    const cf = contact?.customField || contact?.customFields || {};
-    const depositPaid = cf.deposit_paid === "Yes" || cf.deposit_paid === true;
+    // Check if deposit is already paid - normalize custom fields
+    const rawCf = contact?.customField || contact?.customFields || {};
+    const cf = typeof normalizeCustomFields === "function" ? normalizeCustomFields(rawCf) : rawCf;
+    const depositPaid =
+      typeof boolField === "function"
+        ? boolField(cf.deposit_paid)
+        : cf.deposit_paid === "Yes" || cf.deposit_paid === true;
 
     // Build appointment title
     const tattooSummary = contactProfile?.tattooSummary || "tattoo";
@@ -562,6 +697,29 @@ async function createConsultAppointment({
       meetingLocationType: consultMode === "online" ? "custom" : null,
     });
 
+    let translatorAppointment = null;
+
+    if (translatorNeeded && translatorCalendarId) {
+      const translatorTitle = `Translator for consult (${artist})`;
+      const translatorDescription = `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
+
+      try {
+        translatorAppointment = await createAppointment({
+          calendarId: translatorCalendarId,
+          contactId,
+          startTime,
+          endTime,
+          title: translatorTitle,
+          description: translatorDescription,
+          appointmentStatus,
+          address: consultMode === "online" ? "Zoom" : null,
+          meetingLocationType: consultMode === "online" ? "custom" : null,
+        });
+      } catch (translatorErr) {
+        console.error("❌ Error creating translator appointment:", translatorErr.message || translatorErr);
+      }
+    }
+
     console.log(`✅ Created appointment (status: ${appointmentStatus}):`, {
       appointmentId: appointment.id,
       calendarId,
@@ -569,7 +727,18 @@ async function createConsultAppointment({
       startTime,
       appointmentStatus,
       depositPaid,
+      translatorAppointmentId: translatorAppointment?.id || null,
     });
+
+    if (translatorAppointment?.id) {
+      try {
+        await updateSystemFields(contactId, {
+          translator_appointment_id: translatorAppointment.id,
+        });
+      } catch (err) {
+        console.error("❌ Failed to persist translator appointment id:", err.message || err);
+      }
+    }
 
     // Only send hold message if deposit NOT paid
     if (!depositPaid) {
