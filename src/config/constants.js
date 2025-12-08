@@ -127,14 +127,6 @@ const TRANSLATOR_CALENDARS = {
   MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
 };
 
-// Translator calendars (hardcoded)
-const TRANSLATOR_CALENDARS = {
-  LIONEL_IN_PERSON: "qmjQJranj3zQqFqipCl4",
-  LIONEL_ONLINE: "wDyotwOVW0fhgwKJGJxc",
-  MARIA_IN_PERSON: "mmLWt370a94tbaNQIgNw",
-  MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
-};
-
 const OPPORTUNITY_STAGES = {
   INTAKE: "INTAKE",
   DISCOVERY: "DISCOVERY",
