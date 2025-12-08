@@ -188,6 +188,49 @@ async function updateAppointmentStatus(appointmentId, status) {
 }
 
 /**
+ * Reschedule an appointment (update start/end and optional status)
+ */
+async function rescheduleAppointment(appointmentId, { startTime, endTime, appointmentStatus = null }) {
+  if (!appointmentId) {
+    throw new Error("appointmentId is required for rescheduleAppointment");
+  }
+  if (!startTime || !endTime) {
+    throw new Error("startTime and endTime are required for rescheduleAppointment");
+  }
+
+  const url = `${GHL_BASE_URL}/calendars/events/appointments/${encodeURIComponent(
+    appointmentId
+  )}`;
+
+  const payload = {
+    startTime,
+    endTime,
+    ignoreFreeSlotValidation: true,
+    overrideLocationConfig: true,
+  };
+
+  if (appointmentStatus) {
+    payload.appointmentStatus = appointmentStatus;
+  }
+
+  try {
+    const resp = await axios.patch(url, payload, {
+      headers: ghlHeaders(),
+    });
+    console.log("✅ Rescheduled appointment:", {
+      appointmentId,
+      startTime,
+      endTime,
+      appointmentStatus,
+    });
+    return resp.data;
+  } catch (err) {
+    console.error("❌ Error rescheduling appointment:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
  * Get consult appointments for a contact (filters for future appointments on consult calendars)
  * @param {string} contactId - Contact ID
  * @param {Array<string>} consultCalendarIds - Array of calendar IDs to filter by
@@ -223,5 +266,6 @@ module.exports = {
   listAppointmentsForContact,
   updateAppointmentStatus,
   getConsultAppointmentsForContact,
+  rescheduleAppointment,
 };
 

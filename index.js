@@ -34,6 +34,7 @@ const {
   LEAD_TEMPERATURES,
   SYSTEM_FIELDS,
   CALENDARS,
+  TRANSLATOR_CALENDARS,
   APPOINTMENT_STATUS,
   TATTOO_FIELDS,
 } = require("./src/config/constants");
@@ -51,7 +52,12 @@ const {
   listAppointmentsForContact,
   updateAppointmentStatus,
   getConsultAppointmentsForContact,
+  rescheduleAppointment,
 } = require("./src/clients/ghlCalendarClient");
+const {
+  detectPathChoice,
+  handlePathChoice,
+} = require("./src/ai/consultPathHandler");
 
 const app = express();
 
@@ -525,6 +531,24 @@ function looksLikeSpanish(text) {
   return hasAccent || hits >= 2;
 }
 
+// Detect if an English lead expresses comfort speaking Spanish/bilingual
+function detectsSpanishComfort(text) {
+  if (!text) return false;
+  const v = String(text).toLowerCase();
+  const patterns = [
+    /hablo\s+espa[nñ]ol/,
+    /puedo\s+hablar\s+espa[nñ]ol/,
+    /se[eé]\s+espa[nñ]ol/,
+    /\bi\s+spea?k?\s+spanish\b/,
+    /\bi'?m\s+bilingual\b/,
+    /spanish\s+is\s+fine/,
+    /no\s+problem\s+with\s+spanish/,
+    /spanish\s+works/,
+    /espa[nñ]ol\s+est[aá]\s+bien/,
+  ];
+  return patterns.some((p) => p.test(v));
+}
+
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -725,6 +749,89 @@ app.post("/internal/holds/sweep", async (req, res) => {
   } catch (err) {
     console.error("❌ Error in hold sweep:", err.message || err);
     res.status(500).json({ error: err.message });
+  }
+});
+
+// Appointment sync webhook (artist <-> translator)
+app.post("/webhooks/ghl/appointment", async (req, res) => {
+  const sharedSecret = process.env.GHL_APPOINTMENT_WEBHOOK_SECRET;
+  const providedSecret =
+    req.headers["x-webhook-secret"] ||
+    req.headers["x-ghl-signature"] ||
+    null;
+
+  if (sharedSecret && providedSecret && sharedSecret !== providedSecret) {
+    console.warn("⚠️ Appointment webhook rejected: invalid secret");
+    return res.status(401).json({ ok: false });
+  }
+
+  try {
+    const payload = req.body || {};
+    const appointment = payload.appointment || payload || {};
+
+    const appointmentId = appointment.id || appointment.appointmentId;
+    const contactId = appointment.contactId || appointment.contact_id;
+    const calendarId = appointment.calendarId || appointment.calendar_id;
+    const rawStatus = appointment.appointmentStatus || appointment.status;
+    const startISO = appointment.startTime || appointment.start_time;
+    const endISO = appointment.endTime || appointment.end_time;
+
+    if (!appointmentId || !contactId || !calendarId || !startISO || !endISO) {
+      console.warn("⚠️ Appointment webhook missing required fields");
+      return res.status(200).json({ ok: true });
+    }
+
+    const translatorCalSet = new Set(Object.values(TRANSLATOR_CALENDARS));
+    const artistCalSet = new Set(Object.values(CALENDARS));
+    const actorIsTranslator = translatorCalSet.has(calendarId);
+    const siblingCalIds = actorIsTranslator ? Array.from(artistCalSet) : Array.from(translatorCalSet);
+
+    const isCancelled = ["cancelled", "canceled"].includes(String(rawStatus || "").toLowerCase());
+
+    const allEvents = await listAppointmentsForContact(contactId);
+    const baseStart = new Date(startISO).getTime();
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    const siblings = allEvents.filter((ev) => {
+      if (!ev || !ev.id || ev.id === appointmentId) return false;
+      if (!siblingCalIds.includes(ev.calendarId)) return false;
+      if (ev.contactId !== contactId) return false;
+      const evStart = new Date(ev.startTime).getTime();
+      return Math.abs(evStart - baseStart) <= dayMs;
+    });
+
+    if (!siblings.length) {
+      console.log("ℹ️ Appointment webhook: no sibling events to sync");
+      return res.status(200).json({ ok: true, synced: 0 });
+    }
+
+    if (isCancelled) {
+      await Promise.all(
+        siblings.map((ev) =>
+          updateAppointmentStatus(ev.id, APPOINTMENT_STATUS.CANCELLED).catch((err) =>
+            console.error("❌ Failed to cancel sibling appointment:", err.response?.data || err.message)
+          )
+        )
+      );
+      return res.status(200).json({ ok: true, synced: siblings.length, action: "cancelled" });
+    }
+
+    await Promise.all(
+      siblings.map((ev) =>
+        rescheduleAppointment(ev.id, {
+          startTime: startISO,
+          endTime: endISO,
+          appointmentStatus: ev.appointmentStatus || "confirmed",
+        }).catch((err) =>
+          console.error("❌ Failed to reschedule sibling appointment:", err.response?.data || err.message)
+        )
+      )
+    );
+
+    return res.status(200).json({ ok: true, synced: siblings.length, action: "rescheduled" });
+  } catch (err) {
+    console.error("❌ Error in appointment sync webhook:", err.response?.data || err.message);
+    return res.status(200).json({ ok: false });
   }
 });
 
@@ -1367,6 +1474,31 @@ app.post("/ghl/message-webhook", async (req, res) => {
     );
   }
 
+  // Passive bilingual/Spanish comfort detection for English leads
+  const currentComfort =
+    cf.lead_spanish_comfortable ||
+    cf.leadSpanishComfortable ||
+    null;
+  const spanishComfortDetected = detectsSpanishComfort(messageText);
+  const isEnglishLead =
+    (contactLanguagePreference || "English").toLowerCase().includes("english");
+
+  if (isEnglishLead && spanishComfortDetected && currentComfort !== "Yes") {
+    try {
+      await updateSystemFields(contactId, {
+        lead_spanish_comfortable: true,
+      });
+      console.log(
+        "✅ Detected Spanish comfort for English lead; updated lead_spanish_comfortable = Yes"
+      );
+    } catch (err) {
+      console.error(
+        "❌ Failed to update lead_spanish_comfortable:",
+        err.response?.data || err.message
+      );
+    }
+  }
+
   // Derive system state from webhook + contact fields
   const currentPhase =
     rawBody["AI Phase"] ||
@@ -1442,6 +1574,13 @@ app.post("/ghl/message-webhook", async (req, res) => {
       contactProfileFromWebhook.tattooColor ||
       contactCustomFields?.tattoo_color_preference ||
       null,
+    leadSpanishComfortable:
+      contactCustomFields?.lead_spanish_comfortable ||
+      contactCustomFields?.leadSpanishComfortable ||
+      null,
+    translatorNeeded:
+      contactCustomFields?.translator_needed === "Yes" ||
+      contactCustomFields?.translatorNeeded === true,
     depositPaid:
       contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
@@ -1526,6 +1665,23 @@ app.post("/ghl/message-webhook", async (req, res) => {
   // Detect consult mode preference from user's message (or default to online)
   const detectedConsultMode = detectConsultModePreference(messageText) || "online";
 
+  // 🔀 Path choice handling (Message vs Translator/Video)
+  const pathChoice = detectPathChoice(messageText);
+  if (pathChoice && !skipAIEntirely) {
+    const handled = await handlePathChoice({
+      contactId,
+      messageText,
+      channelContext,
+      sendConversationMessage,
+    });
+    if (handled) {
+      return res.status(200).json({
+        success: true,
+        message: `Consult path recorded: ${handled.choice}`,
+      });
+    }
+  }
+
   // 🚀 SLOT SELECTION: User is picking a specific time (e.g., "Let's do Dec 3")
   // This should work in ANY phase - if they're picking a time, book it
   if (isSlotSelection(messageText) || isTimeSelection(messageText)) {
@@ -1543,6 +1699,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           consultMode: detectedConsultMode,
           preferredDay: requestedWeekday?.name,
           latestMessageText: messageText,
+          translatorNeeded: contactProfile.translatorNeeded,
         },
         contactProfile,
       });
@@ -1556,6 +1713,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
           // Use slot's artist/calendar (TIME-FIRST) or fall back to offer data (ARTIST-FIRST)
           const slotArtist = selectedSlot.artist || appointmentOfferData.artist;
           const slotCalendarId = selectedSlot.calendarId || appointmentOfferData.calendarId;
+          const translatorCalendarId =
+            selectedSlot.translatorCalendarId || appointmentOfferData.translatorCalendarId || null;
+          const translatorName = selectedSlot.translator || null;
           
           console.log(`📅 Booking with artist: ${slotArtist}, calendar: ${slotCalendarId} (mode: ${appointmentOfferData.mode || "unknown"})`);
 
@@ -1569,6 +1729,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
               artist: slotArtist,
               consultMode: appointmentOfferData.consultMode,
               contactProfile,
+              translatorNeeded: appointmentOfferData.translatorNeeded || !!translatorCalendarId,
+              translatorCalendarId,
+              translatorName,
             });
 
             const now = new Date().toISOString();
@@ -1674,6 +1837,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           aiMeta: {
             consultMode: detectedConsultMode,
             latestMessageText: messageText,
+            translatorNeeded: contactProfile.translatorNeeded,
           },
           contactProfile,
         });
@@ -1749,6 +1913,29 @@ app.post("/ghl/message-webhook", async (req, res) => {
   const bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
   
   if (!skipAIEntirely && bookingIntentDetected) {
+    const leadSpanishComfortable =
+      String(contactProfile.leadSpanishComfortable || "").toLowerCase() === "yes";
+    const isEnglishLead =
+      (contactLanguagePreference || "English").toLowerCase().includes("english");
+    const needsLanguageBarrierMessage = isEnglishLead && !leadSpanishComfortable;
+
+    // Language barrier gating: default to message consult, offer translator if requested
+    if (needsLanguageBarrierMessage) {
+      const barrierMessage =
+        "Just so you know, our artists are Spanish-speaking only.\n\nIt's never been a barrier for clients—in fact, many tell us how smooth and stress-free the process was. We use a structured message-based consultation so you can share photos, inspiration, placement ideas, and notes at your own pace. This gives the artist everything they need to deliver exactly what you're envisioning. Resulting in clear communication, no misinterpretation, and tattoos our clients love.\n\nIf you'd prefer a live video consult, we can also arrange a translator to join.";
+
+      await sendConversationMessage({
+        contactId,
+        body: barrierMessage,
+        channelContext,
+      });
+
+      return res.status(200).json({
+        success: true,
+        message: "Language barrier message sent prior to booking options",
+      });
+    }
+
     // Log which type of intent was detected
     const intentType = isStrongBookingIntent(messageText) ? "STRONG" : "WEAK (gated)";
     console.log(`🚀 BOOKING INTENT DETECTED (${intentType}) - bypassing AI, sending times directly`);
@@ -1761,6 +1948,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         aiMeta: {
           consultMode: detectedConsultMode,
           latestMessageText: messageText,
+          translatorNeeded: contactProfile.translatorNeeded,
         },
         contactProfile,
       });

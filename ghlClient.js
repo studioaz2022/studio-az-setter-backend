@@ -249,6 +249,25 @@ async function updateContact(contactId, body) {
 }
 
 /**
+ * Create a task on a contact
+ * @param {string} contactId
+ * @param {object} task
+ */
+async function createTaskForContact(contactId, task = {}) {
+  if (!contactId) throw new Error("contactId is required to create a task");
+  const payload = {
+    title: task.title || "Consultation follow-up",
+    description: task.description || "",
+    dueDate: task.dueDate || null,
+    status: task.status || "open",
+    assignedTo: task.assignedTo || null,
+  };
+
+  const res = await ghl.post(`/v1/contacts/${contactId}/tasks`, payload);
+  return res.data;
+}
+
+/**
  * Update the CRM owner (assigned user) for a contact.
  * Used when we decide which artist owns the lead.
  */
@@ -883,6 +902,7 @@ module.exports = {
   uploadFilesToTattooCustomField,
   sendConversationMessage,
   updateContactAssignedUser,
+  createTaskForContact,
 };
 
 

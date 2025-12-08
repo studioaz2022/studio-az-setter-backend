@@ -1,7 +1,7 @@
 // bookingController.js
 // Handles appointment booking orchestration
 
-const { getContact } = require("../../ghlClient");
+const { getContact, updateSystemFields } = require("../../ghlClient");
 const {
   determineArtist,
   getCalendarIdForArtist,
@@ -17,7 +17,12 @@ const {
   listAppointmentsForContact,
   getConsultAppointmentsForContact,
 } = require("../clients/ghlCalendarClient");
-const { CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
+const {
+  CALENDARS,
+  TRANSLATOR_CALENDARS,
+  HOLD_CONFIG,
+  APPOINTMENT_STATUS,
+} = require("../config/constants");
 const { sendConversationMessage } = require("../../ghlClient");
 
 // Active artists for time-first slot generation
@@ -136,6 +141,19 @@ function formatSlotDisplay(date) {
   const displayMinute = minute === 0 ? "" : `:${minute.toString().padStart(2, "0")}`;
 
   return `${dayName}, ${month} ${day} at ${displayHour}${displayMinute}${ampm}`;
+}
+
+function getTranslatorCalendarsForMode(consultMode = "online") {
+  const isInPerson = consultMode === "in_person" || consultMode === "in-person";
+  return isInPerson
+    ? [
+        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_IN_PERSON },
+        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_IN_PERSON },
+      ]
+    : [
+        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_ONLINE },
+        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_ONLINE },
+      ];
 }
 
 /**
@@ -363,6 +381,28 @@ async function generateSlotsFromAllArtists(options = {}) {
 }
 
 /**
+ * Generate slots that include translator pairing (both in-person and online variants)
+ */
+function generateSlotsWithTranslator(options = {}) {
+  const { consultMode = "online", preferredTimeWindow = null, preferredDay = null } = options;
+  const baseSlots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  const translators = getTranslatorCalendarsForMode(consultMode);
+
+  const slots = [];
+  for (const slot of baseSlots) {
+    for (const t of translators) {
+      slots.push({
+        ...slot,
+        translator: t.name,
+        translatorCalendarId: t.calendarId,
+      });
+    }
+  }
+
+  return slots;
+}
+
+/**
  * Select best slots to present to lead (time-first approach)
  * Picks unique time slots, preferring lower-workload artists
  * 
@@ -413,6 +453,10 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
     const preferredTimeWindow = aiMeta?.preferredTimeWindow || null;
     const preferredDay = aiMeta?.preferredDay || null;
     const messageText = aiMeta?.latestMessageText || null;
+    const translatorNeeded =
+      aiMeta?.translatorNeeded === true ||
+      contactProfile?.translatorNeeded === true ||
+      contactProfile?.translatorNeeded === "Yes";
 
     // Check for EXPLICIT artist preference (URL param, custom field, DM mention)
     const explicitArtist = getExplicitArtistPreference(contact, messageText);
@@ -445,12 +489,18 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         preferredTimeWindow,
         preferredDay,
       });
+      const translatorSlots = translatorNeeded
+        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        : null;
 
       // Tag slots with artist info
-      const slots = baseSlots.map(slot => ({
+      const sourceSlots = translatorNeeded && translatorSlots ? translatorSlots : baseSlots;
+      const slots = sourceSlots.map((slot) => ({
         ...slot,
         artist: explicitArtist,
         calendarId,
+        translator: slot.translator || null,
+        translatorCalendarId: slot.translatorCalendarId || null,
       }));
 
       if (slots.length === 0) {
@@ -467,6 +517,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         consultMode,
         calendarId,
         slots,
+        translatorNeeded,
       };
     } else {
       // ========== TIME-FIRST MODE ==========
@@ -478,6 +529,27 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         preferredTimeWindow,
         preferredDay,
       });
+      const translatorSlots = translatorNeeded
+        ? generateSlotsWithTranslator({ consultMode, preferredTimeWindow, preferredDay })
+        : null;
+
+      if (translatorNeeded && translatorSlots && translatorSlots.length > 0) {
+        const slotsWithTranslators = [];
+        const translators = getTranslatorCalendarsForMode(consultMode);
+
+        for (const base of allSlots) {
+          for (const t of translators) {
+            slotsWithTranslators.push({
+              ...base,
+              translator: t.name,
+              translatorCalendarId: t.calendarId,
+            });
+          }
+        }
+        // Replace with translated slots
+        allSlots.length = 0;
+        slotsWithTranslators.forEach((s) => allSlots.push(s));
+      }
 
       if (allSlots.length === 0) {
         console.warn("⚠️ Could not generate time slots from any artist");
@@ -501,6 +573,7 @@ async function handleAppointmentOffer({ contact, aiMeta, contactProfile }) {
         calendarId: slotsToPresent[0]?.calendarId, // Primary calendar (for backward compat)
         slots: slotsToPresent,
         allSlots, // Full list for matching if lead picks a different time
+        translatorNeeded,
       };
     }
   } catch (err) {
@@ -521,6 +594,9 @@ async function createConsultAppointment({
   artist,
   consultMode,
   contactProfile,
+  translatorNeeded = false,
+  translatorCalendarId = null,
+  translatorName = null,
 }) {
   try {
     const contact = await getContact(contactId);
@@ -562,6 +638,29 @@ async function createConsultAppointment({
       meetingLocationType: consultMode === "online" ? "custom" : null,
     });
 
+    let translatorAppointment = null;
+
+    if (translatorNeeded && translatorCalendarId) {
+      const translatorTitle = `Translator for consult (${artist})`;
+      const translatorDescription = `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
+
+      try {
+        translatorAppointment = await createAppointment({
+          calendarId: translatorCalendarId,
+          contactId,
+          startTime,
+          endTime,
+          title: translatorTitle,
+          description: translatorDescription,
+          appointmentStatus,
+          address: consultMode === "online" ? "Zoom" : null,
+          meetingLocationType: consultMode === "online" ? "custom" : null,
+        });
+      } catch (translatorErr) {
+        console.error("❌ Error creating translator appointment:", translatorErr.message || translatorErr);
+      }
+    }
+
     console.log(`✅ Created appointment (status: ${appointmentStatus}):`, {
       appointmentId: appointment.id,
       calendarId,
@@ -569,7 +668,18 @@ async function createConsultAppointment({
       startTime,
       appointmentStatus,
       depositPaid,
+      translatorAppointmentId: translatorAppointment?.id || null,
     });
+
+    if (translatorAppointment?.id) {
+      try {
+        await updateSystemFields(contactId, {
+          translator_appointment_id: translatorAppointment.id,
+        });
+      } catch (err) {
+        console.error("❌ Failed to persist translator appointment id:", err.message || err);
+      }
+    }
 
     // Only send hold message if deposit NOT paid
     if (!depositPaid) {
