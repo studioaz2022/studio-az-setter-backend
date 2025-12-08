@@ -120,7 +120,7 @@ async function transitionToStage(contactId, stageKey, options = {}) {
   });
 
   if (!opportunityId) {
-    console.warn(`No opportunity for contact ${contactId}, skipping stage transition to ${stageKey}`);
+    console.warn(`⚠️ [PIPELINE] No opportunity for contact ${contactId}, skipping stage transition to ${stageKey}`);
     return null;
   }
 
@@ -131,8 +131,13 @@ async function transitionToStage(contactId, stageKey, options = {}) {
 
   const stageId = getStageId(stageKey);
   if (!stageId) {
-    console.warn(`Unknown pipeline stage key ${stageKey}`);
+    console.warn(`⚠️ [PIPELINE] Unknown pipeline stage key ${stageKey}`);
     return null;
+  }
+
+  // Only log actual transitions (not when staying the same)
+  if (currentStage !== stageKey) {
+    console.log(`📊 [PIPELINE] Transitioning opportunity ${opportunityId}: ${currentStage || "(none)"} → ${stageKey}`);
   }
 
   await updateOpportunityStage({
@@ -190,6 +195,8 @@ async function syncOpportunityStageFromContact(contactId, { aiPhase }) {
   const tattooCompleted = boolField(cf.tattoo_completed);
   const lost = boolField(cf.cold_nurture_lost);
 
+  const currentStage = cf.opportunity_stage || null;
+
   const stageKey = determineStageFromContext({
     aiPhase,
     depositLinkSent,
@@ -200,7 +207,31 @@ async function syncOpportunityStageFromContact(contactId, { aiPhase }) {
     lost,
   });
 
-  return transitionToStage(contactId, stageKey, { contact });
+  console.log(`🔄 [PIPELINE] Syncing opportunity stage for contact ${contactId}:`, {
+    currentStage: currentStage || "(none)",
+    targetStage: stageKey,
+    context: {
+      aiPhase,
+      depositLinkSent,
+      depositPaid,
+      consultType,
+      hasUpcomingTattoo,
+      tattooCompleted,
+      lost,
+    },
+  });
+
+  const result = await transitionToStage(contactId, stageKey, { contact });
+
+  if (result && !result.skipped && currentStage !== stageKey) {
+    console.log(`✅ [PIPELINE] Stage transition: ${currentStage || "(none)"} → ${stageKey} (contact: ${contactId})`);
+  } else if (result && result.skipped) {
+    console.log(`⏭️ [PIPELINE] Stage transition skipped: ${result.reason} (current: ${currentStage}, target: ${stageKey})`);
+  } else if (currentStage === stageKey) {
+    console.log(`ℹ️ [PIPELINE] Stage unchanged: ${stageKey} (contact: ${contactId})`);
+  }
+
+  return result;
 }
 
 module.exports = {
