@@ -246,6 +246,47 @@ function isBookingIntent(messageText, contactProfile = null, currentPhase = null
 }
 
 /**
+ * Detect explicit intent to pay or receive the deposit link
+ */
+function isDepositIntent(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).toLowerCase();
+
+  const mentionsDeposit =
+    /\bdeposit\b/.test(text) ||
+    /\bpayment\s*link\b/.test(text) ||
+    /\bpay\b.*\bdeposit\b/.test(text);
+
+  const asksForLink = /send/.test(text) && /link/.test(text);
+
+  return mentionsDeposit || asksForLink;
+}
+
+function formatLastSentSlots(slots = []) {
+  return slots.map((slot, idx) => {
+    let weekday = "";
+    if (slot.startTime) {
+      try {
+        weekday = new Date(slot.startTime).toLocaleString("en-US", { weekday: "long" }).toLowerCase();
+      } catch (e) {
+        weekday = "";
+      }
+    }
+    return {
+      startTime: slot.startTime,
+      endTime: slot.endTime,
+      displayText: slot.displayText,
+      artist: slot.artist || null,
+      calendarId: slot.calendarId || null,
+      translatorCalendarId: slot.translatorCalendarId || null,
+      translator: slot.translator || null,
+      optionIndex: slot.optionIndex || idx + 1,
+      weekday,
+    };
+  });
+}
+
+/**
  * Detect intent to reschedule an existing appointment
  */
 function isRescheduleIntent(messageText) {
@@ -287,12 +328,55 @@ function detectConsultModePreference(messageText) {
   const text = String(messageText).toLowerCase();
   
   if (text.includes("in person") || text.includes("in-person") || text.includes("come in") || text.includes("at the studio") || text.includes("face to face")) {
-    return "in-person";
+    return "in_person";
   }
   if (text.includes("online") || text.includes("zoom") || text.includes("video") || text.includes("virtual") || text.includes("facetime")) {
     return "online";
   }
   return null;
+}
+
+function isQuestion(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).toLowerCase();
+  return /\bwhy\b|\bhow\b|\bwhat\b|\bexplain\b|\bconfused\b|\bmeaning\b|\bwhat for\b/.test(text);
+}
+
+function isPriceQuestion(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).toLowerCase();
+  return /\bhow much\b|\bprice\b|\bpricing\b|\bquote\b|\bestimate\b|\bcost\b/.test(text);
+}
+
+function isUrgent(messageText) {
+  if (!messageText) return false;
+  const text = String(messageText).toLowerCase();
+  return /\bsoon\b|\basap\b|\bthis week\b|\bright away\b/.test(text);
+}
+
+function normalizeForCompare(text) {
+  return String(text || "")
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function similarityScore(a, b) {
+  const na = normalizeForCompare(a);
+  const nb = normalizeForCompare(b);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const wordsA = na.split(" ");
+  const wordsB = nb.split(" ");
+  const setA = new Set(wordsA);
+  const setB = new Set(wordsB);
+  let common = 0;
+  setA.forEach((w) => {
+    if (setB.has(w)) common += 1;
+  });
+  const maxLen = Math.max(setA.size, setB.size);
+  if (maxLen === 0) return 0;
+  return common / maxLen;
 }
 
 /**
@@ -1648,6 +1732,49 @@ app.post("/ghl/message-webhook", async (req, res) => {
     translatorNeeded:
       contactCustomFields?.translator_needed === "Yes" ||
       contactCustomFields?.translatorNeeded === true,
+    consultationType:
+      contactCustomFields?.consultation_type ||
+      contactCustomFields?.consultationType ||
+      null,
+    consultationTypeLocked:
+      contactCustomFields?.consultation_type_locked === "Yes" ||
+      contactCustomFields?.consultation_type_locked === true,
+    translatorExplained:
+      contactCustomFields?.translator_explained === "Yes" ||
+      contactCustomFields?.translator_explained === true,
+    languageBarrierExplained:
+      contactCustomFields?.language_barrier_explained === "Yes" ||
+      contactCustomFields?.language_barrier_explained === true,
+    tattooIdeaAcknowledged:
+      contactCustomFields?.tattoo_idea_acknowledged === "Yes" ||
+      contactCustomFields?.tattoo_idea_acknowledged === true,
+    lastSentSlots: (() => {
+      const raw = contactCustomFields?.last_sent_slots;
+      if (!raw || typeof raw !== "string") return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    })(),
+    lastSentMessages: (() => {
+      const raw = contactCustomFields?.last_sent_messages;
+      if (!raw || typeof raw !== "string") return [];
+      try {
+        const parsed = JSON.parse(raw);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (e) {
+        return [];
+      }
+    })(),
+    consultInPersonRequested:
+      contactCustomFields?.consult_in_person_requested === "Yes" ||
+      contactCustomFields?.consult_in_person_requested === true,
+    consultInPersonConfirmed:
+      contactCustomFields?.consult_in_person_confirmed === "Yes" ||
+      contactCustomFields?.consult_in_person_confirmed === true,
+    preferredTimeFromUser: contactCustomFields?.preferred_time_from_user || null,
     depositPaid:
       contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
@@ -1658,6 +1785,52 @@ app.post("/ghl/message-webhook", async (req, res) => {
       !!(contactProfileFromWebhook.tattooSummary ||
         contactCustomFields?.tattoo_summary ||
         contactCustomFields?.["Tattoo Summary"]),
+  };
+
+  // If deposit is paid, hard-lock consult state and explanations
+  if (contactProfile.depositPaid) {
+    contactProfile.consultationTypeLocked = true;
+    contactProfile.translatorExplained = true;
+    contactProfile.languageBarrierExplained = true;
+  }
+
+  if (contactProfile.tattooSummary && !contactProfile.tattooIdeaAcknowledged) {
+    try {
+      await updateSystemFields(contactId, { tattoo_idea_acknowledged: true });
+      contactProfile.tattooIdeaAcknowledged = true;
+    } catch (err) {
+      console.error("❌ Failed to mark tattoo_idea_acknowledged:", err.message || err);
+    }
+  }
+
+  // Global dedupe helper for all outbound messages this turn
+  let recentMessages = Array.isArray(contactProfile.lastSentMessages)
+    ? [...contactProfile.lastSentMessages]
+    : [];
+
+  const sendMessage = async ({ body, channelContext, allowSimilar = false }) => {
+    const cleanBody = normalizeForCompare(body);
+    const isDuplicate = recentMessages.some(
+      (msg) =>
+        normalizeForCompare(msg) === cleanBody ||
+        (!allowSimilar && similarityScore(msg, body) >= 0.85)
+    );
+    if (isDuplicate) {
+      console.log("⏩ [DEDUPE] Skipping duplicate/similar message:", body);
+      return;
+    }
+    await sendConversationMessage({ contactId, body, channelContext });
+    recentMessages.push(body);
+    if (recentMessages.length > 3) {
+      recentMessages = recentMessages.slice(recentMessages.length - 3);
+    }
+    try {
+      await updateSystemFields(contactId, {
+        last_sent_messages: JSON.stringify(recentMessages),
+      });
+    } catch (err) {
+      console.error("❌ Failed to update last_sent_messages:", err.message || err);
+    }
   };
 
   // Build enriched AI payload
@@ -1733,6 +1906,45 @@ app.post("/ghl/message-webhook", async (req, res) => {
     }
   }
 
+  // Hold timeout: warn at 10m, release at 20m if no deposit
+  if (holdAppointmentId && !alreadyPaid) {
+    try {
+      const lastActivity = freshCf.hold_last_activity_at || freshCf.hold_created_at;
+      if (lastActivity) {
+        const lastTs = new Date(lastActivity).getTime();
+        const nowTs = Date.now();
+        const minutes = (nowTs - lastTs) / 60000;
+        if (minutes >= 20) {
+          await updateSystemFields(contactId, {
+            hold_appointment_id: null,
+            hold_last_activity_at: null,
+            hold_warning_sent: false,
+            pending_slot_start: null,
+            pending_slot_end: null,
+            pending_slot_display: null,
+            pending_slot_artist: null,
+            pending_slot_calendar: null,
+            pending_slot_mode: null,
+          });
+          await sendMessage({
+            body: "I opened that spot back up so someone else can grab it, but we can snag another time when you’re ready.",
+            channelContext,
+          });
+        } else if (minutes >= 10 && !freshCf.hold_warning_sent) {
+          await updateSystemFields(contactId, {
+            hold_warning_sent: true,
+          });
+          await sendMessage({
+            body: "If I don't hear back soon I'll need to release the spot so someone else can grab it.",
+            channelContext,
+          });
+        }
+      }
+    } catch (err) {
+      console.error("❌ Error during hold timeout check:", err.message || err);
+    }
+  }
+
   // Detect consult mode preference from user's message (or default to online)
   const detectedConsultMode = detectConsultModePreference(messageText) || "online";
 
@@ -1743,32 +1955,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
       contactId,
       messageText,
       channelContext,
-      sendConversationMessage,
-      triggerAppointmentOffer: async ({ contactId: cid, channelContext: ctx, translatorNeeded }) => {
-        // Generate appointment slots after translator choice
-        const offer = await handleAppointmentOffer({
-          contact: freshContact,
-          aiMeta: {
-            consultMode: detectedConsultMode,
-            latestMessageText: messageText,
-            translatorNeeded,
-          },
-          contactProfile,
-        });
-
-        if (offer && offer.slots && offer.slots.length > 0) {
-          appointmentOfferData = offer;
-          const slotsText = offer.slots
-            .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
-            .join("\n");
-
-          await sendConversationMessage({
-            contactId: cid,
-            body: `Here are some times that work:\n\n${slotsText}\n\nWhich one works for you?`,
-            channelContext: ctx,
-          });
-        }
-      },
+      sendConversationMessage: sendMessage,
+      existingConsultType: contactProfile.consultationType,
+      consultationTypeLocked: contactProfile.consultationTypeLocked,
     });
     if (handled) {
       return res.status(200).json({
@@ -1778,9 +1967,148 @@ app.post("/ghl/message-webhook", async (req, res) => {
     }
   }
 
-  // 🚀 SLOT SELECTION: User is picking a specific time (e.g., "Let's do Dec 3")
-  // This should work in ANY phase - if they're picking a time, book it
-  if (isSlotSelection(messageText) || isTimeSelection(messageText)) {
+  // 🏢 In-person consult handling (default to video unless confirmed twice)
+  const mentionsInPerson =
+    /\bcome in\b|\bin person\b|\bat the studio\b|\bmeet at the studio\b|\bwalk in\b|\bcome by\b/.test(
+      messageText.toLowerCase()
+    );
+  if (mentionsInPerson && !contactProfile.consultationType) {
+    if (contactProfile.consultInPersonRequested) {
+      await updateSystemFields(contactId, {
+        consultation_type: "in_person",
+        consultation_type_locked: true,
+        consult_in_person_confirmed: true,
+      });
+      contactProfile.consultationType = "in_person";
+      contactProfile.consultationTypeLocked = true;
+      await sendMessage({
+        body: "All good — we can meet in person. Want a translator on standby or is messaging fine for details?",
+        channelContext,
+      });
+    } else {
+      await updateSystemFields(contactId, {
+        consult_in_person_requested: true,
+      });
+      await sendMessage({
+        body: "Totally — most clients start with a quick video consult so the artist can prep the design. If you prefer in person, we can do that too. What’s your preference?",
+        channelContext,
+      });
+    }
+    return res.status(200).json({ success: true, message: "Handled in-person request" });
+  }
+
+  // 🛑 Question override: answer before system logic
+  if (isQuestion(messageText)) {
+    const lower = messageText.toLowerCase();
+    if (lower.includes("translator")) {
+      const translatorReply =
+        "Great question — our artist works in Spanish, so for video consults we add a translator to make sure your idea comes out exactly right.";
+      await sendMessage({ body: translatorReply, channelContext });
+      return res.status(200).json({ success: true, message: "Answered translator question" });
+    }
+    // Generic short answer path
+    await sendMessage({
+      body: "Got it — let me clarify anything you’re unsure about. What part should I explain?",
+      channelContext,
+    });
+    return res.status(200).json({ success: true, message: "Answered user question" });
+  }
+
+  // 💵 Price question handling
+  if (isPriceQuestion(messageText)) {
+    const priceIntro =
+      "Pricing depends a lot on size and detail, which is why we start with a quick 15–20 minute consult to nail down your design.";
+    if (!contactProfile.consultationType) {
+      await sendMessage({
+        body: `${priceIntro} Would you rather message with the artist or do a quick video consult with a translator?`,
+        channelContext,
+      });
+    } else if (contactProfile.consultationType === "message") {
+      await sendMessage({
+        body: `${priceIntro} We can keep it here in messages. Ready for the $100 refundable deposit link to hold your consult?`,
+        channelContext,
+      });
+    } else {
+      await sendMessage({
+        body: `${priceIntro} Before we schedule the consult, we take a $100 refundable deposit that goes toward your tattoo. Want me to send the link?`,
+        channelContext,
+      });
+    }
+    return res.status(200).json({ success: true, message: "Handled price question" });
+  }
+
+  // 🕒 Urgency handling (soon/ASAP/this week) without assuming booking
+  const preliminaryBookingIntent = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
+  if (isUrgent(messageText) && !preliminaryBookingIntent) {
+    await sendMessage({
+      body: "Got you — when are you hoping to do the consult? This week or next week?",
+      channelContext,
+    });
+    return res.status(200).json({ success: true, message: "Handled urgency clarification" });
+  }
+
+  // 🚀 SLOT SELECTION: Only valid when consult is an appointment (not message)
+  const consultTypeForSlot = (contactProfile.consultationType || "").toLowerCase();
+  const lastSlots = contactProfile.lastSentSlots || [];
+
+  // Try to match against last sent slots by weekday/time/ordinal
+  function matchSlotFromLast(messageText, slots) {
+    if (!slots || !slots.length || !messageText) return null;
+    const text = String(messageText).toLowerCase();
+    const matches = [];
+    const fuzzyEvening = /\bevening\b|\bafter 5\b|\bafter five\b|\bafter work\b/.test(text);
+    const fuzzyAfternoon = /\bafternoon\b|\bafter lunch\b|\bmidday\b|\bearly afternoon\b/.test(text);
+    const fuzzyMorning = /\bmorning\b|\bbefore noon\b|\bearly\b|\bbefore lunch\b|\blate morning\b/.test(text);
+
+    const slotHour = (slot) => {
+      if (!slot.startTime) return null;
+      const d = new Date(slot.startTime);
+      return isNaN(d) ? null : d.getHours();
+    };
+
+    slots.forEach((slot, idx) => {
+      const optionIndex = slot.optionIndex || idx + 1;
+      const weekday = slot.weekday || "";
+      const display = (slot.displayText || "").toLowerCase();
+      const timeMatch = display.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+      const hourVal = slotHour(slot);
+
+      const isOrdinal =
+        text.includes(`option ${optionIndex}`) ||
+        text.includes(`option ${optionIndex}.`) ||
+        text.includes(`${optionIndex}`) ||
+        text.includes(`the ${optionIndex === 1 ? "first" : optionIndex === 2 ? "second" : optionIndex === 3 ? "third" : ""}`);
+
+      const weekdayMatch = weekday && text.includes(weekday.toLowerCase().slice(0, 3));
+
+      let timeMatchScore = false;
+      if (timeMatch && timeMatch[1]) {
+        const hour = parseInt(timeMatch[1], 10);
+        const ampm = (timeMatch[3] || "").toLowerCase();
+        const timeStr = `${hour}${ampm}`;
+        timeMatchScore = text.includes(timeStr) || text.includes(`${hour}:`) || text.includes(`${hour} `);
+      }
+
+      let fuzzyMatch = false;
+      if (hourVal !== null) {
+        if (fuzzyEvening && hourVal >= 17 && hourVal <= 19) fuzzyMatch = true;
+        if (fuzzyAfternoon && hourVal >= 13 && hourVal <= 16) fuzzyMatch = true;
+        if (fuzzyMorning && hourVal >= 9 && hourVal <= 11) fuzzyMatch = true;
+      }
+
+      if (isOrdinal || weekdayMatch || timeMatchScore || fuzzyMatch) {
+        matches.push({ idx, slot });
+      }
+    });
+
+    if (matches.length === 1) return matches[0].idx;
+    if (matches.length > 1) return "ambiguous";
+    return null;
+  }
+
+  const matchedSlotFromMemory = matchSlotFromLast(messageText, lastSlots);
+
+  if ((matchedSlotFromMemory !== null && matchedSlotFromMemory !== "ambiguous") || ((isSlotSelection(messageText) || isTimeSelection(messageText)) && consultTypeForSlot === "appointment")) {
     console.log("🎯 SLOT SELECTION DETECTED - user is picking a specific time");
     skipAIEntirely = true;
 
@@ -1789,20 +2117,42 @@ app.post("/ghl/message-webhook", async (req, res) => {
       const requestedWeekday = extractRequestedWeekday(messageText);
       
       // Generate slots to match against (pass requested weekday if any)
-      appointmentOfferData = await handleAppointmentOffer({
-        contact: freshContact,
-        aiMeta: {
-          consultMode: detectedConsultMode,
-          preferredDay: requestedWeekday?.name,
-          latestMessageText: messageText,
-          translatorNeeded: contactProfile.translatorNeeded,
-        },
-        contactProfile,
-      });
+      if (matchedSlotFromMemory !== null && matchedSlotFromMemory !== "ambiguous" && lastSlots[matchedSlotFromMemory]) {
+        appointmentOfferData = {
+          slots: lastSlots,
+        };
+      } else {
+        appointmentOfferData = await handleAppointmentOffer({
+          contact: freshContact,
+          aiMeta: {
+            consultMode: detectedConsultMode,
+            preferredDay: requestedWeekday?.name,
+            latestMessageText: messageText,
+            translatorNeeded: contactProfile.translatorNeeded,
+          },
+          contactProfile,
+        });
+      }
+
+      if (!appointmentOfferData || !appointmentOfferData.slots || appointmentOfferData.slots.length === 0) {
+        await sendMessage({
+          body: "Looks like our scheduling tool is being a little slow — what day and time this week works best for you? I’ll match it on my end.",
+          channelContext,
+        });
+        await updateSystemFields(contactId, {
+          preferred_time_from_user: messageText || null,
+        });
+        return res.status(200).json({ success: true, message: "Slot fallback prompt sent" });
+      }
 
       if (appointmentOfferData && appointmentOfferData.slots) {
-        const matchedIndex = parseTimeSelection(messageText, appointmentOfferData.slots);
-        if (matchedIndex !== null) {
+        const matchedIndex =
+          matchedSlotFromMemory === "ambiguous"
+            ? null
+            : matchedSlotFromMemory !== null
+            ? matchedSlotFromMemory
+            : parseTimeSelection(messageText, appointmentOfferData.slots);
+        if (matchedIndex !== null && matchedIndex !== "ambiguous") {
           console.log(`✅ Matched slot ${matchedIndex + 1}: ${appointmentOfferData.slots[matchedIndex].displayText}`);
           const selectedSlot = appointmentOfferData.slots[matchedIndex];
 
@@ -1878,7 +2228,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
                   ? `All set — I moved your consult to ${display} with ${slotArtist || "our artist"} 🙌`
                   : `All set — I moved your consult to ${display} with ${slotArtist || "our artist"}.`;
 
-                await sendConversationMessage({
+                await sendMessage({
                   contactId,
                   body: confirmMessage,
                   channelContext,
@@ -1902,7 +2252,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
                   ? `Got it — I moved your hold to ${display}. To lock it in, just finish the $100 refundable deposit I sent.`
                   : `Got it — I moved your hold to ${display}. To lock it in, just finish the $100 refundable deposit I sent.`;
 
-                await sendConversationMessage({
+                await sendMessage({
                   contactId,
                   body: holdMessage,
                   channelContext,
@@ -1958,7 +2308,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
                 ? `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${slotArtist || "our artist"} 🙌`
                 : `Perfect, you're officially locked in for ${selectedSlot.displayText} with ${slotArtist || "our artist"}.`;
               
-              await sendConversationMessage({
+              await sendMessage({
                 contactId,
                 body: confirmMessage,
                 channelContext,
@@ -1983,26 +2333,21 @@ app.post("/ghl/message-webhook", async (req, res) => {
             return res.status(200).json({ success: true, message: "Slot selected and held" });
           } catch (apptErr) {
             console.error("❌ Error creating hold appointment:", apptErr.message || apptErr);
-            await sendConversationMessage({
-              contactId,
-              body: "Sorry, I had trouble booking that time. Can you try picking another option?",
-              channelContext,
-            });
+              await sendMessage({
+                contactId,
+                body: "Sorry, I had trouble booking that time. Can you try picking another option?",
+                channelContext,
+              });
             return res.status(200).json({ success: false, message: "Booking failed" });
           }
         } else {
-          // ⚠️ Could not match slot - DON'T call AI, just ask them to pick from the list
-          console.log("⚠️ Could not match slot selection to available slots - asking to pick from list");
-          
-          const slotsText = appointmentOfferData.slots
-            .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
-            .join("\n");
-          
+          // ⚠️ Could not match slot - ask for specific day/time without resending list
+          console.log("⚠️ Could not match slot selection - asking for a specific time");
           const clarifyMessage = useEmojis
-            ? `I couldn't quite catch that — which of these times works for you?\n\n${slotsText}`
-            : `I couldn't quite catch that — which of these times works for you?\n\n${slotsText}`;
+            ? `Got you — what time on that day works best for you?`
+            : `Got you — what time on that day works best for you?`;
           
-          await sendConversationMessage({
+          await sendMessage({
             contactId,
             body: clarifyMessage,
             channelContext,
@@ -2083,7 +2428,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         ? `Good news — ${lastReleasedDisplay} is still open, I just put you back on hold for that time 🙌\n\nLet's lock it in with the $100 deposit so it doesn't get taken.`
         : `Good news — ${lastReleasedDisplay} is still open, I just put you back on hold for that time. Let's lock it in with the $100 deposit so it doesn't get taken.`;
       
-      await sendConversationMessage({
+      await sendMessage({
         contactId,
         body: reholdMessage,
         channelContext,
@@ -2098,7 +2443,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         ? `That exact time got grabbed, but I can still get you in around then.\n\nDo you want me to send over a couple of nearby times?`
         : `That exact time got grabbed, but I can still get you in around then. Do you want me to send over a couple of nearby times?`;
       
-      await sendConversationMessage({
+      await sendMessage({
         contactId,
         body: apologyMessage,
         channelContext,
@@ -2154,16 +2499,17 @@ app.post("/ghl/message-webhook", async (req, res) => {
           ? `No problem — you’re currently set for ${currentDisplay}. Here are some other times:\n\n${slotsText}\n\nWhich one should I move you to?`
           : `No problem — you're currently set for ${currentDisplay}. Here are some other times:\n\n${slotsText}\n\nWhich one should I move you to?`;
 
-        await sendConversationMessage({
-          contactId,
-          body: rescheduleMessage,
-          channelContext,
-        });
+                await sendMessage({
+                  contactId,
+                  body: rescheduleMessage,
+                  channelContext,
+                });
 
         await updateSystemFields(contactId, {
           reschedule_pending: true,
           reschedule_target_appointment_id: existingAppointment.id,
           reschedule_target_translator_appointment_id: translatorApptId || null,
+          last_sent_slots: JSON.stringify(formatLastSentSlots(appointmentOfferData.slots)),
         });
 
         return res
@@ -2173,20 +2519,25 @@ app.post("/ghl/message-webhook", async (req, res) => {
     }
   }
 
-  // 🚀 BOOKING INTENT: User is asking for times (e.g., "What times do you have?")
+  // 🚀 BOOKING/DEPOSIT INTENT: User is asking for times or to pay deposit
   // - Strong intent (explicit time request): triggers in any phase
   // - Weak intent (generic "yes", "sounds good"): only triggers if we have core info or late phase
   let bookingIntentDetected = isBookingIntent(messageText, contactProfile, systemState.currentPhase);
+  const depositIntentDetected = isDepositIntent(messageText);
   const weakIntentDetected = isWeakBookingIntent(messageText);
+  if (depositIntentDetected) {
+    bookingIntentDetected = true; // Treat deposit requests as booking intent to send link + times
+  }
   const consultModeChosen = ["appointment", "message"].includes(
     String(contactCustomFields?.consultation_type || "").toLowerCase()
   );
+  const consultationType = (contactCustomFields?.consultation_type || contactProfile.consultationType || "").toLowerCase();
   const depositAlreadyPaid =
     contactProfile?.depositPaid === true ||
     contactSystemFields?.deposit_paid === "Yes" ||
     contactSystemFields?.deposit_paid === true;
 
-  if (bookingIntentDetected && weakIntentDetected && !consultModeChosen) {
+  if (bookingIntentDetected && weakIntentDetected && !consultModeChosen && !depositIntentDetected) {
     console.log("⏳ Weak booking intent but consult mode not chosen yet — gating times");
     bookingIntentDetected = false;
   }
@@ -2204,7 +2555,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     const needsLanguageBarrierMessage = isEnglishLead && !leadSpanishComfortable;
 
     // Language barrier gating: default to message consult, offer translator if requested
-    if (needsLanguageBarrierMessage) {
+    if (needsLanguageBarrierMessage && !depositIntentDetected) {
       const cf = contact.customField || contact.customFields || {};
 
       if (cf.language_barrier_explained === "Yes" || cf.language_barrier_explained === true) {
@@ -2213,8 +2564,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
         const barrierMessage =
           "Our artist's native language is Spanish. Most clients either do a quick video call with a translator or message the artist directly about the design details — both have worked great!\n\nWhich would you prefer?";
 
-        await sendConversationMessage({
-          contactId,
+        await sendMessage({
           body: barrierMessage,
           channelContext,
         });
@@ -2230,8 +2580,65 @@ app.post("/ghl/message-webhook", async (req, res) => {
       }
     }
 
+    // If consult type not chosen, ask preference before anything else
+    if (!consultationType) {
+      await sendMessage({
+        body: "Do you want to do a quick video consult or keep it in messages with the artist?",
+        channelContext,
+      });
+      return res.status(200).json({ success: true, message: "Consult mode requested before booking flow" });
+    }
+
+    // If user chose message consult, don't send times; move to deposit ask instead
+      if (consultationType === "message") {
+        const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+        if (!consultExplainedAlready) {
+          await sendMessage({
+            body: "We’ll keep it here in messages. To hold your consult spot we do a $100 refundable deposit that goes toward your tattoo. Want me to send the link?",
+            channelContext,
+          });
+        await updateSystemFields(contactId, { consult_explained: true });
+      } else {
+        await sendMessage({
+          body: "Ready for the $100 refundable deposit link to hold your consult here in messages?",
+          channelContext,
+        });
+      }
+      return res.status(200).json({ success: true, message: "Message consult path - no times sent" });
+    }
+
+    // For appointment consult, ensure language barrier explained once
+    if (!contactProfile.languageBarrierExplained) {
+          await sendMessage({
+            contactId,
+            body:
+              "Our artist's native language is Spanish, so for video consults we include a translator to keep details clear. Does that work for you?",
+            channelContext,
+          });
+      await updateSystemFields(contactId, { language_barrier_explained: true });
+      return res.status(200).json({ success: true, message: "Translator explanation sent before booking flow" });
+    }
+
+    const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+
+    // If consult/deposit hasn’t been explained, do that before times
+    if (!consultExplainedAlready && !alreadySent && !alreadyPaid) {
+      await sendMessage({
+        contactId,
+        body:
+          "Quick 15–20 min video consult with the artist to lock your design. We take a $100 refundable deposit that goes toward your tattoo. Want me to send the secure link?",
+        channelContext,
+      });
+      await updateSystemFields(contactId, { consult_explained: true });
+      return res.status(200).json({ success: true, message: "Consult/deposit explanation sent before times" });
+    }
+
     // Log which type of intent was detected
-    const intentType = isStrongBookingIntent(messageText) ? "STRONG" : "WEAK (gated)";
+    const intentType = depositIntentDetected
+      ? "DEPOSIT"
+      : isStrongBookingIntent(messageText)
+      ? "STRONG"
+      : "WEAK (gated)";
     console.log(`🚀 BOOKING INTENT DETECTED (${intentType}) - bypassing AI, sending times directly`);
     skipAIEntirely = true;
 
@@ -2247,24 +2654,37 @@ app.post("/ghl/message-webhook", async (req, res) => {
         contactProfile,
       });
 
+      if (!appointmentOfferData || !appointmentOfferData.slots || appointmentOfferData.slots.length === 0) {
+        await sendMessage({
+          body: "Looks like our scheduling tool is being a little slow — what day and time this week works best for you? I’ll match it on my end.",
+          channelContext,
+        });
+        await updateSystemFields(contactId, {
+          preferred_time_from_user: messageText || null,
+        });
+        return res.status(200).json({ success: true, message: "Slot fallback prompt sent" });
+      }
+
       if (appointmentOfferData && appointmentOfferData.slots && appointmentOfferData.slots.length > 0) {
         const slotsText = appointmentOfferData.slots
           .map((slot, idx) => `${idx + 1}. ${slot.displayText}`)
           .join("\n");
+        const formattedSlots = JSON.stringify(formatLastSentSlots(appointmentOfferData.slots));
 
-        // 📋 If times were already sent, use a shorter reminder message
-        if (timesSent) {
+        // 📋 If times were already sent, use a shorter reminder message (unless they asked for the deposit link now)
+        if (timesSent && !depositIntentDetected) {
           console.log("📅 Times already sent - sending short reminder");
           
           const reminderMessage = useEmojis
             ? `For sure — here were the times I mentioned:\n\n${slotsText}\n\nWhich one works?`
             : `For sure — here were the times I mentioned:\n\n${slotsText}\n\nWhich one works?`;
           
-          await sendConversationMessage({
+          await sendMessage({
             contactId,
             body: reminderMessage,
             channelContext,
           });
+          await updateSystemFields(contactId, { last_sent_slots: formattedSlots });
           
           return res.status(200).json({ success: true, message: "Times reminder sent" });
         }
@@ -2279,58 +2699,55 @@ app.post("/ghl/message-webhook", async (req, res) => {
         let needsConsultExplained = false;
         
         if (!alreadyPaid && !alreadySent) {
-          // First time sending deposit link - generate it
-          console.log("💳 Generating deposit link for booking intent...");
-          try {
-            const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
-              contactId,
-              amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
-              description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
-            });
-
-            if (depositUrl) {
-              depositUrlToStore = depositUrl;
-              
-              // Store deposit-related fields immediately (success path)
-              await updateSystemFields(contactId, {
-                deposit_link_sent: true,
-                deposit_link_url: depositUrl,
-                square_payment_link_id: paymentLinkId,
-                last_phase_update_at: new Date().toISOString(),
+          // Deposit not sent yet: if they asked for it, send link only; otherwise ask first
+          if (depositIntentDetected) {
+            console.log("💳 Generating deposit link for explicit deposit request...");
+            try {
+              const { url: depositUrl, paymentLinkId } = await createDepositLinkForContact({
+                contactId,
+                amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+                description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
               });
 
-              // 🔁 Sync pipeline: deposit link sent → DEPOSIT_PENDING
-              try {
-                await syncOpportunityStageFromContact(contactId, { aiPhase: AI_PHASES.QUALIFICATION });
-                console.log("🏗️ Pipeline stage synced after deposit link generation (booking intent path)");
-              } catch (oppErr) {
-                console.error("❌ Error syncing opportunity stage after deposit link generation:", oppErr.message || oppErr);
-              }
+              if (depositUrl) {
+                depositUrlToStore = depositUrl;
+                await updateSystemFields(contactId, {
+                  deposit_link_sent: true,
+                  deposit_link_url: depositUrl,
+                  square_payment_link_id: paymentLinkId,
+                  last_phase_update_at: new Date().toISOString(),
+                });
 
-              if (!consultExplainedAlready) {
-                // FULL explanation (only first time)
-                messageParts.push("We start with a quick 15–30 min consult to dial in your design, size, and placement.");
-                messageParts.push("To hold a spot, we do a $100 refundable deposit that goes straight toward your tattoo.");
-                needsConsultExplained = true;
-              } else {
-                // SHORT reference (consult already explained, maybe by AI)
-                messageParts.push("Same quick consult we mentioned — we'll go over your idea, placement, and details.");
+                try {
+                  await syncOpportunityStageFromContact(contactId, { aiPhase: AI_PHASES.QUALIFICATION });
+                  console.log("🏗️ Pipeline stage synced after deposit link generation (explicit request)");
+                } catch (oppErr) {
+                  console.error("❌ Error syncing opportunity stage after deposit link generation:", oppErr.message || oppErr);
+                }
+
+                await sendMessage({
+                  contactId,
+                  body: `Perfect, here's your secure deposit link to lock in your consult: ${depositUrl}`,
+                  channelContext,
+                });
+                return res.status(200).json({ success: true, message: "Deposit link sent without times (explicit request)" });
               }
-              
-              // Add times
-              messageParts.push(`Here are the times I've got:\n${slotsText}`);
-              
-              // Add deposit link
-              messageParts.push(`Here's your deposit link: ${depositUrl}`);
+            } catch (depositErr) {
+              console.error("❌ Error creating deposit link:", depositErr.message || depositErr);
+            await sendMessage({
+              contactId,
+              body: "I had trouble generating the deposit link. Want me to try again?",
+              channelContext,
+            });
+              return res.status(200).json({ success: false, message: "Deposit link generation failed" });
             }
-          } catch (depositErr) {
-            console.error("❌ Error creating deposit link:", depositErr.message || depositErr);
-            // Still send times even if deposit link fails (user saw them, so mark times_sent)
-            // But DON'T set deposit fields or consult_explained (we didn't explain it)
-            messageParts.push(`Got you — here are the times we've got open:\n${slotsText}`);
-            messageParts.push("Which one works for you?");
-            // Note: times_sent will be set at the end (line 1788) even on error
-            // This prevents re-showing times on next booking intent, but allows retry of deposit
+          } else {
+            await sendMessage({
+              contactId,
+              body: "We take a $100 refundable deposit to hold the video consult. Want me to send the link?",
+              channelContext,
+            });
+            return res.status(200).json({ success: true, message: "Asked for deposit permission before times" });
           }
         } else if (alreadySent && !alreadyPaid) {
           // Deposit link already sent - short reminder with times
@@ -2353,11 +2770,11 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
         const combinedMessage = messageParts.join("\n\n");
 
-        await sendConversationMessage({
-          contactId,
-          body: combinedMessage,
-          channelContext,
-        });
+          await sendMessage({
+            contactId,
+            body: combinedMessage,
+            channelContext,
+          });
         console.log("📅 Times sent directly (bypassed AI)");
         
         // Mark times as sent (even if deposit failed - user saw them, prevents re-showing)
@@ -2370,6 +2787,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
           times_sent: true, // Always set - user saw times regardless of deposit success/failure
           ai_phase: AI_PHASES.CLOSING,
           last_phase_update_at: new Date().toISOString(),
+          last_sent_slots: formattedSlots,
         };
         if (needsConsultExplained) {
           // Only set if we actually explained consult this turn (not on error path)
@@ -2466,6 +2884,37 @@ app.post("/ghl/message-webhook", async (req, res) => {
           bubblesToSend = bubblesToSend.filter(bubble => 
             !depositLinkClaimPatterns.some(pattern => pattern.test(bubble))
           );
+        }
+      }
+
+      // 🧹 If we've already explained the consult, strip any long consult/deposit repeats
+      if (consultExplainedAlready && bubblesToSend.length > 0) {
+        const original = [...bubblesToSend];
+        bubblesToSend = bubblesToSend.filter((bubble) => {
+          const lower = bubble.toLowerCase();
+          const repeatsConsult =
+            lower.includes("next step is a quick") ||
+            lower.includes("15–20") ||
+            lower.includes("15-20") ||
+            lower.includes("15–30") ||
+            lower.includes("15-30") ||
+            lower.includes("refundable deposit");
+          return !repeatsConsult;
+        });
+        if (bubblesToSend.length === 0) {
+          bubblesToSend = [original[0]];
+        }
+      }
+
+      // 🧹 Avoid repeating full tattoo summary if we already captured it
+      if (contactProfile?.tattooSummary && contactProfile.tattooIdeaAcknowledged && bubblesToSend.length > 0) {
+        const summaryLower = String(contactProfile.tattooSummary).toLowerCase();
+        const original = [...bubblesToSend];
+        bubblesToSend = bubblesToSend.filter(
+          (bubble) => !bubble.toLowerCase().includes(summaryLower)
+        );
+        if (bubblesToSend.length === 0) {
+          bubblesToSend = [original[0]];
         }
       }
 

@@ -183,7 +183,6 @@ async function getArtistWorkloads() {
   try {
     const opportunities = await searchOpportunities({
       query: { status: "open" },
-      pagination: { limit: 500, page: 1 },
     });
 
     opportunities.forEach((opp) => {
@@ -197,9 +196,10 @@ async function getArtistWorkloads() {
     artistWorkloads = { ...base };
   } catch (err) {
     console.error(
-      "❌ Error fetching artist workloads:",
+      "❌ Error fetching artist workloads, returning defaults:",
       err.response?.data || err.message
     );
+    return { ...base };
   }
 
   return { ...artistWorkloads };
@@ -469,4 +469,3 @@ module.exports = {
   detectArtistMention,
   getArtistPreferenceFromContact,
 };
-

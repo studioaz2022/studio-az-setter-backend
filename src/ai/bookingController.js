@@ -980,7 +980,6 @@ function isTimeSelection(messageText, availableSlots = []) {
     /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i,
     /\b\d+\s*(am|pm|:00)\b/i, // Times like "5pm", "10:00"
     /\b(morning|afternoon|evening|night)\b/i,
-    /\b(this|next)\s*(week|monday|tuesday|etc)\b/i,
   ];
   
   return timePatterns.some((pattern) => pattern.test(text));
@@ -998,4 +997,3 @@ module.exports = {
   selectBestSlotsForPresentation,
   getExplicitArtistPreference,
 };
-

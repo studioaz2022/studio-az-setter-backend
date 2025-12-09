@@ -81,7 +81,7 @@ async function updateOpportunity(opportunityId, body = {}) {
 
 async function updateOpportunityStage({ opportunityId, pipelineStageId, status }) {
   if (!pipelineStageId) throw new Error("updateOpportunityStage requires pipelineStageId");
-  const body = { pipelineStageId };
+  const body = { pipelineStageId, pipelineId: PIPELINE_ID };
   if (status) body.status = status;
   return updateOpportunity(opportunityId, body);
 }
@@ -115,10 +115,6 @@ async function addOpportunityNote({ opportunityId, content }) {
 
 async function searchOpportunities({
   query = {},
-  pagination = {
-    limit: 200,
-    page: 1,
-  },
 }) {
   const url = `${GHL_BASE_URL}/opportunities/search`;
   const payload = {
@@ -127,7 +123,6 @@ async function searchOpportunities({
       pipelineId: PIPELINE_ID,
       ...query,
     },
-    pagination,
   };
 
   const response = await axios.post(url, payload, {
@@ -169,4 +164,3 @@ module.exports = {
   getOpportunitiesByContact,
   searchOpportunities,
 };
-

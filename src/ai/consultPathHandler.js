@@ -12,7 +12,9 @@ function detectPathChoice(messageText) {
   const v = String(messageText).toLowerCase();
 
   const picksMessage =
-    /\b(messages?|chat|here|text|dm|mensajes)\b/.test(v) ||
+    (/\b(messages?|chat|dm|mensajes)\b/.test(v) &&
+      !/instead of\s+messag/i.test(v) &&
+      !/\bnot\b.*message/.test(v)) ||
     /consult.*(here|messages|chat)/.test(v) ||
     /pref(er)?\s+(messages?|chat)/.test(v);
 
@@ -24,6 +26,12 @@ function detectPathChoice(messageText) {
     /\bcall\b/.test(v) ||
     /consult.*(video|zoom|translator)/.test(v);
 
+  // If they ask why a translator is needed, treat it specially so we can explain first
+  const asksWhyTranslator =
+    /\bwhy\b.*translator/.test(v) || /translator.*\bwhy\b/.test(v);
+
+  if (asksWhyTranslator) return "translator_question";
+
   if (picksMessage && !picksTranslator) return "message";
   if (picksTranslator) return "translator";
   return null;
@@ -34,15 +42,50 @@ async function handlePathChoice({
   messageText,
   channelContext,
   sendConversationMessage,
-  triggerAppointmentOffer, // callback to generate and send time slots
+  triggerAppointmentOffer, // unused now to avoid premature time generation
+  existingConsultType = null,
+  consultationTypeLocked = false,
 }) {
   const choice = detectPathChoice(messageText);
   if (!choice) return null;
+
+  // Do not overwrite consult type unless user explicitly changes it
+  if ((existingConsultType || consultationTypeLocked) && choice !== "translator_question") {
+    const explicitSwitch = /\bactually\b|\brather\b|\binstead\b|\bprefer\b/.test(
+      String(messageText).toLowerCase()
+    );
+    if (!explicitSwitch && consultationTypeLocked) {
+      return null;
+    }
+  }
+
+  if (choice === "translator_question") {
+    await sendConversationMessage({
+      contactId,
+      body:
+        "Our artist's native language is Spanish, so we add a translator to keep all the design details clear. We can do that on a quick video call or keep things in messages—both work great. Which do you prefer?",
+      channelContext,
+    });
+
+    try {
+      await updateSystemFields(contactId, {
+        language_barrier_explained: true,
+      });
+    } catch (err) {
+      console.error(
+        "❌ Failed to mark language_barrier_explained after translator question:",
+        err.message || err
+      );
+    }
+
+    return { choice: "translator_question" };
+  }
 
   if (choice === "message") {
     console.log(`📝 [CONSULTATION_TYPE] Setting consultation_type="message" for contact ${contactId} (detected from: "${messageText}")`);
     await updateSystemFields(contactId, {
       consultation_type: "message",
+      consultation_type_locked: true,
       translator_needed: false,
     });
 
@@ -79,13 +122,16 @@ async function handlePathChoice({
     console.log(`📝 [CONSULTATION_TYPE] Setting consultation_type="appointment" (translator needed) for contact ${contactId} (detected from: "${messageText}")`);
     await updateSystemFields(contactId, {
       consultation_type: "appointment",
+      consultation_type_locked: true,
       translator_needed: true,
+      language_barrier_explained: true,
+      translator_explained: true,
     });
 
-    // Send acknowledgment first
     await sendConversationMessage({
       contactId,
-      body: "Got it — I'll set up a video consult with a translator.",
+      body:
+        "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?",
       channelContext,
     });
 
@@ -97,30 +143,7 @@ async function handlePathChoice({
       console.error("❌ Error syncing opportunity stage after consult mode = appointment:", oppErr.message || oppErr);
     }
 
-    // Trigger slot generation immediately
-    if (triggerAppointmentOffer) {
-      console.log("📅 Triggering appointment offer after translator choice");
-      try {
-        await triggerAppointmentOffer({
-          contactId,
-          channelContext,
-          translatorNeeded: true,
-        });
-      } catch (err) {
-        console.error("❌ Failed to trigger appointment offer:", err.message || err);
-        await sendConversationMessage({
-          contactId,
-          body: "What days work best for you this week?",
-          channelContext,
-        });
-      }
-    } else {
-      await sendConversationMessage({
-        contactId,
-        body: "What days work best for you this week?",
-        channelContext,
-      });
-    }
+    // Do NOT generate times here; wait until deposit flow is ready
 
     return { choice: "translator" };
   }
@@ -132,4 +155,3 @@ module.exports = {
   detectPathChoice,
   handlePathChoice,
 };
-
