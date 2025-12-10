@@ -12,6 +12,7 @@ const {
   TATTOO_FIELDS,
   CALENDARS,
   ARTIST_ASSIGNED_USER_IDS,
+  ARTIST_NAME_TO_ID,
 } = require("../config/constants");
 const { searchOpportunities } = require("../clients/ghlOpportunityClient");
 
@@ -43,6 +44,10 @@ const TRACKED_ARTISTS = new Set([
   ...Object.values(ARTIST_STYLE_MAP || {}).flat(),
 ]);
 
+const ARTIST_ID_TO_NAME = Object.fromEntries(
+  Object.entries(ARTIST_ASSIGNED_USER_IDS || {}).map(([name, id]) => [id, formatArtistKey(name)])
+);
+
 function buildInitialWorkloadMap() {
   const base = {};
   Array.from(TRACKED_ARTISTS)
@@ -67,14 +72,15 @@ let artistWorkloads = buildInitialWorkloadMap();
 function getAssignedUserIdForArtist(artistName) {
   if (!artistName) return null;
 
-  const normalized = String(artistName).toLowerCase().trim();
+  const raw = String(artistName).trim();
+  const lower = raw.toLowerCase();
 
-  if (normalized.includes("joan")) {
-    return ARTIST_ASSIGNED_USER_IDS.JOAN || null;
+  if (ARTIST_NAME_TO_ID[lower]) {
+    return ARTIST_NAME_TO_ID[lower];
   }
 
-  if (normalized.includes("andrew")) {
-    return ARTIST_ASSIGNED_USER_IDS.ANDREW || null;
+  if (ARTIST_ID_TO_NAME[raw]) {
+    return raw;
   }
 
   return null;
@@ -141,6 +147,9 @@ function normalizeArtistName(name) {
   if (!name) return null;
   const trimmed = String(name).trim();
   if (!trimmed) return null;
+  if (ARTIST_ID_TO_NAME[trimmed]) {
+    return ARTIST_ID_TO_NAME[trimmed];
+  }
   const lower = trimmed.toLowerCase();
   if (lower.includes("joan")) return "Joan";
   if (lower.includes("andrew")) return "Andrew";
@@ -166,6 +175,21 @@ function detectArtistMention(messageText) {
     }
   }
   return null;
+}
+
+function resolveArtistIdentifier(artistIdentifier) {
+  if (!artistIdentifier) {
+    return { artistId: null, artistName: null };
+  }
+  const raw = String(artistIdentifier).trim();
+  const lower = raw.toLowerCase();
+  const idFromName = ARTIST_NAME_TO_ID[lower];
+  const nameFromId = ARTIST_ID_TO_NAME[raw];
+
+  const artistId = idFromName || (nameFromId ? raw : null) || raw;
+  const artistName = nameFromId || normalizeArtistName(raw);
+
+  return { artistId, artistName };
 }
 
 function mapAssignedUserIdToArtist(userId) {
@@ -334,7 +358,8 @@ async function assignArtistToContact(contactId, artistName) {
   }
 
   try {
-    const normalizedArtist = normalizeArtistName(artistName);
+    const { artistId, artistName: resolvedName } = resolveArtistIdentifier(artistName);
+    const normalizedArtist = normalizeArtistName(resolvedName);
 
     // Update tattoo field with assigned artist
     await updateTattooFields(contactId, {
@@ -344,11 +369,14 @@ async function assignArtistToContact(contactId, artistName) {
     // Update system fields
     await updateSystemFields(contactId, {
       assigned_artist: normalizedArtist,
+      assigned_artist_id: artistId || null,
+      assigned_artist_name: normalizedArtist,
       artist_assigned_at: new Date().toISOString(),
     });
 
     // Update CRM owner
-    const assignedUserId = getAssignedUserIdForArtist(normalizedArtist);
+    const assignedUserId =
+      artistId || getAssignedUserIdForArtist(normalizedArtist);
     if (assignedUserId) {
       await updateContactAssignedUser(contactId, assignedUserId);
     } else {

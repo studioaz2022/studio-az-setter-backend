@@ -896,6 +896,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
 module.exports = {
   getContact,
+  updateContact,
   upsertContactFromWidget,
   updateSystemFields,
   updateTattooFields,
@@ -904,5 +905,4 @@ module.exports = {
   updateContactAssignedUser,
   createTaskForContact,
 };
-
 

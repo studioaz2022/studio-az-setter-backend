@@ -103,15 +103,15 @@ This document maps the current implementation status of the Studio AZ AI Setter 
 - ⚠️ No structured discovery branching logic in code (relies entirely on AI prompts)
 - ⚠️ No validation that required fields are collected before moving phases
 - ⚠️ No explicit incomplete intake detection logic (handled by prompts only)
-- ❌ No return client detection
-- ❌ No special handling for existing clients (skip discovery questions, faster routing)
+- ✅ Returning client detection + fast-path handling (tags/system fields/past appointments) added
+- ✅ Returning client fast-path behavior (skip newbie education, quicker booking) added
 
 **Next Steps:**
 
 1. Add discovery state machine to track which fields are collected
 2. Add validation before phase transitions
-3. Implement return client detection (check for existing appointments/tattoos)
-4. Add return client logic (skip questions, faster routing)
+3. Continue refining returning client UX (e.g., artist preference reuse, expedited slot surfacing)
+4. Add return client logic (skip questions, faster routing)  ✅ baseline shipped; keep iterating on edge cases
 
 ---
 

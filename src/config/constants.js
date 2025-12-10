@@ -162,6 +162,13 @@ const ARTIST_ASSIGNED_USER_IDS = {
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
 };
 
+const ARTIST_NAME_TO_ID = Object.fromEntries(
+  Object.entries(ARTIST_ASSIGNED_USER_IDS || {}).map(([name, id]) => [
+    String(name).toLowerCase(),
+    id,
+  ])
+);
+
 // Artist language capabilities (hardcoded)
 const ARTIST_LANGUAGES = {
   Joan: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
@@ -182,7 +189,7 @@ module.exports = {
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
   ARTIST_ASSIGNED_USER_IDS,
+  ARTIST_NAME_TO_ID,
   ARTIST_LANGUAGES,
   OPPORTUNITY_STAGES,
 };
-

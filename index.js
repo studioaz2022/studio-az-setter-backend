@@ -17,6 +17,7 @@ const {
   updateSystemFields,
   updateTattooFields,
   sendConversationMessage,
+  updateContact,
 } = require("./ghlClient");
 
 const {
@@ -40,6 +41,7 @@ const {
   TRANSLATOR_CALENDARS,
   APPOINTMENT_STATUS,
   TATTOO_FIELDS,
+  ARTIST_ASSIGNED_USER_IDS,
 } = require("./src/config/constants");
 const { autoAssignArtist, determineArtist, assignArtistToContact } = require("./src/ai/artistRouter");
 const { errorHandler, notFoundHandler } = require("./src/middleware/errorHandler");
@@ -61,6 +63,7 @@ const {
   detectPathChoice,
   handlePathChoice,
 } = require("./src/ai/consultPathHandler");
+const { detectReturningClient } = require("./src/ai/returningClientDetector");
 
 const app = express();
 
@@ -181,6 +184,148 @@ async function ensureArtistAssignment(contactId, { contact, preferredArtist } = 
   }
 }
 
+function hasPastClientTag(tags = []) {
+  if (!Array.isArray(tags)) return false;
+  return tags.some((t) => typeof t === "string" && t.toLowerCase().includes("past-client"));
+}
+
+function mapAssignedUserIdToArtistName(assignedUserId) {
+  if (!assignedUserId) return null;
+  const entries = Object.entries(ARTIST_ASSIGNED_USER_IDS || {});
+  const match = entries.find(([, id]) => id === assignedUserId);
+  return match ? match[0] : null;
+}
+
+function getProposedArtistFromHistory(contactProfile) {
+  if (!contactProfile?.previousArtistId || !contactProfile?.previousArtistName) return null;
+  const hasCurrent =
+    !!contactProfile.consultationType ||
+    !!contactProfile.consultationTypeLocked ||
+    !!contactProfile.assignedArtist ||
+    !!contactProfile.assignedArtistId;
+  if (hasCurrent) return null;
+  return {
+    id: contactProfile.previousArtistId,
+    name: contactProfile.previousArtistName,
+  };
+}
+
+function getPreviousArtistFromHistory(contactProfile) {
+  if (!Array.isArray(contactProfile?.previousArtists)) {
+    return { id: null, name: null };
+  }
+  for (const artistId of contactProfile.previousArtists) {
+    const name = mapAssignedUserIdToArtistName(artistId);
+    if (name) {
+      return { id: artistId, name };
+    }
+  }
+  return { id: null, name: null };
+}
+
+function isArtistConfirmation(messageText, artistName) {
+  const rawText = String(messageText || "");
+  const normalizeText = (text) =>
+    String(text || "")
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "");
+  const includesAny = (text, patterns) => patterns.some((p) => text.includes(p));
+
+  const normalized = normalizeText(rawText);
+  if (!normalized) return false;
+
+  const normalizedArtistName = normalizeText(artistName || "");
+  const artistTokens = normalizedArtistName.split(/\s+/).filter(Boolean);
+  const artistKey = artistTokens[0] || normalizedArtistName;
+
+  const negativePatterns = [
+    "not ",
+    "dont ",
+    "don't ",
+    "no ",
+    "no thanks",
+    "no thank you",
+    "anything but",
+    "anyone but",
+    "no quiero",
+    "no me gusta",
+    "prefiero otro",
+    "prefiero otra persona",
+    "otra persona",
+    "otro artista",
+    "otra artista",
+  ];
+  if (includesAny(normalized, negativePatterns)) {
+    return false;
+  }
+
+  const affirmations = [
+    "yes",
+    "yeah",
+    "yep",
+    "sure",
+    "ok",
+    "okay",
+    "works",
+    "that works",
+    "sounds good",
+    "let's do",
+    "lets do",
+    "go with",
+    "same",
+    "again",
+    "si",
+    "claro",
+    "claro que si",
+    "perfecto",
+    "suena bien",
+    "me gusta",
+    "esta bien",
+    "esta perfecto",
+  ];
+  const hasAffirmation = includesAny(normalized, affirmations);
+  if (!hasAffirmation) return false;
+
+  const sameArtistPhrases = [
+    "same artist",
+    "same person",
+    "same guy",
+    "same girl",
+    "previous artist",
+    "la misma",
+    "la misma artista",
+    "el mismo",
+    "el mismo artista",
+    "mismo artista",
+    "misma artista",
+    "la misma persona",
+    "otra vez con ella",
+    "otra vez con el",
+    "otra vez con",
+  ];
+
+  const mentionsSameArtistPhrase = includesAny(normalized, sameArtistPhrases);
+  const mentionsArtistName =
+    !!artistKey &&
+    (normalized.includes(artistKey) || normalized.includes(normalizedArtistName));
+
+  return hasAffirmation && (mentionsArtistName || mentionsSameArtistPhrase);
+}
+
+async function addPastClientTag(contactId, contact) {
+  if (!contactId) return;
+  const existingTags = Array.isArray(contact?.tags) ? contact.tags.filter(Boolean) : [];
+  if (hasPastClientTag(existingTags)) return;
+  const updatedTags = [...existingTags, "past-client"];
+  try {
+    await updateContact(contactId, { tags: updatedTags });
+    console.log("🏷️ Added past-client tag to contact", contactId);
+  } catch (err) {
+    console.error("❌ Failed to add past-client tag:", err.response?.data || err.message);
+  }
+}
+
 /**
  * Check if message indicates STRONG booking intent (explicit time request)
  * These trigger in ANY phase
@@ -206,6 +351,7 @@ function isWeakBookingIntent(messageText) {
  * Only true if we have core tattoo info OR we're in a late phase
  */
 function isSafeToTreatAsBookingIntent(contactProfile, currentPhase) {
+  if (contactProfile?.isReturningClient) return true;
   // Must have core tattoo info (summary OR placement)
   const hasCoreInfo = !!(
     contactProfile?.tattooSummary || 
@@ -1536,6 +1682,36 @@ app.post("/ghl/message-webhook", async (req, res) => {
     tags: contact.tags,
   }));
 
+  // Detect returning client signals (appointments + fields + tags)
+  let returningAnalysis = {
+    isReturningClient: false,
+    signals: {},
+    appointmentStats: { pastAppointmentCount: 0, lastAppointmentAt: null, artistsSeen: [] },
+  };
+  try {
+    const appointmentsForDetection = await listAppointmentsForContact(contactId);
+    returningAnalysis = detectReturningClient({
+      contact,
+      appointments: appointmentsForDetection,
+    });
+    if (returningAnalysis.isReturningClient) {
+      await addPastClientTag(contactId, contact);
+      const fieldsToPersist = {
+        returning_client: true,
+      };
+      if (
+        returningAnalysis.appointmentStats?.pastAppointmentCount &&
+        !Number.isNaN(returningAnalysis.appointmentStats.pastAppointmentCount)
+      ) {
+        fieldsToPersist.total_tattoos_completed =
+          returningAnalysis.appointmentStats.pastAppointmentCount;
+      }
+      await updateSystemFields(contactId, fieldsToPersist);
+    }
+  } catch (retErr) {
+    console.error("❌ Returning client detection failed:", retErr.message || retErr);
+  }
+
   const cf = contact.customField || contact.customFields || {};
   const currentLanguage =
     cf["language_preference"] ||
@@ -1775,6 +1951,18 @@ app.post("/ghl/message-webhook", async (req, res) => {
       contactCustomFields?.consult_in_person_confirmed === "Yes" ||
       contactCustomFields?.consult_in_person_confirmed === true,
     preferredTimeFromUser: contactCustomFields?.preferred_time_from_user || null,
+    isReturningClient: returningAnalysis.isReturningClient || false,
+    returningSignals: returningAnalysis.signals || {},
+    pastAppointmentCount: returningAnalysis.appointmentStats?.pastAppointmentCount || 0,
+    lastAppointmentAt: returningAnalysis.appointmentStats?.lastAppointmentAt || null,
+    previousArtists: Array.isArray(returningAnalysis.appointmentStats?.artistsSeen)
+      ? returningAnalysis.appointmentStats.artistsSeen
+      : [],
+    assignedArtist:
+      contactCustomFields?.assigned_artist ||
+      contactCustomFields?.assigned_artist_name ||
+      null,
+    assignedArtistId: contactCustomFields?.assigned_artist_id || null,
     depositPaid:
       contactProfileFromWebhook.depositPaid ||
       contactSystemFields?.deposit_paid === "Yes",
@@ -1786,6 +1974,54 @@ app.post("/ghl/message-webhook", async (req, res) => {
         contactCustomFields?.tattoo_summary ||
         contactCustomFields?.["Tattoo Summary"]),
   };
+
+  const previousArtist = getPreviousArtistFromHistory(contactProfile);
+  contactProfile.previousArtistId = previousArtist.id;
+  contactProfile.previousArtistName = previousArtist.name || null;
+
+  const proposedArtistFromHistory = getProposedArtistFromHistory(contactProfile);
+  if (proposedArtistFromHistory) {
+    contactProfile.proposedArtistFromHistoryId = proposedArtistFromHistory.id;
+    contactProfile.proposedArtistFromHistoryName = proposedArtistFromHistory.name;
+    contactProfile.proposedArtistFromHistory = proposedArtistFromHistory.name; // backward compatibility
+  } else {
+    contactProfile.proposedArtistFromHistoryId = null;
+    contactProfile.proposedArtistFromHistoryName = null;
+  }
+
+  if (contactProfile.isReturningClient) {
+    contactProfile.consultExplained = true;
+  }
+
+  // Auto-assign previous artist when user confirms they want them again
+  if (contactProfile.proposedArtistFromHistoryName && contactProfile.proposedArtistFromHistoryId) {
+    const alreadyAssigned =
+      contactCustomFields?.assigned_artist ||
+      contactCustomFields?.assigned_artist_id ||
+      contactProfile.assignedArtist;
+    const confirmed = isArtistConfirmation(
+      messageText,
+      contactProfile.proposedArtistFromHistoryName
+    );
+    if (!alreadyAssigned && confirmed) {
+      try {
+        await assignArtistToContact(contactId, contactProfile.proposedArtistFromHistoryId);
+        await updateSystemFields(contactId, {
+          assigned_artist: contactProfile.proposedArtistFromHistoryName,
+          assigned_artist_id: contactProfile.proposedArtistFromHistoryId,
+          assigned_artist_name: contactProfile.proposedArtistFromHistoryName,
+          artist_assigned_at: new Date().toISOString(),
+        });
+        contactProfile.assignedArtist = contactProfile.proposedArtistFromHistoryId;
+        console.log("🎨 Assigned previous artist after confirmation:", {
+          id: contactProfile.proposedArtistFromHistoryId,
+          name: contactProfile.proposedArtistFromHistoryName,
+        });
+      } catch (assignErr) {
+        console.error("❌ Failed to assign previous artist:", assignErr.message || assignErr);
+      }
+    }
+  }
 
   // If deposit is paid, hard-lock consult state and explanations
   if (contactProfile.depositPaid) {
@@ -1840,6 +2076,9 @@ app.post("/ghl/message-webhook", async (req, res) => {
     leadTemperature: systemState.leadTemperature,
     language: contactLanguagePreferenceFresh,
     contactProfile,
+    proposedArtistFromHistory: contactProfile.proposedArtistFromHistoryName || null,
+    proposedArtistFromHistoryName: contactProfile.proposedArtistFromHistoryName || null,
+    proposedArtistFromHistoryId: contactProfile.proposedArtistFromHistoryId || null,
   };
 
   console.log("🤖 Processing message with payload summary:", cleanLogObject({
@@ -1847,6 +2086,7 @@ app.post("/ghl/message-webhook", async (req, res) => {
     leadTemperature: aiPayload.leadTemperature,
     aiPhase: aiPayload.aiPhase,
     language: aiPayload.language,
+    returning: contactProfile.isReturningClient,
     hasTattooPlacement: !!contactProfile.tattooPlacement,
     hasTattooSize: !!contactProfile.tattooSize,
     depositPaid: contactProfile.depositPaid,
@@ -2591,7 +2831,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
     // If user chose message consult, don't send times; move to deposit ask instead
       if (consultationType === "message") {
-        const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+        const consultExplainedAlready =
+          hasConsultBeenExplained(freshContact) || contactProfile.isReturningClient;
         if (!consultExplainedAlready) {
           await sendMessage({
             body: "We’ll keep it here in messages. To hold your consult spot we do a $100 refundable deposit that goes toward your tattoo. Want me to send the link?",
@@ -2619,7 +2860,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
       return res.status(200).json({ success: true, message: "Translator explanation sent before booking flow" });
     }
 
-    const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+    const consultExplainedAlready =
+      hasConsultBeenExplained(freshContact) || contactProfile.isReturningClient;
 
     // If consult/deposit hasn’t been explained, do that before times
     if (!consultExplainedAlready && !alreadySent && !alreadyPaid) {
@@ -2690,7 +2932,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
         }
 
         // Check if consult has already been explained (to avoid repetition)
-        const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+        const consultExplainedAlready =
+          hasConsultBeenExplained(freshContact) || contactProfile.isReturningClient;
         console.log(`📋 Consult explained already: ${consultExplainedAlready}`);
         
         // Build message parts based on what's already been explained
@@ -2808,7 +3051,8 @@ app.post("/ghl/message-webhook", async (req, res) => {
 
   try {
     // Check if consult has been explained (to pass to AI for prompt enforcement)
-    const consultExplainedAlready = hasConsultBeenExplained(freshContact);
+    const consultExplainedAlready =
+      hasConsultBeenExplained(freshContact) || contactProfile.isReturningClient;
     
     const { aiResult, ai_phase: newAiPhaseFromAI, lead_temperature: newLeadTempFromAI } =
       await handleInboundMessage({
@@ -3141,6 +3385,31 @@ app.post("/lead/partial", async (req, res) => {
       preferredArtist,
     });
 
+    // Detect and persist returning client signals during partial save
+    try {
+      const appointmentsForDetection = await listAppointmentsForContact(contactId);
+      const returningAnalysis = detectReturningClient({
+        contact,
+        appointments: appointmentsForDetection,
+      });
+      if (returningAnalysis.isReturningClient) {
+        await addPastClientTag(contactId, contact);
+        const fieldsToPersist = {
+          returning_client: true,
+        };
+        if (
+          returningAnalysis.appointmentStats?.pastAppointmentCount &&
+          !Number.isNaN(returningAnalysis.appointmentStats.pastAppointmentCount)
+        ) {
+          fieldsToPersist.total_tattoos_completed =
+            returningAnalysis.appointmentStats.pastAppointmentCount;
+        }
+        await updateSystemFields(contactId, fieldsToPersist);
+      }
+    } catch (retErr) {
+      console.error("❌ Returning client detection (partial) failed:", retErr.message || retErr);
+    }
+
     console.log("✅ Partial upsert complete:", {
       contactId,
       firstName: contact?.firstName || contact?.first_name,
@@ -3224,6 +3493,31 @@ app.post("/lead/final", upload.array("files"), async (req, res) => {
       contact,
       preferredArtist,
     });
+
+    // Detect and persist returning client signals on final submission
+    try {
+      const appointmentsForDetection = await listAppointmentsForContact(contactId);
+      const returningAnalysis = detectReturningClient({
+        contact,
+        appointments: appointmentsForDetection,
+      });
+      if (returningAnalysis.isReturningClient) {
+        await addPastClientTag(contactId, contact);
+        const fieldsToPersist = {
+          returning_client: true,
+        };
+        if (
+          returningAnalysis.appointmentStats?.pastAppointmentCount &&
+          !Number.isNaN(returningAnalysis.appointmentStats.pastAppointmentCount)
+        ) {
+          fieldsToPersist.total_tattoos_completed =
+            returningAnalysis.appointmentStats.pastAppointmentCount;
+        }
+        await updateSystemFields(contactId, fieldsToPersist);
+      }
+    } catch (retErr) {
+      console.error("❌ Returning client detection (final) failed:", retErr.message || retErr);
+    }
 
     console.log("✅ Final upsert complete:", {
       contactId,
