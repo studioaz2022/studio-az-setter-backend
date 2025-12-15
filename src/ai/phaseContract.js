@@ -35,8 +35,91 @@ function detectArtistGuidedSize(messageText) {
   return patterns.some((phrase) => v.includes(phrase));
 }
 
+/**
+ * Normalize display name to snake_case key.
+ * "Tattoo Placement" -> "tattoo_placement"
+ * "How Soon Is Client Deciding?" -> "how_soon_is_client_deciding"
+ */
+function normalizeDisplayName(displayName) {
+  if (!displayName || typeof displayName !== "string") return null;
+  return displayName
+    .toLowerCase()
+    .replace(/[?!.,]/g, "")
+    .replace(/\s+/g, "_")
+    .trim();
+}
+
+/**
+ * Normalize custom fields from various GHL formats to a key-value object.
+ * Handles:
+ * - Already normalized object: { tattoo_placement: "forearm" }
+ * - Array format: [{ id: "xxx", value: "forearm" }]
+ * - Array-like object: { "0": { id: "xxx", value: "forearm" } }
+ * - Display name keys: { "Tattoo Placement": "forearm" }
+ */
+function normalizeCustomFields(cfRaw) {
+  if (!cfRaw) return {};
+  
+  let normalized = {};
+  
+  // Check if it's an array
+  if (Array.isArray(cfRaw)) {
+    for (const entry of cfRaw) {
+      if (!entry) continue;
+      const key = entry.key || entry.fieldKey || entry.customFieldKey;
+      if (key && entry.value !== undefined) {
+        normalized[key] = entry.value;
+      }
+    }
+    return normalized;
+  }
+  
+  // Check if it's an array-like object with numeric keys
+  const keys = Object.keys(cfRaw);
+  const isArrayLike = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
+  
+  if (isArrayLike) {
+    for (const key of keys) {
+      const entry = cfRaw[key];
+      if (!entry || typeof entry !== "object") continue;
+      // Try to get the field key from the entry
+      const fieldKey = entry.key || entry.fieldKey || entry.customFieldKey;
+      if (fieldKey && entry.value !== undefined) {
+        normalized[fieldKey] = entry.value;
+      }
+      // If no key but has id and value, we can't map it (GHL ID != our key)
+      // These will be handled by merging with webhook payload data
+    }
+    return normalized;
+  }
+  
+  // It's a regular object - normalize display name keys to snake_case
+  for (const [key, value] of Object.entries(cfRaw)) {
+    if (value === undefined || value === null || value === "") continue;
+    
+    // Skip nested objects (like location, contact, etc.)
+    if (typeof value === "object" && !Array.isArray(value)) continue;
+    
+    // Check if key looks like a display name (contains spaces or is title case)
+    if (key.includes(" ") || /^[A-Z]/.test(key)) {
+      const snakeKey = normalizeDisplayName(key);
+      if (snakeKey) {
+        normalized[snakeKey] = value;
+      }
+    } else {
+      // Already snake_case or similar
+      normalized[key] = value;
+    }
+  }
+  
+  return normalized;
+}
+
 function buildCanonicalState(contact = {}) {
-  const cf = contact.customField || contact.customFields || {};
+  const cfRaw = contact.customField || contact.customFields || {};
+  
+  // Normalize custom fields from various formats
+  const cf = normalizeCustomFields(cfRaw);
 
   const lastSentSlotsRaw = cf.last_sent_slots || null;
   const lastSeenSnapshotRaw = cf[SYSTEM_FIELDS.LAST_SEEN_FIELDS] || cf.last_seen_fields_snapshot || null;
@@ -194,6 +277,8 @@ module.exports = {
   boolVal,
   parseJsonField,
   detectArtistGuidedSize,
+  normalizeCustomFields,
+  normalizeDisplayName,
   buildCanonicalState,
   derivePhase,
   derivePhaseFromFields,

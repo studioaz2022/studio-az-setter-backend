@@ -32,6 +32,81 @@ function getNonEmptyCustomFields(contact) {
   return filterNonEmpty(cf);
 }
 
+// Helper: Normalize display name to snake_case key
+// "Tattoo Placement" -> "tattoo_placement"
+function normalizeDisplayName(displayName) {
+  if (!displayName || typeof displayName !== "string") return null;
+  return displayName
+    .toLowerCase()
+    .replace(/[?!.,]/g, "")
+    .replace(/\s+/g, "_")
+    .trim();
+}
+
+// Helper: Extract custom fields from webhook payload (which has display name keys)
+// This is more reliable than getContact() which returns array format
+function extractCustomFieldsFromPayload(payload) {
+  const customFields = {};
+  
+  // Known GHL custom field display names that we care about
+  const knownFields = [
+    "Tattoo Placement", "tattoo_placement",
+    "Tattoo Summary", "tattoo_summary",
+    "Tattoo Size", "Size Of Tattoo", "size_of_tattoo",
+    "Tattoo Style", "tattoo_style",
+    "Tattoo Color Preference", "tattoo_color_preference",
+    "How Soon Is Client Deciding?", "how_soon_is_client_deciding",
+    "First Tattoo", "first_tattoo",
+    "Tattoo Concerns", "tattoo_concerns",
+    "Language Preference", "language_preference",
+    "Lead Temperature", "lead_temperature",
+    "Deposit Paid", "deposit_paid",
+    "Deposit Link Sent", "deposit_link_sent",
+    "consultation_type", "Consultation Type",
+    "consultation_type_locked",
+    "consult_explained",
+    "translator_needed",
+    "translator_confirmed",
+    "hold_appointment_id",
+    "times_sent",
+    "last_sent_slots",
+  ];
+  
+  for (const [key, value] of Object.entries(payload)) {
+    if (value === undefined || value === null || value === "") continue;
+    if (typeof value === "object") continue; // Skip nested objects
+    
+    // Check if this is a known field (by display name or snake_case)
+    const isKnownField = knownFields.some(f => 
+      f.toLowerCase() === key.toLowerCase() || 
+      normalizeDisplayName(f) === normalizeDisplayName(key)
+    );
+    
+    if (isKnownField) {
+      const snakeKey = normalizeDisplayName(key);
+      if (snakeKey) {
+        customFields[snakeKey] = value;
+      }
+    }
+  }
+  
+  return customFields;
+}
+
+// Helper: Merge webhook custom fields into contact object
+function mergeCustomFieldsIntoContact(contact, webhookCustomFields) {
+  if (!contact) return contact;
+  
+  const existingCf = contact.customField || contact.customFields || {};
+  const mergedCf = { ...existingCf, ...webhookCustomFields };
+  
+  return {
+    ...contact,
+    customField: mergedCf,
+    customFields: mergedCf,
+  };
+}
+
 function createApp() {
   const app = express();
 
@@ -68,10 +143,16 @@ function createApp() {
         payload.contact?.id ||
         payload.contact?.contactId ||
         null;
+      
+      // Extract message text - handle both string and object formats
+      // GHL sends message as {type: 11, body: "..."} for DM messages
+      const rawMessage = payload.message;
       const messageText =
-        payload.message ||
+        (typeof rawMessage === "object" && rawMessage?.body) ? rawMessage.body :
+        (typeof rawMessage === "string") ? rawMessage :
         payload.text ||
-        payload.body ||
+        payload.customData?.messageBody ||
+        (typeof payload.body === "string" ? payload.body : null) ||
         payload.body?.text ||
         payload.body?.message ||
         "";
@@ -89,11 +170,18 @@ function createApp() {
         return res.status(200).json({ ok: false, error: "missing contactId" });
       }
 
-      const contact = await getContact(contactId);
+      const contactRaw = await getContact(contactId);
+      
+      // Extract custom fields from webhook payload (more reliable than getContact array format)
+      const webhookCustomFields = extractCustomFieldsFromPayload(payload);
+      console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
+      
+      // Merge webhook custom fields into contact (webhook payload has correct format)
+      const contact = mergeCustomFieldsIntoContact(contactRaw, webhookCustomFields);
       
       // Log contact info
       console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
-      console.log("📋 Contact custom fields (non-empty):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
+      console.log("📋 Contact custom fields (merged):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
 
       const result = await handleInboundMessage({
         contact,
@@ -101,7 +189,7 @@ function createApp() {
         leadTemperature: null,
         latestMessageText: messageText,
         contactProfile: {},
-        consultExplained: contact?.customField?.consult_explained,
+        consultExplained: contact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
       });
 
       // Log AI result summary

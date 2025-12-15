@@ -31,6 +31,16 @@ async function handleInboundMessage({
   contactProfile,
   consultExplained,
 }) {
+  const startTime = Date.now();
+  
+  // Log the incoming context for debugging
+  console.log("🧠 [AI CONTEXT] Processing message:", {
+    messageText: latestMessageText,
+    contactId: contact?.id || contact?._id,
+    contactName: `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)",
+    consultExplained,
+  });
+
   // Evaluate hold lifecycle before proceeding (activity-based)
   try {
     const canonical = buildCanonicalState(contact);
@@ -43,6 +53,18 @@ async function handleInboundMessage({
     console.error("❌ [HOLD] evaluateHoldState error:", err.message || err);
   }
 
+  // Log canonical state BEFORE AI call
+  const preAiCanonical = buildCanonicalState(contact);
+  console.log("📊 [CANONICAL] State before AI call:", {
+    tattooSummary: preAiCanonical.tattooSummary,
+    tattooPlacement: preAiCanonical.tattooPlacement,
+    tattooSize: preAiCanonical.tattooSize,
+    timeline: preAiCanonical.timeline,
+    consultationType: preAiCanonical.consultationType,
+    depositPaid: preAiCanonical.depositPaid,
+  });
+
+  const aiStartTime = Date.now();
   const aiResult = await generateOpenerForContact({
     contact,
     aiPhase,
@@ -51,6 +73,7 @@ async function handleInboundMessage({
     contactProfile,
     consultExplained, // Pass through to AI for prompt enforcement
   });
+  console.log(`⏱️ [TIMING] AI call took ${Date.now() - aiStartTime}ms`);
 
   // Apply field updates to contact snapshot (in-memory only) before recomputing phase
   const contactWithUpdates = applyFieldUpdatesToContact(
@@ -65,6 +88,14 @@ async function handleInboundMessage({
   );
   const derivedPhase = derivePhaseFromFields(canonicalState);
   const intents = detectIntents(latestMessageText, canonicalState);
+
+  // Log detected intents with the message that triggered them
+  const activeIntents = Object.keys(intents).filter(k => intents[k] === true);
+  if (activeIntents.length > 0) {
+    console.log("🎯 [INTENTS] Detected intents:", activeIntents, "from message:", latestMessageText);
+  } else {
+    console.log("🎯 [INTENTS] No specific intents detected for:", latestMessageText);
+  }
 
   let response = null;
   let selectedHandler = null;
@@ -176,6 +207,9 @@ async function handleInboundMessage({
     routing_reason: routingReason,
     intent_flags: Object.keys(intents || {}).filter((k) => intents[k] === true),
   });
+
+  // Log total processing time
+  console.log(`⏱️ [TIMING] Total handleInboundMessage took ${Date.now() - startTime}ms`);
 
   return {
     aiResult: response,
