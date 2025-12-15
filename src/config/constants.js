@@ -83,7 +83,8 @@ const TATTOO_FIELDS = {
   TATTOO_SUMMARY: "tattoo_summary",
   TATTOO_PLACEMENT: "tattoo_placement",
   TATTOO_STYLE: "tattoo_style",
-  SIZE_OF_TATTOO: "size_of_tattoo",
+  // NOTE: CRM canonical key is tattoo_size (was size_of_tattoo historically)
+  SIZE_OF_TATTOO: "tattoo_size",
   TATTOO_SIZE_NOTES: "tattoo_size_notes",
   TATTOO_COLOR_PREFERENCE: "tattoo_color_preference",
   HOW_SOON_IS_CLIENT_DECIDING: "how_soon_is_client_deciding",

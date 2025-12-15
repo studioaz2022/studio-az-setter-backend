@@ -85,7 +85,7 @@ This document maps the current implementation status of the Studio AZ AI Setter 
   - Objections handling guidance
 - ✅ AI can extract field updates from conversations
   - `tattoo_placement`
-  - `size_of_tattoo`
+  - `tattoo_size`
   - `tattoo_style`
   - `tattoo_color_preference`
   - `how_soon_is_client_deciding`

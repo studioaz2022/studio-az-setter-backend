@@ -4,6 +4,8 @@
 const { getContact, updateSystemFields, sendConversationMessage } = require("../../ghlClient");
 const { generateOpenerForContact } = require("./aiClient");
 const { LEAD_TEMPERATURES, SYSTEM_FIELDS, AI_PHASES, CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
+const { buildCanonicalState, derivePhaseFromFields, computeLastSeenDiff } = require("./phaseContract");
+const { buildContactProfile } = require("./contextBuilder");
 const {
   getConsultAppointmentsForContact,
   updateAppointmentStatus,
@@ -70,23 +72,24 @@ function shouldStopFollowUps(contact) {
  * Generate a follow-up message for a lead
  */
 async function generateFollowUpMessage({ contact, leadTemperature, daysSinceLastMessage }) {
-  // Build contact profile for AI
-  const cf = contact.customField || contact.customFields || {};
-  const contactProfile = {
-    tattooPlacement: cf.tattoo_placement || null,
-    tattooSize: cf.size_of_tattoo || null,
-    tattooSummary: cf.tattoo_summary || null,
-    tattooStyle: cf.tattoo_style || null,
-    depositPaid: cf[SYSTEM_FIELDS.DEPOSIT_PAID] === "Yes",
-    depositLinkSent: cf[SYSTEM_FIELDS.DEPOSIT_LINK_SENT] === "Yes",
-  };
+  const canonicalState = buildCanonicalState(contact);
+  const derivedPhase = derivePhaseFromFields(canonicalState) || AI_PHASES.REENGAGEMENT;
+  const { changedFields } = computeLastSeenDiff(
+    canonicalState,
+    canonicalState.lastSeenSnapshot || {}
+  );
+  const contactProfile = buildContactProfile(canonicalState, {
+    changedFields,
+    derivedPhase,
+  });
 
-  const aiPhase = cf[SYSTEM_FIELDS.AI_PHASE] || AI_PHASES.REENGAGEMENT;
+  const aiPhase = derivedPhase || AI_PHASES.REENGAGEMENT;
 
   // Generate reengagement message
   const aiResult = await generateOpenerForContact({
     contact,
-    aiPhase: AI_PHASES.REENGAGEMENT,
+    canonicalState,
+    aiPhase: aiPhase || AI_PHASES.REENGAGEMENT,
     leadTemperature,
     contactProfile,
   });

@@ -29,7 +29,8 @@ const CUSTOM_FIELD_MAP = {
   tattoo_summary: "tattoo_summary",
   tattoo_placement: "tattoo_placement",
   tattoo_style: "tattoo_style",
-  size_of_tattoo: "size_of_tattoo",
+  // Canonical CRM key (was size_of_tattoo historically)
+  tattoo_size: "tattoo_size",
   tattoo_color_preference: "tattoo_color_preference",
   how_soon_is_client_deciding: "how_soon_is_client_deciding",
   first_tattoo: "first_tattoo",
@@ -403,7 +404,7 @@ async function updateSystemFields(contactId, fields = {}) {
  * Update tattoo-related custom fields on a contact using the CUSTOM_FIELD_MAP.
  * 
  * @param {string} contactId
- * @param {object} fields - keys like "tattoo_placement", "size_of_tattoo", etc.
+ * @param {object} fields - keys like "tattoo_placement", "tattoo_size", etc.
  */
 async function updateTattooFields(contactId, fields = {}) {
   if (!contactId) {

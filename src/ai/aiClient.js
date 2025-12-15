@@ -2,6 +2,7 @@
 require("dotenv").config();
 const OpenAI = require("openai");
 const { masterPromptA, phasePromptsRaw } = require("../prompts/promptsIndex");
+const { buildCanonicalState } = require("./phaseContract");
 
 const openai = new OpenAI({
   apiKey: process.env.LLM_API_KEY,
@@ -18,124 +19,27 @@ if (!PHASE_PROMPTS_V3) {
   console.warn("⚠️ PHASE_PROMPTS_V3 is empty. Check promptsIndex.js.");
 }
 
-// 🔹 Extract intake info from a GHL contact
-function extractIntakeFromContact(contact) {
-  const cfRaw = contact.customField || contact.customFields || {};
-
-  // If GHL returns an array for customField, normalize to an object
-  let cf = {};
-  if (Array.isArray(cfRaw)) {
-    for (const entry of cfRaw) {
-      if (!entry) continue;
-      const key = entry.key || entry.id || entry.customFieldId;
-      if (key) {
-        cf[key] = entry.value;
-      }
-    }
-  } else {
-    cf = cfRaw;
-  }
-
-  // 🔸 Try direct keys first
-  let languagePreference =
-    cf["language_preference"] ||
-    cf["Language Preference"] ||
-    cf["languagePreference"] ||
-    null;
-
-  // 🔸 Fallback: scan ALL custom fields for a value that looks like a language
-  if (!languagePreference) {
-    for (const [key, value] of Object.entries(cf)) {
-      if (typeof value !== "string") continue;
-      const v = value.trim().toLowerCase();
-      if (
-        v === "spanish" ||
-        v === "español" ||
-        v === "english" ||
-        v === "inglés" ||
-        v === "es" ||
-        v === "en"
-      ) {
-        languagePreference = value;
-        break;
-      }
-    }
-  }
-
-  const tattooTitle =
-    cf["tattoo_title"] ||
-    cf["Tattoo Title"] ||
-    null;
-
-  const tattooSummary =
-    cf["tattoo_summary"] ||
-    cf["Tattoo Summary"] ||
-    null;
-
-  const tattooPlacement =
-    cf["tattoo_placement"] ||
-    cf["Tattoo Placement"] ||
-    null;
-
-  const tattooStyle =
-    cf["tattoo_style"] ||
-    cf["Tattoo Style"] ||
-    null;
-
-  const sizeOfTattoo =
-    cf["size_of_tattoo"] ||
-    cf["Size Of Tattoo"] ||
-    null;
-
-  const tattooColorPreference =
-    cf["tattoo_color_preference"] ||
-    cf["Tattoo Color Preference"] ||
-    null;
-
-  const howSoonIsClientDeciding =
-    cf["how_soon_is_client_deciding"] ||
-    cf["How Soon Is Client Deciding?"] ||
-    null;
-
-  const firstTattoo =
-    cf["first_tattoo"] ||
-    cf["First Tattoo?"] ||
-    null;
-
-  const tattooConcerns =
-    cf["tattoo_concerns"] ||
-    cf["Tattoo Concerns"] ||
-    null;
-
-  const tattooPhotoDescription =
-    cf["tattoo_photo_description"] ||
-    cf["Tattoo Photo Description"] ||
-    null;
-
-  const inquiredTechnician =
-    cf["inquired_technician"] ||
-    cf["Artist Inquired (Deseado)"] ||
-    null;
-
+// 🔹 Extract intake info from canonical state (single source of truth)
+function extractIntakeFromCanonicalState(canonicalState = {}, contact = {}) {
   return {
-    languagePreference,
-    tattooTitle,
-    tattooSummary,
-    tattooPlacement,
-    tattooStyle,
-    sizeOfTattoo,
-    tattooColorPreference,
-    howSoonIsClientDeciding,
-    firstTattoo,
-    tattooConcerns,
-    tattooPhotoDescription,
-    inquiredTechnician,
+    languagePreference: canonicalState.languagePreference || contact.languagePreference || null,
+    tattooTitle: canonicalState.tattooTitle || null,
+    tattooSummary: canonicalState.tattooSummary || null,
+    tattooPlacement: canonicalState.tattooPlacement || null,
+    tattooStyle: canonicalState.tattooStyle || null,
+    sizeOfTattoo: canonicalState.tattooSize || null,
+    tattooColorPreference: canonicalState.tattooColorPreference || null,
+    howSoonIsClientDeciding: canonicalState.timeline || null,
+    firstTattoo: canonicalState.firstTattoo,
+    tattooConcerns: canonicalState.tattooConcerns || null,
+    tattooPhotoDescription: canonicalState.tattooPhotoDescription || null,
+    inquiredTechnician: canonicalState.inquiredTechnician || null,
   };
 }
 
 
 // 🔹 Decide which language to use (en/es)
-function detectLanguage(preferred) {
+function detectLanguage(preferred, _tags) {
   if (!preferred) return "en";
 
   const v = String(preferred).trim().toLowerCase();
@@ -172,7 +76,16 @@ function detectLanguage(preferred) {
 
 
 // 🔹 Build messages array for OpenAI (Phase: Opener / intake)
-function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature, consultExplained }) {
+function buildOpenerMessages({
+  contact,
+  canonicalState,
+  intake,
+  aiPhase,
+  leadTemperature,
+  consultExplained,
+  latestMessageText,
+  contactProfile,
+}) {
   // Normalize contact so we never blow up on missing fields
   const contactSafe = {
     id: contact.id || contact._id || null,
@@ -184,7 +97,10 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature, consul
   };
 
   // Decide language for this opener
-  const language = detectLanguage(intake.languagePreference, contactSafe.tags || []);
+  const language = detectLanguage(
+    intake.languagePreference || contactProfile?.languagePreference,
+    contactSafe.tags || []
+  );
 
   const userPayload = {
     phase: "opener",              // human-readable phase label
@@ -192,8 +108,11 @@ function buildOpenerMessages({ contact, intake, aiPhase, leadTemperature, consul
     lead_temperature: leadTemperature,
     language,
     contact: contactSafe,
+    canonical_state: canonicalState || {},
+    contact_profile: contactProfile || {},
+    changed_fields_this_turn: contactProfile?.changedFieldsThisTurn || {},
     intake: intake,
-    latest_message_text: intake?.latestMessageText || null,
+    latest_message_text: latestMessageText || intake?.latestMessageText || null,
     instructions: {
       goal:
         "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
@@ -225,6 +144,8 @@ ${PHASE_PROMPTS_V3}
 - If you're in "closing" or "qualification" phase, you've likely already explained the consult + deposit process.
 - **DO NOT repeat information** that's already in contactProfile or that you've explained in previous messages.
 - **DO NOT repeat greetings** - only greet in the very first message of a new conversation.
+- Only explicitly acknowledge tattoo details (placement, summary, size, timeline) when changedFieldsThisTurn includes them (you get this as contactProfile.changedFieldsThisTurn AND changed_fields_this_turn in the JSON payload). If changedFieldsThisTurn is empty, do NOT restate existing tattoo details unless the lead explicitly changes them.
+- Treat contactProfile and changedFieldsThisTurn as the authoritative memory; do not invent context from conversation history you cannot see.
 
 **CONSULT EXPLANATION RULE (CRITICAL):**
 - consultExplained = ${consultExplained ? 'true' : 'false'}
@@ -274,7 +195,7 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
   },
   "field_updates": {
     "tattoo_placement"?: string,
-    "size_of_tattoo"?: string,
+    "tattoo_size"?: string,
     "tattoo_style"?: string,
     "tattoo_color_preference"?: string,
     "how_soon_is_client_deciding"?: string,
@@ -301,7 +222,15 @@ You MUST respond with VALID JSON ONLY, no extra text, matching this schema exact
 
 
 // 🔹 Main: generate opener for a new intake (form webhook)
-async function generateOpenerForContact({ contact, aiPhase, leadTemperature, latestMessageText, contactProfile, consultExplained }) {
+async function generateOpenerForContact({
+  contact,
+  canonicalState,
+  aiPhase,
+  leadTemperature,
+  latestMessageText,
+  contactProfile,
+  consultExplained,
+}) {
   if (!MASTER_PROMPT_V3) {
     console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
   }
@@ -309,24 +238,24 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature, lat
     console.warn("⚠️ PHASE_PROMPTS_V3 is empty. Check promptsIndex.js.");
   }
 
-  const intake = extractIntakeFromContact(contact);
+  const canonicalResolved = canonicalState || buildCanonicalState(contact);
+  const intake = extractIntakeFromCanonicalState(canonicalResolved, contact);
   // Add latestMessageText to intake if provided
   if (latestMessageText) {
     intake.latestMessageText = latestMessageText;
   }
-  // Add contactProfile to intake if provided
-  if (contactProfile) {
-    intake.contactProfile = contactProfile;
-  }
-  // Add consultExplained flag to intake for prompt enforcement
-  intake.consultExplained = consultExplained || false;
+  const resolvedContactProfile = contactProfile || {};
+  const resolvedConsultExplained = consultExplained || false;
   
   const messages = buildOpenerMessages({
     contact,
+    canonicalState: canonicalResolved,
     intake,
     aiPhase,
     leadTemperature,
-    consultExplained: intake.consultExplained,
+    consultExplained: resolvedConsultExplained,
+    latestMessageText,
+    contactProfile: resolvedContactProfile,
   });
 
 
@@ -356,6 +285,7 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature, lat
   const meta = parsed.meta || {};
   if (!meta.aiPhase) meta.aiPhase = aiPhase || "intake";
   if (!meta.leadTemperature) meta.leadTemperature = leadTemperature || "warm";
+  if (meta.wantsAppointmentOffer === undefined) meta.wantsAppointmentOffer = false;
   parsed.meta = meta;
 
   // Ensure boolean flags always exist as booleans
@@ -369,6 +299,11 @@ async function generateOpenerForContact({ contact, aiPhase, leadTemperature, lat
     typeof meta.mentionDecoyOffered === "boolean"
       ? meta.mentionDecoyOffered
       : false;
+  meta.wantsAppointmentOffer =
+    typeof meta.wantsAppointmentOffer === "boolean"
+      ? meta.wantsAppointmentOffer
+      : false;
+  meta.consultMode = meta.consultMode || "online";
 
   parsed.meta = meta;
 

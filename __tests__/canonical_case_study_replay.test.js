@@ -79,7 +79,7 @@ jest.mock("../src/ai/aiClient", () => ({
     // Handle size uncertainty
     if (latestMessageText.includes("not sure") || latestMessageText.includes("second opinion") || 
         latestMessageText.includes("artist should help")) {
-      fieldUpdates.size_of_tattoo = "artist_guided";
+      fieldUpdates.tattoo_size = "artist_guided";
       response = "No worries — the artist will help you figure out the perfect size during your consult. When are you hoping to get it done?";
     }
     

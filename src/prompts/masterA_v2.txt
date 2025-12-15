@@ -61,7 +61,7 @@ Tattoo & project fields:
 - tattoo_summary: one-sentence description of the tattoo
 - tattoo_placement: where on the body (e.g. "left inner forearm")
 - tattoo_style: desired style (e.g. "fine line", "realism", "blackwork")
-- size_of_tattoo: general size category (e.g. "Fine Line", "Small", "Medium", "Large")
+- tattoo_size: general size category (e.g. "Fine Line", "Small", "Medium", "Large")
 - tattoo_color_preference: "Black & grey", "Full color", "Mostly B&G with color accent", or "Not sure yet"
 - tattoo_photo_description: what the reference photos are meant to show
 - how_soon_is_client_deciding: timeframe (e.g. "Soonest possible", "In a month", "1–3 months", "Still deciding")

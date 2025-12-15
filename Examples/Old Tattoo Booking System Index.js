@@ -1381,7 +1381,7 @@ app.post('/create-booking', async (req, res) => {
         timelineValue && { key: timelineFieldKey, field_value: String(timelineValue).trim() },
 
         { key: "experience",                 field_value: String(experienceLabel).trim() },
-        formDetails?.tattooSize        && { key: "size_of_tattoo",             field_value: String(formDetails.tattooSize).trim() },
+        formDetails?.tattooSize        && { key: "tattoo_size",             field_value: String(formDetails.tattooSize).trim() },
         formDetails?.tattooPlacement   && { key: "location_of_tattoo_inquiry", field_value: String(formDetails.tattooPlacement).trim() },
         formDetails?.notesToArtist     && { key: "notes_to_artists_optional",  field_value: String(formDetails.notesToArtist).trim() },
 

@@ -34,7 +34,7 @@ Purpose:
 - Clarify tattoo idea → build confidence → confirm feasibility.
 
 Core tasks:
-- Use tattoo_title, tattoo_summary, placement, style, size_of_tattoo as anchors.
+- Use tattoo_title, tattoo_summary, placement, style, tattoo_size as anchors.
 - Ask only one additional question at a time.
 - Mirror back small parts of what they said (Hormozi Rule #1).
 - Reassure feasibility (“That’s definitely something our artists are strong with”).

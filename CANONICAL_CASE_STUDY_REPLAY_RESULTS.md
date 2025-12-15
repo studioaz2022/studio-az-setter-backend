@@ -41,14 +41,14 @@ All 7 acceptance requirements have been validated and **PASSED**:
 **INTENTS:** [artist_guided_size_intent]  
 **HANDLER:** ai  
 **OUTBOUND:** "No worries — the artist will help you figure out the perfect size during your consult. When are you hoping to get it done?"  
-**FIELD UPDATES:** `{ size_of_tattoo: 'artist_guided' }`
+**FIELD UPDATES:** `{ tattoo_size: 'artist_guided' }`
 
 ### Step 4: Artist Help Confirmation
 **INBOUND:** "The artist should help me figure it out!"  
 **INTENTS:** [artist_guided_size_intent]  
 **HANDLER:** ai  
 **OUTBOUND:** "No worries — the artist will help you figure out the perfect size during your consult. When are you hoping to get it done?"  
-**FIELD UPDATES:** `{ size_of_tattoo: 'artist_guided' }`
+**FIELD UPDATES:** `{ tattoo_size: 'artist_guided' }`
 
 ### Step 5: Timeline
 **INBOUND:** "December!"  

@@ -1,4 +1,5 @@
 const { AI_PHASES, SYSTEM_FIELDS, TATTOO_FIELDS } = require("../config/constants");
+const { normalizeCustomFields, normalizeDisplayName } = require("./contextBuilder");
 
 function boolVal(raw) {
   if (raw === true || raw === false) return raw;
@@ -35,86 +36,6 @@ function detectArtistGuidedSize(messageText) {
   return patterns.some((phrase) => v.includes(phrase));
 }
 
-/**
- * Normalize display name to snake_case key.
- * "Tattoo Placement" -> "tattoo_placement"
- * "How Soon Is Client Deciding?" -> "how_soon_is_client_deciding"
- */
-function normalizeDisplayName(displayName) {
-  if (!displayName || typeof displayName !== "string") return null;
-  return displayName
-    .toLowerCase()
-    .replace(/[?!.,]/g, "")
-    .replace(/\s+/g, "_")
-    .trim();
-}
-
-/**
- * Normalize custom fields from various GHL formats to a key-value object.
- * Handles:
- * - Already normalized object: { tattoo_placement: "forearm" }
- * - Array format: [{ id: "xxx", value: "forearm" }]
- * - Array-like object: { "0": { id: "xxx", value: "forearm" } }
- * - Display name keys: { "Tattoo Placement": "forearm" }
- */
-function normalizeCustomFields(cfRaw) {
-  if (!cfRaw) return {};
-  
-  let normalized = {};
-  
-  // Check if it's an array
-  if (Array.isArray(cfRaw)) {
-    for (const entry of cfRaw) {
-      if (!entry) continue;
-      const key = entry.key || entry.fieldKey || entry.customFieldKey;
-      if (key && entry.value !== undefined) {
-        normalized[key] = entry.value;
-      }
-    }
-    return normalized;
-  }
-  
-  // Check if it's an array-like object with numeric keys
-  const keys = Object.keys(cfRaw);
-  const isArrayLike = keys.length > 0 && keys.every(k => /^\d+$/.test(k));
-  
-  if (isArrayLike) {
-    for (const key of keys) {
-      const entry = cfRaw[key];
-      if (!entry || typeof entry !== "object") continue;
-      // Try to get the field key from the entry
-      const fieldKey = entry.key || entry.fieldKey || entry.customFieldKey;
-      if (fieldKey && entry.value !== undefined) {
-        normalized[fieldKey] = entry.value;
-      }
-      // If no key but has id and value, we can't map it (GHL ID != our key)
-      // These will be handled by merging with webhook payload data
-    }
-    return normalized;
-  }
-  
-  // It's a regular object - normalize display name keys to snake_case
-  for (const [key, value] of Object.entries(cfRaw)) {
-    if (value === undefined || value === null || value === "") continue;
-    
-    // Skip nested objects (like location, contact, etc.)
-    if (typeof value === "object" && !Array.isArray(value)) continue;
-    
-    // Check if key looks like a display name (contains spaces or is title case)
-    if (key.includes(" ") || /^[A-Z]/.test(key)) {
-      const snakeKey = normalizeDisplayName(key);
-      if (snakeKey) {
-        normalized[snakeKey] = value;
-      }
-    } else {
-      // Already snake_case or similar
-      normalized[key] = value;
-    }
-  }
-  
-  return normalized;
-}
-
 function buildCanonicalState(contact = {}) {
   const cfRaw = contact.customField || contact.customFields || {};
   
@@ -127,11 +48,20 @@ function buildCanonicalState(contact = {}) {
   const holdAppointmentId = cf[SYSTEM_FIELDS.HOLD_APPOINTMENT_ID] || null;
 
   return {
+    languagePreference: cf[TATTOO_FIELDS.LANGUAGE_PREFERENCE] || cf[SYSTEM_FIELDS.LANGUAGE_PREFERENCE] || null,
+    tattooTitle: cf[TATTOO_FIELDS.TATTOO_TITLE] || null,
     tattooSummary: cf[TATTOO_FIELDS.TATTOO_SUMMARY] || null,
     tattooPlacement: cf[TATTOO_FIELDS.TATTOO_PLACEMENT] || null,
-    tattooSize: cf[TATTOO_FIELDS.SIZE_OF_TATTOO] || null,
+    // Canonical key is tattoo_size; keep fallback read for legacy size_of_tattoo
+    tattooSize: cf[TATTOO_FIELDS.SIZE_OF_TATTOO] || cf.size_of_tattoo || null,
+    tattooSizeNotes: cf[TATTOO_FIELDS.TATTOO_SIZE_NOTES] || null,
     tattooStyle: cf[TATTOO_FIELDS.TATTOO_STYLE] || null,
+    tattooColorPreference: cf[TATTOO_FIELDS.TATTOO_COLOR_PREFERENCE] || null,
     timeline: cf[TATTOO_FIELDS.HOW_SOON_IS_CLIENT_DECIDING] || null,
+    firstTattoo: boolVal(cf[TATTOO_FIELDS.FIRST_TATTOO]),
+    tattooConcerns: cf[TATTOO_FIELDS.TATTOO_CONCERNS] || null,
+    tattooPhotoDescription: cf[TATTOO_FIELDS.TATTOO_PHOTO_DESCRIPTION] || null,
+    inquiredTechnician: cf[TATTOO_FIELDS.INQUIRED_TECHNICIAN] || null,
     consultationType: cf[SYSTEM_FIELDS.CONSULTATION_TYPE] || null,
     consultationTypeLocked: boolVal(cf[SYSTEM_FIELDS.CONSULTATION_TYPE_LOCKED]),
     consultExplained: boolVal(cf[SYSTEM_FIELDS.CONSULT_EXPLAINED]),
@@ -257,7 +187,14 @@ function derivePhaseFromFields(state) {
 }
 
 function computeLastSeenDiff(state, previousSnapshot = {}) {
-  const tracked = ["tattooSummary", "tattooPlacement", "tattooStyle", "timeline", "consultationType"];
+  const tracked = [
+    "tattooSummary",
+    "tattooPlacement",
+    "tattooSize",
+    "tattooStyle",
+    "timeline",
+    "consultationType",
+  ];
   const updatedSnapshot = { ...previousSnapshot };
   const changedFields = {};
 

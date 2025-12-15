@@ -126,7 +126,7 @@ All are GHL custom fields (single line text). Values are stored as text but trea
 **Tattoo intake**
 - `tattoo_placement` (string)
 - `tattoo_summary` (string)
-- `size_of_tattoo` (string) or equivalent; pick one canonical key and use it consistently
+- `tattoo_size` (string) - canonical key for tattoo size
 - `tattoo_style` (optional)
 - `tattoo_color_preference` (optional)
 - `how_soon_is_client_deciding` (string)

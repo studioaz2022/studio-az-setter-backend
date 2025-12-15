@@ -90,7 +90,7 @@ This simplifies setup and ensures consistency across all fields.
 | `tattoo_summary` | Single Line Text | Text | Full tattoo description/summary |
 | `tattoo_placement` | Single Line Text | Text (e.g., "right forearm", "left shoulder") | Where on body |
 | `tattoo_style` | Single Line Text | Text (e.g., "realism", "black and gray", "traditional") | Tattoo style |
-| `size_of_tattoo` | Single Line Text | Text (e.g., "7 inches", "half sleeve", "small") | Size description |
+| `tattoo_size` | Single Line Text | Text (e.g., "7 inches", "half sleeve", "small") | Size description |
 | `tattoo_color_preference` | Single Line Text | Text (e.g., "black and gray", "color", "minimal color") | Color preference |
 | `how_soon_is_client_deciding` | Single Line Text | Text (e.g., "January", "second week of January", "next month") | Timeline for getting tattoo |
 | `first_tattoo` | Single Line Text | `true`/`false` or `Yes`/`No` (stored as text) | Whether this is their first tattoo |
