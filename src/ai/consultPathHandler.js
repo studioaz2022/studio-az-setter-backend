@@ -123,10 +123,18 @@ async function handlePathChoice({
 
     // 🔁 Sync pipeline: message-based consult → CONSULT_MESSAGE stage
     try {
-      await syncOpportunityStageFromContact(contactId, { aiPhase: "consult_support" });
+      await syncOpportunityStageFromContact(contactId, {
+        aiPhase: "consult_support",
+        fieldOverrides: {
+          consultation_type: "message",
+        },
+      });
       console.log("🏗️ Pipeline stage synced after consult mode = message");
     } catch (oppErr) {
-        console.error("❌ Error syncing opportunity stage after consult mode = message:", oppErr.message || oppErr);
+      console.error("❌ Error syncing opportunity stage after consult mode = message:", oppErr.message || oppErr);
+      if (oppErr.response?.data) {
+        console.error("❌ Pipeline sync response (message consult):", oppErr.response.status, oppErr.response.data);
+      }
     }
 
     return responseBody ? { choice: "message", responseBody } : { choice: "message" };
@@ -158,10 +166,21 @@ async function handlePathChoice({
 
     // 🔁 Sync pipeline: appointment-based consult → CONSULT_APPOINTMENT stage
     try {
-      await syncOpportunityStageFromContact(contactId, { aiPhase: "consult_support" });
+      await syncOpportunityStageFromContact(contactId, {
+        aiPhase: "consult_support",
+        fieldOverrides: {
+          consultation_type: "appointment",
+          translator_needed: true,
+          translator_explained: true,
+          language_barrier_explained: true,
+        },
+      });
       console.log("🏗️ Pipeline stage synced after consult mode = appointment/translator");
     } catch (oppErr) {
       console.error("❌ Error syncing opportunity stage after consult mode = appointment:", oppErr.message || oppErr);
+      if (oppErr.response?.data) {
+        console.error("❌ Pipeline sync response (appointment consult):", oppErr.response.status, oppErr.response.data);
+      }
     }
 
     // Do NOT generate times here; wait until deposit flow is ready

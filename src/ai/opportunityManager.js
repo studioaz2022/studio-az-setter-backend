@@ -168,6 +168,9 @@ async function transitionToStage(contactId, stageKey, options = {}) {
       `❌ [PIPELINE] upsertOpportunity failed for contact ${contactId}:`,
       err.message || err
     );
+    if (err.response?.data) {
+      console.error("❌ [PIPELINE] GHL response:", err.response.status, err.response.data);
+    }
 
     if (!opportunityId) {
       throw err;
@@ -217,11 +220,20 @@ function determineStageFromContext({
   return OPPORTUNITY_STAGES.INTAKE;
 }
 
-async function syncOpportunityStageFromContact(contactId, { aiPhase }) {
+/**
+ * Sync pipeline stage based on current contact fields.
+ * Optionally provide fieldOverrides to reflect just-updated fields that may not
+ * yet be visible from getContact (avoids stale reads / eventual consistency).
+ */
+async function syncOpportunityStageFromContact(contactId, { aiPhase, fieldOverrides = {} }) {
   const contact = await getContact(contactId);
   if (!contact) return null;
 
-  const cf = normalizeCustomFields(contact.customField || contact.customFields);
+  // Merge overrides (lower precedence to live contact so we don't clobber real data)
+  const cf = {
+    ...normalizeCustomFields(contact.customField || contact.customFields),
+    ...fieldOverrides,
+  };
   const depositLinkSent = boolField(cf.deposit_link_sent);
   const depositPaid = boolField(cf.deposit_paid);
   const consultType = cf.consultation_type || null;
