@@ -64,6 +64,7 @@ const SYSTEM_FIELDS = {
   PENDING_SLOT_CALENDAR: "pending_slot_calendar", // Calendar ID for pending slot
   PENDING_SLOT_MODE: "pending_slot_mode", // Consult mode (online/in-person)
   CONSULT_EXPLAINED: "consult_explained", // Whether consult process has been explained
+  LAST_SENT_SLOTS: "last_sent_slots", // Serialized JSON of last offered slots
   // Live hold tracking fields
   HOLD_APPOINTMENT_ID: "hold_appointment_id", // ID of the tentative (NEW) consult appointment
   HOLD_LAST_ACTIVITY_AT: "hold_last_activity_at", // ISO timestamp of last inbound message

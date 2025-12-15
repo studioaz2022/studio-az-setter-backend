@@ -385,6 +385,28 @@ function parseTimeSelection(messageText, availableSlots) {
     }
   }
 
+  // === Unique weekday match without explicit time (e.g., "Tuesday works") ===
+  if (!hasExplicitTime) {
+    const dayNameMatches = [];
+    const daysFull = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const daysAbbr = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];
+
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slotDate = new Date(availableSlots[i].startTime);
+      const dayIndex = slotDate.getDay();
+      const dayNameFull = daysFull[dayIndex];
+      const dayNameAbbr = daysAbbr[dayIndex];
+      if (text.includes(dayNameFull) || new RegExp(`\\b${dayNameAbbr}\\b`).test(text)) {
+        dayNameMatches.push(i);
+      }
+    }
+
+    if (dayNameMatches.length === 1) {
+      console.log(`✅ Unique weekday match without time → slot ${dayNameMatches[0] + 1}`);
+      return dayNameMatches[0];
+    }
+  }
+
   // === Check for ordinal references ("first", "second", "third") ===
   const ordinals = ["first", "second", "third", "1st", "2nd", "3rd"];
   for (let i = 0; i < Math.min(ordinals.length, availableSlots.length); i++) {
@@ -415,6 +437,22 @@ function parseTimeSelection(messageText, availableSlots) {
     }
   }
 
+  // === Unique day-of-month match without explicit time (e.g., "the 16th works") ===
+  if (!hasExplicitTime && dayMatches.length === 1) {
+    const requestedDay = parseInt(dayMatches[0], 10);
+    const matching = [];
+    for (let i = 0; i < availableSlots.length; i++) {
+      const slotDate = new Date(availableSlots[i].startTime);
+      if (slotDate.getDate() === requestedDay) {
+        matching.push(i);
+      }
+    }
+    if (matching.length === 1) {
+      console.log(`✅ Unique day-of-month match without time (${requestedDay}) → slot ${matching[0] + 1}`);
+      return matching[0];
+    }
+  }
+
   // === Check for month + day mentions (e.g., "Dec 3", "December 3rd") ===
   const monthsFull = ["january", "february", "march", "april", "may", "june", 
                       "july", "august", "september", "october", "november", "december"];
@@ -437,6 +475,13 @@ function parseTimeSelection(messageText, availableSlots) {
     for (const pattern of dayPatterns) {
       if (new RegExp(pattern, "i").test(text)) {
         if (!hasExplicitTime) {
+          const sameDateSlots = availableSlots
+            .map((s, idx) => ({ idx, date: new Date(s.startTime) }))
+            .filter(({ date }) => date.getMonth() === monthIndex && date.getDate() === day);
+          if (sameDateSlots.length === 1) {
+            console.log(`✅ Unique month+day match without time (${monthAbbr} ${day}) → slot ${sameDateSlots[0].idx + 1}`);
+            return sameDateSlots[0].idx;
+          }
           console.log(`📅 Month+day mentioned without time (${monthAbbr} ${day}) - not selecting`);
           return null;
         }

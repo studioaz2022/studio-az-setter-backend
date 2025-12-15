@@ -68,7 +68,7 @@ async function buildDeterministicResponse({
         return `${label} ${display}`;
       });
 
-      const message = `I pulled a few openings for your consult:\n${lines.join("\n")}\n\nWhich works best?`;
+      const message = `I pulled a few openings for a consult with an artist:\n${lines.join("\n")}\n\nWhich works best?`;
 
       await persistLastSentSlots(contactId, slotsToShow);
 
@@ -189,7 +189,7 @@ async function buildDeterministicResponse({
           : chosenSlot.startTime);
       const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
 
-      const message = `Got you — I'm holding ${display} for you.\nHere’s the $${amount} refundable deposit to lock it: ${deposit?.url}\nI’ll keep it on hold for ~20 minutes.`;
+      const message = `Got you for ${display}.\nHere’s the $${amount} refundable deposit to lock it: ${deposit?.url}\nI’ll keep it on hold for ~20 minutes.`;
 
       return {
         language: "en",

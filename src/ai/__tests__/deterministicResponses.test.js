@@ -47,6 +47,7 @@ describe("buildDeterministicResponse", () => {
     });
 
     expect(res.bubbles[0]).toContain("I pulled a few openings");
+    expect(res.bubbles[0]).toContain("consult with an artist");
     expect(res.bubbles[0]).toContain("1)");
     expect(res.bubbles[0]).toContain("2)");
     expect(updateSystemFields).toHaveBeenCalledWith("contact123", expect.objectContaining({
@@ -109,7 +110,7 @@ describe("buildDeterministicResponse", () => {
         deposit_link_url: "https://pay.test/link",
       })
     );
-    expect(res.bubbles[0]).toMatch(/holding/i);
+    expect(res.bubbles[0]).toMatch(/Got you for/i);
     expect(res.bubbles[0]).toMatch(/deposit/i);
   });
 
