@@ -483,6 +483,73 @@ function getCalendarIdForArtist(artistName, consultMode = "online") {
   return CALENDARS.JOAN_ONLINE; // Default fallback
 }
 
+/**
+ * Refresh artist workloads by aggregating scores across consult and tattoo stages
+ * Scores: CONSULT_MESSAGE = 1, CONSULT_APPOINTMENT = 2, TATTOO_BOOKED = 3
+ * @param {Object} options
+ * @param {boolean} options.force - Force refresh even if cached
+ * @returns {Promise<Object>} Scores by artist name
+ */
+async function refreshArtistWorkloads({ force = false } = {}) {
+  const { PIPELINE_STAGE_CONFIG } = require("../config/pipelineConfig");
+  const { OPPORTUNITY_STAGES, TATTOO_FIELDS } = require("../config/constants");
+  
+  const scores = buildInitialWorkloadMap();
+  
+  // Stage scores mapping
+  const stageScores = {
+    [OPPORTUNITY_STAGES.CONSULT_MESSAGE]: 1,
+    [OPPORTUNITY_STAGES.CONSULT_APPOINTMENT]: 2,
+    [OPPORTUNITY_STAGES.TATTOO_BOOKED]: 3,
+  };
+
+  // Search opportunities for each tracked stage
+  for (const [stageKey, score] of Object.entries(stageScores)) {
+    const stageConfig = PIPELINE_STAGE_CONFIG[stageKey];
+    if (!stageConfig) continue;
+
+    try {
+      const opportunities = await searchOpportunities({
+        query: { pipelineStageId: stageConfig.id },
+      });
+
+      for (const opp of opportunities) {
+        const assignedUserId = opp.assignedUserId || opp.assigned_user_id;
+        let artistName = null;
+
+        if (assignedUserId) {
+          artistName = mapAssignedUserIdToArtist(assignedUserId);
+        } else if (opp.contactId) {
+          // Fallback: check contact's inquired_technician field
+          try {
+            const contact = await getContact(opp.contactId);
+            if (contact) {
+              const cf = contact.customField || contact.customFields || {};
+              const inquiredTechnician = cf[TATTOO_FIELDS.INQUIRED_TECHNICIAN];
+              if (inquiredTechnician) {
+                artistName = normalizeArtistName(inquiredTechnician);
+              }
+            }
+          } catch (err) {
+            console.warn(`⚠️ Failed to fetch contact ${opp.contactId} for workload calculation:`, err.message);
+          }
+        }
+
+        if (artistName) {
+          scores[artistName] = (scores[artistName] || 0) + score;
+        }
+      }
+    } catch (err) {
+      console.error(`❌ Error fetching opportunities for stage ${stageKey}:`, err.message || err);
+    }
+  }
+
+  // Update in-memory cache
+  artistWorkloads = { ...scores };
+  
+  return scores;
+}
+
 module.exports = {
   determineArtist,
   assignArtistToContact,
@@ -496,4 +563,5 @@ module.exports = {
   getArtistWithLowestWorkload,
   detectArtistMention,
   getArtistPreferenceFromContact,
+  refreshArtistWorkloads,
 };

@@ -1,0 +1,104 @@
+Engineering Addendum (Appendix to your Frozen FINAL IMPLEMENTATION SPEC)
+This addendum is authoritative. Codex Max must implement your Frozen Spec + this addendum. If any prior code behavior conflicts, it must be refactored to match.
+A. Phase advancement contract (explicit, deterministic)
+Define a single function (or equivalent logic) that derives currentPhase from canonical fields every turn, after applying any new field updates:
+Canonical fields used for phase derivation
+	•	tattoo_summary (or equivalent single-line summary)
+	•	tattoo_placement
+	•	tattoo_size (may be numeric/range OR artist_guided)
+	•	tattoo_style (optional for phase advancement)
+	•	desired_timeline (e.g., “December”, date range)
+	•	consultation_type (video, messages, in_person)
+	•	consultation_type_locked (bool)
+	•	consult_explained (bool)
+	•	language_barrier_explained (bool)
+	•	translator_explained (bool)
+	•	deposit_link_sent (bool)
+	•	deposit_paid (bool)
+	•	hold_appointment_id (string or null)
+	•	appointment_booked (bool or presence of booked appointment id)
+Phase rules (no ambiguity)
+	•	INTAKE if missing either tattoo_summary OR tattoo_placement.
+	•	QUALIFICATION if tattoo_summary + tattoo_placement present AND (tattoo_size present OR equals artist_guided) AND timeline not yet captured.
+	•	CONSULT_PATH once timeline is captured AND consultation type not chosen/locked.
+	•	SCHEDULING once consultation type is chosen (or strongly implied) AND user is asking for times / availability OR the system is ready to offer slots.
+	•	DEPOSIT_PENDING once a hold exists (hold_appointment_id) OR deposit link has been sent, AND deposit_paid is false.
+	•	QUALIFIED once deposit_paid is true.
+	•	BOOKED once consult appointment is successfully created in GHL and confirmed (and deposit paid if required).
+	•	POST_BOOKING_SUPPORT once booked, for reschedule/cancel/questions.
+Important: Phase must not “stick” due to stale state. It must be recomputed from fields each turn.
+
+B. “Artist-guided size” canonicalization (critical to prevent intake loops)
+When the lead expresses size uncertainty or requests guidance, normalize it into a canonical stored value and treat it as “size satisfied” for phase advancement.
+Detection phrases (examples)
+	•	“not sure”, “idk”, “I don’t know”
+	•	“second opinion”
+	•	“help me decide”, “help me figure it out”
+	•	“whatever you think”, “you tell me”
+Canonical field write
+	•	Set tattoo_size = "artist_guided" (exact string)
+	•	Optionally set tattoo_size_notes = <original user text> if you want auditability (optional)
+Behavioral rule
+	•	Once tattoo_size = "artist_guided", the bot must stop asking for size and instead move toward consult/timeline.
+
+C. AI hard-skip rules (deterministic system output must override AI)
+When any of the following are true, skip AI generation entirely and respond with deterministic system messages:
+	1	User asks for times / availability
+	◦	e.g., “what times do you have”, “when are you available”, “this week?”, “tomorrow?”
+	◦	Output must be: slot options (2–4) + “Which works for you?”
+	◦	If calendars fail: ask for structured availability window (days + time blocks), not generic questions.
+	2	Slot selection detected
+	◦	e.g., “#2”, “Tuesday at 6”, “the first one”
+	◦	Output must be: confirm selection + create hold appointment + send deposit link (if required) + explain hold timer once.
+	3	Deposit paid event / post-deposit conversation
+	◦	After deposit_paid = true, system must never send deposit messaging again.
+	◦	Output must focus on: confirm appointment / next steps / reschedule support.
+	4	Reschedule / cancel intent
+	◦	Deterministic confirmation steps and next options DONT route to AI.
+Reason: These are the exact moments where “human setter” perfection requires zero drift.
+
+D. Deposit trigger moment (single source of truth)
+Pick one consistent deposit trigger and enforce it everywhere:
+Chosen rule (recommended)
+	•	Deposit is requested only after the lead selects a specific slot (slot selection).
+	•	When a slot is selected:
+	1	Create hold appointment (status NEW) immediately to reserve the slot
+	2	Send deposit link
+	3	Explain: “I’ll hold it for ~20 minutes; I’ll warn you at 10.”
+Do NOT ask for deposit before any time is chosen (unless you explicitly decide to change this later). Consistency > experimentation.
+
+E. Hold lifecycle rules (activity-based timer)
+Canonical fields
+	•	hold_appointment_id
+	•	hold_created_at (timestamp)
+	•	hold_last_activity_at (timestamp)
+	•	hold_warning_sent (bool)
+Updates
+	•	On every inbound lead message while hold_appointment_id exists and deposit_paid = false:
+	◦	update hold_last_activity_at = now
+Warning + release
+	•	Warning at 10 minutes since hold_last_activity_at (not created_at)
+	•	Release at 20 minutes since hold_last_activity_at
+Release behavior must:
+	1	Cancel/delete/update the GHL appointment to free the slot (not just clear custom fields)
+	2	Clear all hold-related fields
+	3	Send one concise release message (dedupe-safe)
+
+F. Field-change acknowledgement rule (prevents “bouquet on your back shoulder” spam)
+Only acknowledge a tattoo detail if it changed this turn.
+Implementation requirement:
+	•	Store a “last_seen” snapshot per contact for:
+	◦	tattoo_summary, tattoo_placement, tattoo_style, desired_timeline, consultation_type
+	•	On each turn, compute diffs:
+	◦	If a field didn’t change, it must not be re-acknowledged verbatim.
+	•	Acknowledgement should prefer the delta (“Got it — realism black & grey, perfect”) not full restatement.
+
+G. Memory minimization (avoid brittle CRM message history)
+Avoid storing full message history in CRM unless necessary.
+Allowed
+	•	last_sent_slots (structured JSON)
+	•	boolean flags: consult_explained, translator_explained, language_barrier_explained, deposit_link_sent, deposit_paid
+	•	hold_* fields
+Discouraged
+	•	last_sent_messages as raw strings (high churn, race conditions)
+	•	If dedupe requires memory, keep it minimal (last 2–3 normalized messages) and ensure it cannot block critical system messages (slot offer, deposit link, booking confirmation).

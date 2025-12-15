@@ -45,6 +45,7 @@ async function handlePathChoice({
   triggerAppointmentOffer, // unused now to avoid premature time generation
   existingConsultType = null,
   consultationTypeLocked = false,
+  applyOnly = false, // when true, apply state updates without sending consult-only messages
 }) {
   const choice = detectPathChoice(messageText);
   if (!choice) return null;
@@ -60,10 +61,17 @@ async function handlePathChoice({
   }
 
   if (choice === "translator_question") {
+    if (applyOnly) {
+      console.log("📝 [CONSULTATION_TYPE] translator question detected (applyOnly=true); skipping outbound");
+      return { choice: "translator_question" };
+    }
+
+    const responseBody =
+      "Our artist's native language is Spanish, so we add a translator to keep all the design details clear. We can do that on a quick video call or keep things in messages—both work great. Which do you prefer?";
+
     await sendConversationMessage({
       contactId,
-      body:
-        "Our artist's native language is Spanish, so we add a translator to keep all the design details clear. We can do that on a quick video call or keep things in messages—both work great. Which do you prefer?",
+      body: responseBody,
       channelContext,
     });
 
@@ -78,7 +86,7 @@ async function handlePathChoice({
       );
     }
 
-    return { choice: "translator_question" };
+    return { choice: "translator_question", responseBody };
   }
 
   if (choice === "message") {
@@ -89,33 +97,39 @@ async function handlePathChoice({
       translator_needed: false,
     });
 
-    try {
-      await createTaskForContact(contactId, {
-        title: "Message consultation (keep in thread)",
-        description:
-          "Lead chose to continue consult in messages. Keep thread open; review photos/notes shared here.",
-        status: "open",
-      });
-    } catch (err) {
-      console.error("❌ Failed to create message consult task:", err.message || err);
-    }
+    let responseBody = null;
+    if (!applyOnly) {
+      responseBody =
+        "Sounds good — we'll keep your consult right here in messages so you can share photos and notes at your own pace. I'll make sure the artist sees this thread.";
+      try {
+        await createTaskForContact(contactId, {
+          title: "Message consultation (keep in thread)",
+          description:
+            "Lead chose to continue consult in messages. Keep thread open; review photos/notes shared here.",
+          status: "open",
+        });
+      } catch (err) {
+        console.error("❌ Failed to create message consult task:", err.message || err);
+      }
 
-    await sendConversationMessage({
-      contactId,
-      body:
-        "Sounds good — we'll keep your consult right here in messages so you can share photos and notes at your own pace. I'll make sure the artist sees this thread.",
-      channelContext,
-    });
+      await sendConversationMessage({
+        contactId,
+        body: responseBody,
+        channelContext,
+      });
+    } else {
+      console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for message-path choice");
+    }
 
     // 🔁 Sync pipeline: message-based consult → CONSULT_MESSAGE stage
     try {
       await syncOpportunityStageFromContact(contactId, { aiPhase: "consult_support" });
       console.log("🏗️ Pipeline stage synced after consult mode = message");
     } catch (oppErr) {
-      console.error("❌ Error syncing opportunity stage after consult mode = message:", oppErr.message || oppErr);
+        console.error("❌ Error syncing opportunity stage after consult mode = message:", oppErr.message || oppErr);
     }
 
-    return { choice: "message" };
+    return responseBody ? { choice: "message", responseBody } : { choice: "message" };
   }
 
   if (choice === "translator") {
@@ -128,12 +142,19 @@ async function handlePathChoice({
       translator_explained: true,
     });
 
-    await sendConversationMessage({
-      contactId,
-      body:
-        "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?",
-      channelContext,
-    });
+    let responseBody = null;
+    if (!applyOnly) {
+      responseBody =
+        "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?";
+
+      await sendConversationMessage({
+        contactId,
+        body: responseBody,
+        channelContext,
+      });
+    } else {
+      console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for translator-path choice");
+    }
 
     // 🔁 Sync pipeline: appointment-based consult → CONSULT_APPOINTMENT stage
     try {
@@ -145,7 +166,7 @@ async function handlePathChoice({
 
     // Do NOT generate times here; wait until deposit flow is ready
 
-    return { choice: "translator" };
+    return responseBody ? { choice: "translator", responseBody } : { choice: "translator" };
   }
 
   return null;

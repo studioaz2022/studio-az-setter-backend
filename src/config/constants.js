@@ -12,6 +12,12 @@ const AI_PHASES = {
   HANDOFF: "handoff",
   REENGAGEMENT: "reengagement",
   CONSULT_SUPPORT: "consult_support",
+  CONSULT_PATH: "consult_path",
+  SCHEDULING: "scheduling",
+  DEPOSIT_PENDING: "deposit_pending",
+  QUALIFIED: "qualified",
+  BOOKED: "booked",
+  POST_BOOKING_SUPPORT: "post_booking_support",
 };
 
 // Lead Temperatures
@@ -34,10 +40,13 @@ const SYSTEM_FIELDS = {
   OPPORTUNITY_ID: "opportunity_id",
   OPPORTUNITY_STAGE: "opportunity_stage",
   CONSULTATION_TYPE: "consultation_type",
+  CONSULTATION_TYPE_LOCKED: "consultation_type_locked",
   ASSIGNED_ARTIST: "assigned_artist",
   ARTIST_ASSIGNED_AT: "artist_assigned_at",
   LEAD_SPANISH_COMFORTABLE: "lead_spanish_comfortable",
   TRANSLATOR_NEEDED: "translator_needed",
+  TRANSLATOR_CONFIRMED: "translator_confirmed",
+  TRANSLATOR_EXPLAINED: "translator_explained",
   TRANSLATOR_APPOINTMENT_ID: "translator_appointment_id",
   RETURNING_CLIENT: "returning_client",
   CLIENT_LIFETIME_VALUE: "client_lifetime_value",
@@ -62,6 +71,7 @@ const SYSTEM_FIELDS = {
   LAST_RELEASED_SLOT_DISPLAY: "last_released_slot_display", // Last slot that was released
   LAST_RELEASED_SLOT_START: "last_released_slot_start", // Timestamp of released slot
   LAST_RELEASED_SLOT_END: "last_released_slot_end", // End timestamp of released slot
+  LAST_SEEN_FIELDS: "last_seen_fields_snapshot",
 };
 
 // Tattoo Custom Field Keys
@@ -74,6 +84,7 @@ const TATTOO_FIELDS = {
   TATTOO_PLACEMENT: "tattoo_placement",
   TATTOO_STYLE: "tattoo_style",
   SIZE_OF_TATTOO: "size_of_tattoo",
+  TATTOO_SIZE_NOTES: "tattoo_size_notes",
   TATTOO_COLOR_PREFERENCE: "tattoo_color_preference",
   HOW_SOON_IS_CLIENT_DECIDING: "how_soon_is_client_deciding",
   FIRST_TATTOO: "first_tattoo",

@@ -1,7 +1,7 @@
 // bookingController.js
 // Handles appointment booking orchestration
 
-const { getContact, updateSystemFields } = require("../../ghlClient");
+const { getContact, updateContact, updateSystemFields } = require("../../ghlClient");
 const {
   determineArtist,
   getCalendarIdForArtist,
@@ -17,6 +17,7 @@ const {
   listAppointmentsForContact,
   getConsultAppointmentsForContact,
 } = require("../clients/ghlCalendarClient");
+const { createGoogleMeet } = require("../clients/googleMeet");
 const {
   CALENDARS,
   TRANSLATOR_CALENDARS,
@@ -62,6 +63,28 @@ function hoursForWindow(preferredTimeWindow = null) {
   if (tw.includes("afternoon")) return [14, 15];
   if (tw.includes("evening") || tw.includes("night")) return [17, 18, 19];
   return [17];
+}
+
+function normalizeExperience(raw) {
+  const lower = String(raw || "").toLowerCase();
+  if (lower === "vip" || lower === "reserve") return "Reserve";
+  if (lower === "signature") return "Signature";
+  return raw ? String(raw) : "Signature";
+}
+
+function buildLegacyApptTitle({
+  language,
+  consultMode,
+  firstName,
+  lastName,
+  experienceLabel,
+}) {
+  const isSpanish = String(language || "").toLowerCase().startsWith("span");
+  const word = isSpanish ? "Consulta" : "Consultation";
+  const icon = consultMode === "online" ? "📱" : "🙋";
+  const exp = normalizeExperience(experienceLabel);
+  const name = `${firstName || ""} ${lastName || ""}`.trim() || "Client";
+  return `${exp} ${word}${icon}: ${name}`;
 }
 
 function nextDateFromMonthDay(monthIndex, day, now = new Date()) {
@@ -159,14 +182,6 @@ function generateSlotsForSpecificDates({ dates = [], preferredTimeWindow = null,
   return slots;
 }
 
-/**
- * Generate suggested time slots for a consult
- * Supports preferredDay (e.g., "wednesday") and preferredTimeWindow (e.g., "morning")
- * 
- * @param {Object} options
- * @param {string} options.preferredTimeWindow - "morning", "afternoon", "evening"
- * @param {string} options.preferredDay - Weekday name like "wednesday" or "friday"
- */
 function generateSuggestedSlots(options = {}) {
   const { preferredTimeWindow = null, preferredDay = null } = options;
   
@@ -247,6 +262,45 @@ function generateSuggestedSlots(options = {}) {
 
   console.log(`📅 [SLOT_GENERATION] Generated ${slots.length} synthetic slots`);
   return slots.slice(0, 3); // Return up to 3 options
+}
+
+/**
+ * Fetch available slots (synthetic in tests/dev, calendar-aware in prod)
+ */
+async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
+  const preferredTimeWindow = context.preferredTimeWindow || null;
+  const preferredDay = context.preferredDay || null;
+  const contact = context.contact || null;
+  const contactId = contact?.id || contact?._id || canonicalState.contactId || null;
+
+  const useSynthetic =
+    process.env.NODE_ENV === "test" ||
+    String(process.env.USE_SYNTHETIC_SLOTS || "").toLowerCase() === "true";
+
+  if (useSynthetic) {
+    return generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  }
+
+  let slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+
+  if (contactId) {
+    try {
+      const appointments = await listAppointmentsForContact(contactId);
+      const busyStarts = (appointments || []).map((apt) => apt.startTime).filter(Boolean);
+      if (busyStarts.length > 0) {
+        slots = slots.filter((s) => !busyStarts.includes(s.startTime));
+      }
+    } catch (err) {
+      console.warn("⚠️ Failed to fetch calendar appointments, using synthetic slots:", err.message || err);
+    }
+  }
+
+  if (slots.length === 0) {
+    console.warn("⚠️ No slots available after filtering; falling back to synthetic suggestions");
+    slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  }
+
+  return slots.slice(0, 4);
 }
 
 /**
@@ -836,6 +890,7 @@ async function createConsultAppointment({
   translatorNeeded = false,
   translatorCalendarId = null,
   translatorName = null,
+  sendHoldMessage = true,
 }) {
   try {
     const contact = await getContact(contactId);
@@ -851,18 +906,96 @@ async function createConsultAppointment({
         ? boolField(cf.deposit_paid)
         : cf.deposit_paid === "Yes" || cf.deposit_paid === true;
 
+    const languagePreference =
+      cf.language_preference ||
+      cf.languagePreference ||
+      contact.language_preference ||
+      contact.languagePreference ||
+      "English";
+    const experienceLabel =
+      cf.experience || cf.Experience || contactProfile?.experienceLabel || "Signature";
+
     // Build appointment title
     const tattooSummary = contactProfile?.tattooSummary || "tattoo";
-    const title = `Consultation - ${artist} (${consultMode === "online" ? "Online" : "In-Person"})`;
+    const title = buildLegacyApptTitle({
+      language: languagePreference,
+      consultMode,
+      firstName: contact.firstName || contact.first_name,
+      lastName: contact.lastName || contact.last_name,
+      experienceLabel,
+    });
 
     // Build description
-    const description = `Consultation for ${tattooSummary}`;
+    const baseDescription = `Consultation for ${tattooSummary}`;
 
     // Determine assigned user for this artist (required by GHL)
     const assignedUserId = getAssignedUserIdForArtist(artist);
     if (!assignedUserId) {
       console.warn(`⚠️ No assignedUserId found for artist "${artist}", appointment may fail`);
     }
+
+    // Create Google Meet link for online consults
+    let meetUrl = null;
+    if (consultMode === "online") {
+      try {
+        const attendeeEmails = contact.email ? [contact.email] : [];
+        const meetResp = await createGoogleMeet({
+          summary: title,
+          description: baseDescription,
+          startISO: startTime,
+          endISO: endTime,
+          attendees: attendeeEmails,
+        });
+        meetUrl = meetResp.meetUrl || meetResp.htmlLink || null;
+        console.log(
+          "📹 Google Meet created:",
+          meetResp.meetUrl,
+          "| calendar event:",
+          meetResp.htmlLink
+        );
+      } catch (meetErr) {
+        console.warn(
+          "⚠️ Failed to create Google Meet (continuing without link):",
+          meetErr.response?.data || meetErr.message
+        );
+      }
+    }
+
+    // Persist meet link + UTM values if available
+    const customFieldUpdates = {};
+    if (meetUrl) {
+      customFieldUpdates.google_meet_link = meetUrl;
+    }
+    const utmSource =
+      cf.utm_source || cf.utmSource || contact.utmSource || contact.utm_source;
+    const utmMedium =
+      cf.utm_medium || cf.utmMedium || contact.utmMedium || contact.utm_medium;
+    const utmCampaign =
+      cf.utm_campaign || cf.utmCampaign || contact.utmCampaign || contact.utm_campaign;
+
+    if (utmSource) customFieldUpdates.utm_source = utmSource;
+    if (utmMedium) customFieldUpdates.utm_medium = utmMedium;
+    if (utmCampaign) customFieldUpdates.utm_campaign = utmCampaign;
+
+    if (Object.keys(customFieldUpdates).length > 0) {
+      try {
+        await updateContact(contactId, { customField: customFieldUpdates });
+        console.log("✅ Updated contact with meeting/UTM info");
+      } catch (updateErr) {
+        console.warn(
+          "⚠️ Failed to persist meeting/UTM info (non-blocking):",
+          updateErr.response?.data || updateErr.message
+        );
+      }
+    }
+
+    const meetingLocationType = consultMode === "online" ? "custom" : null;
+    const meetingLocationId = consultMode === "online" ? "custom_0" : null;
+    const address = consultMode === "online" ? meetUrl || "Online consult" : null;
+    const description =
+      consultMode === "online" && meetUrl
+        ? `${baseDescription}\n\nGoogle Meet: ${meetUrl}\nPlease join a few minutes early.`
+        : baseDescription;
 
     // If deposit already paid, create as CONFIRMED. Otherwise NEW (hold).
     const appointmentStatus = depositPaid ? APPOINTMENT_STATUS.CONFIRMED : APPOINTMENT_STATUS.NEW;
@@ -877,15 +1010,18 @@ async function createConsultAppointment({
       description,
       appointmentStatus,
       assignedUserId,
-      address: consultMode === "online" ? "Zoom" : null,
-      meetingLocationType: consultMode === "online" ? "custom" : null,
+      address,
+      meetingLocationType,
+      meetingLocationId,
     });
 
     let translatorAppointment = null;
 
     if (translatorNeeded && translatorCalendarId) {
       const translatorTitle = `Translator for consult (${artist})`;
-      const translatorDescription = `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
+      const translatorDescription = meetUrl
+        ? `Translator: ${translatorName || "Translator"} for consult with ${artist}\n\nGoogle Meet: ${meetUrl}`
+        : `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
 
       try {
         translatorAppointment = await createAppointment({
@@ -896,8 +1032,9 @@ async function createConsultAppointment({
           title: translatorTitle,
           description: translatorDescription,
           appointmentStatus,
-          address: consultMode === "online" ? "Zoom" : null,
-          meetingLocationType: consultMode === "online" ? "custom" : null,
+          address,
+          meetingLocationType,
+          meetingLocationId,
         });
       } catch (translatorErr) {
         console.error("❌ Error creating translator appointment:", translatorErr.message || translatorErr);
@@ -925,7 +1062,7 @@ async function createConsultAppointment({
     }
 
     // Only send hold message if deposit NOT paid
-    if (!depositPaid) {
+    if (!depositPaid && sendHoldMessage) {
       const slotDisplay = formatSlotDisplay(new Date(startTime));
       const holdMessage = `Got you — I'll hold ${slotDisplay} for you.\n\nTo lock it in, just finish the $100 refundable deposit I sent.\n\nIf I don't hear back for a bit, I'll have to release the spot so someone else can grab it 🙌`;
 
@@ -991,9 +1128,11 @@ module.exports = {
   parseTimeSelection,
   isTimeSelection,
   generateSuggestedSlots,
+  getAvailableSlots,
   formatSlotDisplay,
   selectArtistByAvailability,
   generateSlotsFromAllArtists,
   selectBestSlotsForPresentation,
   getExplicitArtistPreference,
+  getAvailableSlots,
 };

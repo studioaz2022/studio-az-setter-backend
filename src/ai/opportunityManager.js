@@ -240,5 +240,6 @@ module.exports = {
   determineStageFromContext,
   syncOpportunityStageFromContact,
   getStageKeyFromId,
+  boolField,
 };
 
