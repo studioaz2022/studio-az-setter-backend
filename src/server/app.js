@@ -7,6 +7,8 @@ const {
   createContact,
   updateContact,
   lookupContactIdByEmailOrPhone,
+  sendConversationMessage,
+  updateTattooFields,
 } = require("../../ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { getContactIdFromOrder } = require("../payments/squareClient");
@@ -57,7 +59,7 @@ function createApp() {
       }
 
       const contact = await getContact(contactId);
-      await handleInboundMessage({
+      const result = await handleInboundMessage({
         contact,
         aiPhase: null,
         leadTemperature: null,
@@ -65,6 +67,32 @@ function createApp() {
         contactProfile: {},
         consultExplained: contact?.customField?.consult_explained,
       });
+
+      // Send the AI's bubbles to the user
+      const bubbles = result?.aiResult?.bubbles || [];
+      for (const bubble of bubbles) {
+        if (bubble && bubble.trim()) {
+          try {
+            await sendConversationMessage({
+              contactId,
+              body: bubble,
+              channelContext: {},
+            });
+          } catch (err) {
+            console.error("❌ Failed to send bubble:", err.message || err);
+          }
+        }
+      }
+
+      // Persist the field updates from AI
+      const fieldUpdates = result?.aiResult?.field_updates || {};
+      if (Object.keys(fieldUpdates).length > 0 && contactId) {
+        try {
+          await updateTattooFields(contactId, fieldUpdates);
+        } catch (err) {
+          console.error("❌ Failed to persist field_updates:", err.message || err);
+        }
+      }
 
       return res.status(200).json({ ok: true });
     } catch (err) {
@@ -116,7 +144,7 @@ function createApp() {
 
       if (contact) {
         const syntheticText = message || notes || "New form submission";
-        await handleInboundMessage({
+        const result = await handleInboundMessage({
           contact,
           aiPhase: null,
           leadTemperature: null,
@@ -124,6 +152,32 @@ function createApp() {
           contactProfile: {},
           consultExplained: contact?.customField?.consult_explained,
         });
+
+        // Send the AI's bubbles to the user
+        const bubbles = result?.aiResult?.bubbles || [];
+        for (const bubble of bubbles) {
+          if (bubble && bubble.trim()) {
+            try {
+              await sendConversationMessage({
+                contactId,
+                body: bubble,
+                channelContext: {},
+              });
+            } catch (err) {
+              console.error("❌ Failed to send bubble:", err.message || err);
+            }
+          }
+        }
+
+        // Persist the field updates from AI
+        const fieldUpdates = result?.aiResult?.field_updates || {};
+        if (Object.keys(fieldUpdates).length > 0 && contactId) {
+          try {
+            await updateTattooFields(contactId, fieldUpdates);
+          } catch (err) {
+            console.error("❌ Failed to persist field_updates:", err.message || err);
+          }
+        }
       }
 
       return res.status(200).json({ ok: true });
