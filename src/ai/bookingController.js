@@ -183,7 +183,7 @@ function generateSlotsForSpecificDates({ dates = [], preferredTimeWindow = null,
 }
 
 function generateSuggestedSlots(options = {}) {
-  const { preferredTimeWindow = null, preferredDay = null } = options;
+  const { preferredTimeWindow = null, preferredDay = null, preferredWeek = null } = options;
   
   const now = new Date();
   const slots = [];
@@ -191,6 +191,15 @@ function generateSuggestedSlots(options = {}) {
   // Get next few weekdays
   let currentDate = new Date(now);
   currentDate.setHours(0, 0, 0, 0);
+
+  // If user said "next week", skip forward to the start of next week (Monday)
+  if (preferredWeek === "next") {
+    const currentDayIndex = currentDate.getDay();
+    // Days until next Monday: if today is Monday (1), we want 7 days; if Sunday (0), we want 1 day
+    let daysUntilNextMonday = currentDayIndex === 0 ? 1 : (8 - currentDayIndex);
+    currentDate.setDate(currentDate.getDate() + daysUntilNextMonday);
+    console.log(`📅 User requested "next week", skipping to ${currentDate.toDateString()}`);
+  }
 
   // If user requested a specific weekday, start from the next occurrence of that day
   if (preferredDay) {
@@ -206,8 +215,13 @@ function generateSuggestedSlots(options = {}) {
       
       console.log(`📅 User requested ${preferredDay}, starting from ${currentDate.toDateString()}`);
     }
+  } else if (!preferredWeek) {
+    // Default: Skip to next weekday if today is weekend (only if no week preference)
+    while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
+      currentDate.setDate(currentDate.getDate() + 1);
+    }
   } else {
-    // Default: Skip to next weekday if today is weekend
+    // If preferredWeek but no preferredDay, skip weekends from the new start date
     while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
       currentDate.setDate(currentDate.getDate() + 1);
     }
@@ -227,7 +241,7 @@ function generateSuggestedSlots(options = {}) {
   }
 
   // Generate 3 options
-  console.log(`📅 [SLOT_GENERATION] Generating synthetic slots (preferredDay: ${preferredDay || "none"}, preferredTimeWindow: ${preferredTimeWindow || "none"})`);
+  console.log(`📅 [SLOT_GENERATION] Generating synthetic slots (preferredDay: ${preferredDay || "none"}, preferredTimeWindow: ${preferredTimeWindow || "none"}, preferredWeek: ${preferredWeek || "none"})`);
   
   for (let i = 0; i < 3; i++) {
     // If not a specific day request, skip weekends
@@ -270,6 +284,7 @@ function generateSuggestedSlots(options = {}) {
 async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
   const preferredTimeWindow = context.preferredTimeWindow || null;
   const preferredDay = context.preferredDay || null;
+  const preferredWeek = context.preferredWeek || null;
   const contact = context.contact || null;
   const contactId = contact?.id || contact?._id || canonicalState.contactId || null;
 
@@ -278,10 +293,10 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
     String(process.env.USE_SYNTHETIC_SLOTS || "").toLowerCase() === "true";
 
   if (useSynthetic) {
-    return generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+    return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
   }
 
-  let slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+  let slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
 
   if (contactId) {
     try {
@@ -297,7 +312,7 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
 
   if (slots.length === 0) {
     console.warn("⚠️ No slots available after filtering; falling back to synthetic suggestions");
-    slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay });
+    slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
   }
 
   return slots.slice(0, 4);

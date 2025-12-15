@@ -14,6 +14,35 @@ const { DEPOSIT_CONFIG } = require("../config/constants");
 const { updateAppointmentStatus } = require("../clients/ghlCalendarClient");
 const { parseJsonField } = require("./phaseContract");
 
+/**
+ * Extract time preferences from user message
+ * Detects: "next week", "this week", day names, time windows
+ */
+function extractTimePreferences(messageText) {
+  const text = String(messageText || "").toLowerCase();
+  let preferredWeek = null;
+  let preferredDay = null;
+  let preferredTimeWindow = null;
+
+  // Detect week preference
+  if (/next week/i.test(text)) {
+    preferredWeek = "next";
+  } else if (/this week/i.test(text)) {
+    preferredWeek = "this";
+  }
+
+  // Detect time window
+  if (/morning/i.test(text)) preferredTimeWindow = "morning";
+  else if (/afternoon/i.test(text)) preferredTimeWindow = "afternoon";
+  else if (/evening|night/i.test(text)) preferredTimeWindow = "evening";
+
+  // Detect day preference
+  const dayMatch = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
+  if (dayMatch) preferredDay = dayMatch[1].toLowerCase();
+
+  return { preferredWeek, preferredDay, preferredTimeWindow };
+}
+
 async function persistLastSentSlots(contactId, slots = []) {
   if (!contactId || !slots || slots.length === 0) return;
   try {
@@ -21,6 +50,7 @@ async function persistLastSentSlots(contactId, slots = []) {
       last_sent_slots: JSON.stringify(slots),
       times_sent: true,
     });
+    console.log(`✅ [SLOT PERSIST] Saved ${slots.length} slots to GHL for contact ${contactId}`);
   } catch (err) {
     console.error("❌ Failed to persist last_sent_slots:", err.message || err);
   }
@@ -45,12 +75,21 @@ async function buildDeterministicResponse({
   const upcomingAppointmentId = canonicalState.upcomingAppointmentId || holdAppointmentId || null;
   const channelContextResolved = channelContext || {};
 
-  const offerSlots = async (internalNotes = "deterministic_scheduling_slots") => {
+  const offerSlots = async (internalNotes = "deterministic_scheduling_slots", userMessage = "") => {
+    // Extract time preferences from user message
+    const timePrefs = extractTimePreferences(userMessage || messageText);
+    console.log(`📅 [SLOT OFFER] Time preferences extracted:`, timePrefs);
+
     let slots = [];
     try {
       slots = await getAvailableSlots({
         canonicalState,
-        context: { contact },
+        context: { 
+          contact,
+          preferredDay: timePrefs.preferredDay,
+          preferredTimeWindow: timePrefs.preferredTimeWindow,
+          preferredWeek: timePrefs.preferredWeek,
+        },
       });
     } catch (err) {
       console.error("❌ Error generating suggested slots:", err.message || err);
@@ -134,12 +173,51 @@ async function buildDeterministicResponse({
       try {
         const freshContact = await getContact(contactId);
         const cf = freshContact?.customField || freshContact?.customFields || {};
-        const rawSlots = cf.last_sent_slots || null;
-        recoveredSlots = parseJsonField(rawSlots, []);
+        
+        // Try multiple possible field names/keys
+        const rawSlots = cf.last_sent_slots || cf.lastSentSlots || cf["Last Sent Slots"] || null;
+        
+        // Log available fields for debugging
+        const cfKeys = Object.keys(cf || {});
+        console.log(`📋 [SLOT RECOVERY] Contact has ${cfKeys.length} custom fields. Looking for slot data...`);
+        
+        // Try to find any field that looks like slot data (JSON array)
+        if (!rawSlots) {
+          for (const key of cfKeys) {
+            const val = cf[key];
+            if (typeof val === "string" && val.startsWith("[{") && val.includes("startTime")) {
+              console.log(`📋 [SLOT RECOVERY] Found potential slot data in field: ${key}`);
+              recoveredSlots = parseJsonField(val, []);
+              if (recoveredSlots.length > 0) break;
+            }
+          }
+        } else {
+          recoveredSlots = parseJsonField(rawSlots, []);
+        }
+        
         if (recoveredSlots.length > 0) {
           console.log(`✅ [SLOT RECOVERY] Recovered ${recoveredSlots.length} slots from GHL`);
         } else {
-          console.log("⚠️ [SLOT RECOVERY] No slots found in GHL contact either");
+          console.log("⚠️ [SLOT RECOVERY] No slots found in GHL contact. Will regenerate fresh slots.");
+          // If we can't recover slots but have a selection, regenerate slots and try to match
+          const timePrefs = extractTimePreferences(messageText);
+          try {
+            const freshSlots = await getAvailableSlots({
+              canonicalState,
+              context: { 
+                contact,
+                preferredDay: timePrefs.preferredDay,
+                preferredTimeWindow: timePrefs.preferredTimeWindow,
+                preferredWeek: timePrefs.preferredWeek,
+              },
+            });
+            if (freshSlots.length > 0) {
+              recoveredSlots = freshSlots;
+              console.log(`✅ [SLOT RECOVERY] Generated ${freshSlots.length} fresh slots to match against`);
+            }
+          } catch (genErr) {
+            console.error("❌ [SLOT RECOVERY] Failed to generate fresh slots:", genErr.message || genErr);
+          }
         }
       } catch (err) {
         console.error("❌ [SLOT RECOVERY] Failed to fetch contact:", err.message || err);
