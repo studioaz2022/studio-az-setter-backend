@@ -36,6 +36,39 @@ function getNonEmptyCustomFields(contact) {
   return filterNonEmpty(cf);
 }
 
+// Helper: Derive channel context from webhook payload and contact
+function deriveChannelContext(payload, contact) {
+  // Check if this is a DM based on attribution source medium
+  const medium = (
+    payload?.contact?.attributionSource?.medium ||
+    payload?.contact?.lastAttributionSource?.medium ||
+    ""
+  ).toLowerCase();
+  
+  // Check tags for DM indicators
+  const tagsRaw = payload?.tags || contact?.tags || [];
+  const tags = Array.isArray(tagsRaw) ? tagsRaw : [tagsRaw];
+  const tagsLower = tags.map(t => String(t).toLowerCase());
+  
+  const isDmFromMedium = medium === "facebook" || medium === "instagram" || medium === "fb" || medium === "ig";
+  const isDmFromTags = tagsLower.some(t => 
+    t.includes("dm") || 
+    t.includes("instagram") || 
+    t.includes("facebook") ||
+    t.includes("messenger")
+  );
+  
+  const isDm = isDmFromMedium || isDmFromTags;
+  const hasPhone = !!(contact?.phone || contact?.phoneNumber || payload?.phone);
+  
+  return {
+    isDm,
+    hasPhone,
+    conversationId: null,
+    phone: contact?.phone || contact?.phoneNumber || payload?.phone || null,
+  };
+}
+
 function createApp() {
   const app = express();
 
@@ -130,6 +163,10 @@ function createApp() {
         fieldUpdatesKeys: Object.keys(result?.aiResult?.field_updates || {}),
       });
 
+      // Derive channel context for message sending
+      const channelContext = deriveChannelContext(payload, contact);
+      console.log("📡 Channel context:", channelContext);
+
       // Send the AI's bubbles to the user
       const bubbles = result?.aiResult?.bubbles || [];
       let sentCount = 0;
@@ -139,7 +176,7 @@ function createApp() {
             await sendConversationMessage({
               contactId,
               body: bubble,
-              channelContext: {},
+              channelContext,
             });
             sentCount++;
           } catch (err) {
@@ -252,6 +289,10 @@ function createApp() {
           fieldUpdatesKeys: Object.keys(result?.aiResult?.field_updates || {}),
         });
 
+        // Derive channel context for message sending
+        const channelContext = deriveChannelContext(payload, effectiveContact);
+        console.log("📡 Channel context:", channelContext);
+
         // Send the AI's bubbles to the user
         const bubbles = result?.aiResult?.bubbles || [];
         let sentCount = 0;
@@ -261,7 +302,7 @@ function createApp() {
               await sendConversationMessage({
                 contactId,
                 body: bubble,
-                channelContext: {},
+                channelContext,
               });
               sentCount++;
             } catch (err) {
