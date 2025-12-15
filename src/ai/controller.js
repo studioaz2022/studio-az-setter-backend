@@ -130,14 +130,16 @@ async function handleInboundMessage({
         applyOnly: false,
       });
 
-      const bubble = consultResult?.responseBody || null;
+      // Don't add to bubbles if message was already sent directly by handlePathChoice
+      const messageSent = consultResult?.messageSent === true;
 
       response = {
         language: "en",
-        bubbles: bubble ? [bubble] : [],
+        bubbles: [], // Empty - message already sent by consultPathHandler
         internal_notes: "consult_path_choice",
         meta: { aiPhase: derivedPhaseBefore || null, leadTemperature: null },
         field_updates: {},
+        _messageSentDirectly: messageSent, // Flag to prevent double-send
       };
       selectedHandler = "consult_path";
       routingReason = "consult_path_choice_intent";

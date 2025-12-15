@@ -1,2209 +1,1600 @@
 💬 GHL MESSAGE WEBHOOK HIT
-
-
-
 💬 ════════════════════════════════════════════════════════
-
-
-
 📦 Webhook Payload (non-empty fields): {
-
-
-
-  "contact_id": "CZj67OBSzvUzpsExstqD",
-
-
-
-  "first_name": "Maria",
-
-
-
-  "last_name": "Claflin",
-
-
-
-  "full_name": "Maria Claflin",
-
-
-
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
-
-
-
-  "date_created": "2025-12-15T06:37:39.685Z",
-
-
-
+  "date_created": "2025-12-15T19:06:01.210Z",
   "contact_type": "lead",
-
-
-
   "location": {
-
-
-
     "name": "Studio AZ Tattoo",
-
-
-
     "address": "333 Washington Ave N STE 100",
-
-
-
     "city": "Minneapolis",
-
-
-
     "state": "Minnesota",
-
-
-
     "country": "US",
-
-
-
     "postalCode": "55401",
-
-
-
     "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-
-
-
     "id": "mUemx2jG4wly4kJWBkI4"
-
-
-
   },
-
-
-
   "message": {
-
-
-
     "type": 11,
-
-
-
-    "body": "Hey looking to get a tattoo!"
-
-
-
+    "body": "Can I get a tattoo?"
   },
-
-
-
   "workflow": {
-
-
-
     "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-
-
-
     "name": "Testing Ai Bot"
-
-
-
   },
-
-
-
   "contact": {
-
-
-
     "attributionSource": {
-
-
-
       "photoUrl": null,
-
-
-
       "sessionSource": "Social media",
-
-
-
       "adId": null,
-
-
-
       "productId": null,
-
-
-
       "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
+      "mediumId": "9747144365336642",
       "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
+      "pSid": "9747144365336642",
       "medium": "facebook",
-
-
-
       "postId": null,
-
-
-
       "flowId": null
-
-
-
     },
-
-
-
     "lastAttributionSource": {
-
-
-
       "photoUrl": null,
-
-
-
       "sessionSource": "Social media",
-
-
-
       "adId": null,
-
-
-
       "productId": null,
-
-
-
       "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
+      "mediumId": "9747144365336642",
       "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
+      "pSid": "9747144365336642",
       "medium": "facebook",
-
-
-
       "postId": null,
-
-
-
       "flowId": null
-
-
-
     }
-
-
-
   },
-
-
-
   "customData": {
-
-
-
-    "contactId": "CZj67OBSzvUzpsExstqD",
-
-
-
-    "messageBody": "Hey looking to get a tattoo!"
-
-
-
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "Can I get a tattoo?"
   }
-
-
-
 }
-
-
-
-📩 Incoming message text: { type: 11, body: 'Hey looking to get a tattoo!' }
-
-
-
-👤 Contact ID: CZj67OBSzvUzpsExstqD
-
-
-
-👤 Contact: Maria Claflin
-
-
-
-📋 Contact custom fields (non-empty): {}
-
-
-
+📩 Incoming message text: Can I get a tattoo?
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Can I get a tattoo?',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: null,
+  tattooPlacement: null,
+  tattooSize: null,
+  timeline: null,
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'intake'
+}
+🎯 [INTENTS] No specific intents detected for: Can I get a tattoo?
 🤖 Raw OpenAI opener response: {
-
-
-
   "language": "en",
-
-
-
   "bubbles": [
-
-
-
-    "Hey Maria! What kind of piece are you thinking?",
-
-
-
-    "Where on your body were you thinking to get it?"
-
-
-
+    "For sure! What kind of piece are you thinking?",
+    "Where on your body were you imagining it?"
   ],
-
-
-
-  "internal_notes": "Starting intake phase, gathering basic tattoo idea and placement.",
-
-
-
+  "internal_notes": "Starting intake phase by asking for tattoo idea and placement.",
   "meta": {
-
-
-
     "aiPhase": "intake",
-
-
-
     "leadTemperature": "warm",
-
-
-
     "wantsDepositLink": false,
-
-
-
     "depositPushedThisTurn": false,
-
-
-
     "mentionDecoyOffered": false,
-
-
-
     "consultMode": "online"
-
-
-
   },
-
-
-
   "field_updates": {}
-
-
-
 }
-
-
-
+⏱️ [TIMING] AI call took 2822ms
 🧭 [PHASE] derived_phase snapshot {
-
-
-
   derived_phase: 'intake',
-
-
-
   canonical: {
-
-
-
     tattooSummary: null,
-
-
-
     tattooPlacement: null,
-
-
-
     tattooSize: null,
-
-
-
     timeline: null,
-
-
-
     consultationType: null,
-
-
-
     consultationTypeLocked: false,
-
-
-
     depositLinkSent: false,
-
-
-
     depositPaid: false,
-
-
-
     holdAppointmentId: null
-
-
-
   },
-
-
-
   intents: {
-
-
-
     reschedule_intent: false,
-
-
-
     cancel_intent: false,
-
-
-
     scheduling_intent: false,
-
-
-
     slot_selection_intent: false,
-
-
-
     deposit_intent: false,
-
-
-
     consult_path_choice_intent: false,
-
-
-
     artist_guided_size_intent: false,
-
-
-
     process_or_price_question_intent: false,
-
-
-
     translator_affirm_intent: false
-
-
-
   },
-
-
-
   selected_handler: 'ai',
-
-
-
   routing_reason: 'ai_fallback',
-
-
-
   intent_flags: []
-
-
-
 }
-
-
-
+⏱️ [TIMING] Total handleInboundMessage took 2825ms
 🤖 AI Response Summary: {
-
-
-
   bubblesCount: 2,
-
-
-
   phase: 'intake',
-
-
-
   handler: 'ai',
-
-
-
   reason: 'ai_fallback',
-
-
-
   fieldUpdatesKeys: []
-
-
-
 }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'For sure! What kind of piece are you thinking?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Where on your body were you imagining it?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
 📤 Sent 2/2 bubbles to GHL conversation
-
-
-
 ℹ️ No field_updates from AI to persist this turn
-
-
-
 💬 ════════════════════════════════════════════════════════
-
-
-
-
-
-     ==> Detected service running on port 10000
-
-
-     ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
-
-
-
-
-
-
 💬 ════════════════════════════════════════════════════════
-
-
-
 💬 GHL MESSAGE WEBHOOK HIT
-
-
-
 💬 ════════════════════════════════════════════════════════
-
-
-
 📦 Webhook Payload (non-empty fields): {
-
-
-
-  "contact_id": "CZj67OBSzvUzpsExstqD",
-
-
-
-  "first_name": "Maria",
-
-
-
-  "last_name": "Claflin",
-
-
-
-  "full_name": "Maria Claflin",
-
-
-
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
-
-
-
-  "date_created": "2025-12-15T06:37:39.685Z",
-
-
-
+  "date_created": "2025-12-15T19:06:01.210Z",
   "contact_type": "lead",
-
-
-
   "location": {
-
-
-
     "name": "Studio AZ Tattoo",
-
-
-
     "address": "333 Washington Ave N STE 100",
-
-
-
     "city": "Minneapolis",
-
-
-
     "state": "Minnesota",
-
-
-
     "country": "US",
-
-
-
     "postalCode": "55401",
-
-
-
     "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-
-
-
     "id": "mUemx2jG4wly4kJWBkI4"
-
-
-
   },
-
-
-
   "message": {
-
-
-
     "type": 11,
-
-
-
-    "body": "I was thinking of getting a skateboard on my forearm"
-
-
-
+    "body": "A small forest scenery of clouds sun wolf and trees"
   },
-
-
-
   "workflow": {
-
-
-
     "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-
-
-
     "name": "Testing Ai Bot"
-
-
-
   },
-
-
-
   "contact": {
-
-
-
     "attributionSource": {
-
-
-
       "photoUrl": null,
-
-
-
       "sessionSource": "Social media",
-
-
-
       "adId": null,
-
-
-
       "productId": null,
-
-
-
       "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
+      "mediumId": "9747144365336642",
       "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
+      "pSid": "9747144365336642",
       "medium": "facebook",
-
-
-
       "postId": null,
-
-
-
       "flowId": null
-
-
-
     },
-
-
-
     "lastAttributionSource": {
-
-
-
       "photoUrl": null,
-
-
-
       "sessionSource": "Social media",
-
-
-
       "adId": null,
-
-
-
       "productId": null,
-
-
-
       "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
+      "mediumId": "9747144365336642",
       "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
+      "pSid": "9747144365336642",
       "medium": "facebook",
-
-
-
       "postId": null,
-
-
-
       "flowId": null
-
-
-
     }
-
-
-
   },
-
-
-
   "customData": {
-
-
-
-    "contactId": "CZj67OBSzvUzpsExstqD",
-
-
-
-    "messageBody": "I was thinking of getting a skateboard on my forearm"
-
-
-
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "A small forest scenery of clouds sun wolf and trees"
   }
-
-
-
 }
-
-
-
-📩 Incoming message text: {
-
-
-
-  type: 11,
-
-
-
-  body: 'I was thinking of getting a skateboard on my forearm'
-
-
-
+📩 Incoming message text: A small forest scenery of clouds sun wolf and trees
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'A small forest scenery of clouds sun wolf and trees',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
 }
-
-
-
-👤 Contact ID: CZj67OBSzvUzpsExstqD
-
-
-
-👤 Contact: Maria Claflin
-
-
-
-📋 Contact custom fields (non-empty): {}
-
-
-
+📊 [CANONICAL] State before routing: {
+  tattooSummary: null,
+  tattooPlacement: null,
+  tattooSize: null,
+  timeline: null,
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'intake'
+}
+🎯 [INTENTS] No specific intents detected for: A small forest scenery of clouds sun wolf and trees
 🤖 Raw OpenAI opener response: {
-
-
-
   "language": "en",
-
-
-
   "bubbles": [
-
-
-
-    "Sick idea — a skateboard on your forearm will look clean.",
-
-
-
-    "Roughly how big were you thinking for the size?"
-
-
-
+    "Sick idea — that small forest scene with clouds, sun, wolf, and trees sounds fire.",
+    "Where were you thinking to get it done?"
   ],
-
-
-
-  "internal_notes": "Acknowledged tattoo idea and asked for size to continue intake.",
-
-
-
+  "internal_notes": "Acknowledging tattoo idea and asking for placement to gather basics.",
   "meta": {
-
-
-
     "aiPhase": "intake",
-
-
-
     "leadTemperature": "warm",
-
-
-
     "wantsDepositLink": false,
-
-
-
+    "wantsAppointmentOffer": false,
     "depositPushedThisTurn": false,
-
-
-
     "mentionDecoyOffered": false,
-
-
-
     "consultMode": "online"
-
-
-
   },
-
-
-
   "field_updates": {
-
-
-
-    "tattoo_placement": "forearm",
-
-
-
-    "tattoo_summary": "skateboard tattoo on forearm"
-
-
-
+    "tattoo_summary": "small forest scenery with clouds, sun, wolf, and trees"
   }
-
-
-
 }
-
-
-
+⏱️ [TIMING] AI call took 4818ms
 🧭 [PHASE] derived_phase snapshot {
-
-
-
-  derived_phase: 'discovery',
-
-
-
-  canonical: {
-
-
-
-    tattooSummary: 'skateboard tattoo on forearm',
-
-
-
-    tattooPlacement: 'forearm',
-
-
-
-    tattooSize: null,
-
-
-
-    timeline: null,
-
-
-
-    consultationType: null,
-
-
-
-    consultationTypeLocked: false,
-
-
-
-    depositLinkSent: false,
-
-
-
-    depositPaid: false,
-
-
-
-    holdAppointmentId: null
-
-
-
-  },
-
-
-
-  intents: {
-
-
-
-    reschedule_intent: false,
-
-
-
-    cancel_intent: false,
-
-
-
-    scheduling_intent: false,
-
-
-
-    slot_selection_intent: false,
-
-
-
-    deposit_intent: false,
-
-
-
-    consult_path_choice_intent: false,
-
-
-
-    artist_guided_size_intent: false,
-
-
-
-    process_or_price_question_intent: false,
-
-
-
-    translator_affirm_intent: false
-
-
-
-  },
-
-
-
-  selected_handler: 'ai',
-
-
-
-  routing_reason: 'ai_fallback',
-
-
-
-  intent_flags: []
-
-
-
-}
-
-
-
-🤖 AI Response Summary: {
-
-
-
-  bubblesCount: 2,
-
-
-
-  phase: 'discovery',
-
-
-
-  handler: 'ai',
-
-
-
-  reason: 'ai_fallback',
-
-
-
-  fieldUpdatesKeys: [ 'tattoo_placement', 'tattoo_summary' ]
-
-
-
-}
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-📤 Sent 2/2 bubbles to GHL conversation
-
-
-
-✅ Updated tattoo fields for contact CZj67OBSzvUzpsExstqD with {
-
-
-
-  tattoo_placement: 'forearm',
-
-
-
-  tattoo_summary: 'skateboard tattoo on forearm'
-
-
-
-}
-
-
-
-✅ Persisted field_updates: [ 'tattoo_placement', 'tattoo_summary' ]
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-💬 GHL MESSAGE WEBHOOK HIT
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-📦 Webhook Payload (non-empty fields): {
-
-
-
-  "Tattoo Placement": "forearm",
-
-
-
-  "Tattoo Summary": "skateboard tattoo on forearm",
-
-
-
-  "contact_id": "CZj67OBSzvUzpsExstqD",
-
-
-
-  "first_name": "Maria",
-
-
-
-  "last_name": "Claflin",
-
-
-
-  "full_name": "Maria Claflin",
-
-
-
-  "tags": "dm consultation request",
-
-
-
-  "country": "US",
-
-
-
-  "date_created": "2025-12-15T06:37:39.685Z",
-
-
-
-  "contact_type": "lead",
-
-
-
-  "location": {
-
-
-
-    "name": "Studio AZ Tattoo",
-
-
-
-    "address": "333 Washington Ave N STE 100",
-
-
-
-    "city": "Minneapolis",
-
-
-
-    "state": "Minnesota",
-
-
-
-    "country": "US",
-
-
-
-    "postalCode": "55401",
-
-
-
-    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-
-
-
-    "id": "mUemx2jG4wly4kJWBkI4"
-
-
-
-  },
-
-
-
-  "message": {
-
-
-
-    "type": 11,
-
-
-
-    "body": "I was thinking about 6inches long and 3 inches wide"
-
-
-
-  },
-
-
-
-  "workflow": {
-
-
-
-    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-
-
-
-    "name": "Testing Ai Bot"
-
-
-
-  },
-
-
-
-  "contact": {
-
-
-
-    "attributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    },
-
-
-
-    "lastAttributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    }
-
-
-
-  },
-
-
-
-  "customData": {
-
-
-
-    "contactId": "CZj67OBSzvUzpsExstqD",
-
-
-
-    "messageBody": "I was thinking about 6inches long and 3 inches wide"
-
-
-
-  }
-
-
-
-}
-
-
-
-📩 Incoming message text: {
-
-
-
-  type: 11,
-
-
-
-  body: 'I was thinking about 6inches long and 3 inches wide'
-
-
-
-}
-
-
-
-👤 Contact ID: CZj67OBSzvUzpsExstqD
-
-
-
-👤 Contact: Maria Claflin
-
-
-
-📋 Contact custom fields (non-empty): {
-
-
-
-  "0": {
-
-
-
-    "id": "jd8YhvKsBi4aGqjqOEOv",
-
-
-
-    "value": "forearm"
-
-
-
-  },
-
-
-
-  "1": {
-
-
-
-    "id": "xAGtMfmbxtfCHdo2oyf7",
-
-
-
-    "value": "skateboard tattoo on forearm"
-
-
-
-  }
-
-
-
-}
-
-
-
-🤖 Raw OpenAI opener response: {
-
-
-
-  "language": "en",
-
-
-
-  "bubbles": [
-
-
-
-    "Got it — about 6x3 inches, nice size.",
-
-
-
-    "Where were you thinking of placing it?"
-
-
-
-  ],
-
-
-
-  "internal_notes": "Acknowledged size, asked for placement to continue intake.",
-
-
-
-  "meta": {
-
-
-
-    "aiPhase": "intake",
-
-
-
-    "leadTemperature": "warm",
-
-
-
-    "wantsDepositLink": false,
-
-
-
-    "depositPushedThisTurn": false,
-
-
-
-    "mentionDecoyOffered": false,
-
-
-
-    "consultMode": "online"
-
-
-
-  },
-
-
-
-  "field_updates": {
-
-
-
-    "size_of_tattoo": "6 inches long by 3 inches wide"
-
-
-
-  }
-
-
-
-}
-
-
-
-🧭 [PHASE] derived_phase snapshot {
-
-
-
   derived_phase: 'intake',
-
-
-
   canonical: {
-
-
-
-    tattooSummary: null,
-
-
-
+    tattooSummary: 'small forest scenery with clouds, sun, wolf, and trees',
     tattooPlacement: null,
-
-
-
-    tattooSize: '6 inches long by 3 inches wide',
-
-
-
-    timeline: null,
-
-
-
-    consultationType: null,
-
-
-
-    consultationTypeLocked: false,
-
-
-
-    depositLinkSent: false,
-
-
-
-    depositPaid: false,
-
-
-
-    holdAppointmentId: null
-
-
-
-  },
-
-
-
-  intents: {
-
-
-
-    reschedule_intent: false,
-
-
-
-    cancel_intent: false,
-
-
-
-    scheduling_intent: false,
-
-
-
-    slot_selection_intent: false,
-
-
-
-    deposit_intent: false,
-
-
-
-    consult_path_choice_intent: false,
-
-
-
-    artist_guided_size_intent: false,
-
-
-
-    process_or_price_question_intent: false,
-
-
-
-    translator_affirm_intent: false
-
-
-
-  },
-
-
-
-  selected_handler: 'ai',
-
-
-
-  routing_reason: 'ai_fallback',
-
-
-
-  intent_flags: []
-
-
-
-}
-
-
-
-🤖 AI Response Summary: {
-
-
-
-  bubblesCount: 2,
-
-
-
-  phase: 'intake',
-
-
-
-  handler: 'ai',
-
-
-
-  reason: 'ai_fallback',
-
-
-
-  fieldUpdatesKeys: [ 'size_of_tattoo' ]
-
-
-
-}
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-📤 Sent 2/2 bubbles to GHL conversation
-
-
-
-✅ Updated tattoo fields for contact CZj67OBSzvUzpsExstqD with { size_of_tattoo: '6 inches long by 3 inches wide' }
-
-
-
-✅ Persisted field_updates: [ 'size_of_tattoo' ]
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-
-
-
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-💬 GHL MESSAGE WEBHOOK HIT
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-📦 Webhook Payload (non-empty fields): {
-
-
-
-  "Tattoo Placement": "forearm",
-
-
-
-  "Tattoo Size": "6 inches long by 3 inches wide",
-
-
-
-  "Tattoo Summary": "skateboard tattoo on forearm",
-
-
-
-  "contact_id": "CZj67OBSzvUzpsExstqD",
-
-
-
-  "first_name": "Maria",
-
-
-
-  "last_name": "Claflin",
-
-
-
-  "full_name": "Maria Claflin",
-
-
-
-  "tags": "dm consultation request",
-
-
-
-  "country": "US",
-
-
-
-  "date_created": "2025-12-15T06:37:39.685Z",
-
-
-
-  "contact_type": "lead",
-
-
-
-  "location": {
-
-
-
-    "name": "Studio AZ Tattoo",
-
-
-
-    "address": "333 Washington Ave N STE 100",
-
-
-
-    "city": "Minneapolis",
-
-
-
-    "state": "Minnesota",
-
-
-
-    "country": "US",
-
-
-
-    "postalCode": "55401",
-
-
-
-    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-
-
-
-    "id": "mUemx2jG4wly4kJWBkI4"
-
-
-
-  },
-
-
-
-  "message": {
-
-
-
-    "type": 11,
-
-
-
-    "body": "My forearm"
-
-
-
-  },
-
-
-
-  "workflow": {
-
-
-
-    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-
-
-
-    "name": "Testing Ai Bot"
-
-
-
-  },
-
-
-
-  "contact": {
-
-
-
-    "attributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    },
-
-
-
-    "lastAttributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    }
-
-
-
-  },
-
-
-
-  "customData": {
-
-
-
-    "contactId": "CZj67OBSzvUzpsExstqD",
-
-
-
-    "messageBody": "My forearm"
-
-
-
-  }
-
-
-
-}
-
-
-
-📩 Incoming message text: { type: 11, body: 'My forearm' }
-
-
-
-👤 Contact ID: CZj67OBSzvUzpsExstqD
-
-
-
-👤 Contact: Maria Claflin
-
-
-
-📋 Contact custom fields (non-empty): {
-
-
-
-  "0": {
-
-
-
-    "id": "jd8YhvKsBi4aGqjqOEOv",
-
-
-
-    "value": "forearm"
-
-
-
-  },
-
-
-
-  "1": {
-
-
-
-    "id": "xAGtMfmbxtfCHdo2oyf7",
-
-
-
-    "value": "skateboard tattoo on forearm"
-
-
-
-  },
-
-
-
-  "2": {
-
-
-
-    "id": "w3MpAE5UMMS9pjr3BJmi",
-
-
-
-    "value": "6 inches long by 3 inches wide"
-
-
-
-  }
-
-
-
-}
-
-
-
-🤖 Raw OpenAI opener response: {
-
-
-
-  "language": "en",
-
-
-
-  "bubbles": [
-
-
-
-    "Got it — forearm placement works great.",
-
-
-
-    "What kind of design are you thinking for your piece?"
-
-
-
-  ],
-
-
-
-  "internal_notes": "Acknowledged placement, moving to clarify tattoo idea.",
-
-
-
-  "meta": {
-
-
-
-    "aiPhase": "intake",
-
-
-
-    "leadTemperature": "warm",
-
-
-
-    "wantsDepositLink": false,
-
-
-
-    "depositPushedThisTurn": false,
-
-
-
-    "mentionDecoyOffered": false,
-
-
-
-    "consultMode": "online"
-
-
-
-  },
-
-
-
-  "field_updates": {
-
-
-
-    "tattoo_placement": "forearm"
-
-
-
-  }
-
-
-
-}
-
-
-
-🧭 [PHASE] derived_phase snapshot {
-
-
-
-  derived_phase: 'intake',
-
-
-
-  canonical: {
-
-
-
-    tattooSummary: null,
-
-
-
-    tattooPlacement: 'forearm',
-
-
-
     tattooSize: null,
-
-
-
     timeline: null,
-
-
-
     consultationType: null,
-
-
-
     consultationTypeLocked: false,
-
-
-
     depositLinkSent: false,
-
-
-
     depositPaid: false,
-
-
-
     holdAppointmentId: null
-
-
-
   },
-
-
-
   intents: {
-
-
-
     reschedule_intent: false,
-
-
-
     cancel_intent: false,
-
-
-
     scheduling_intent: false,
-
-
-
     slot_selection_intent: false,
-
-
-
     deposit_intent: false,
-
-
-
     consult_path_choice_intent: false,
-
-
-
     artist_guided_size_intent: false,
-
-
-
     process_or_price_question_intent: false,
-
-
-
     translator_affirm_intent: false
-
-
-
   },
-
-
-
   selected_handler: 'ai',
-
-
-
   routing_reason: 'ai_fallback',
-
-
-
   intent_flags: []
-
-
-
 }
-
-
-
+⏱️ [TIMING] Total handleInboundMessage took 5008ms
 🤖 AI Response Summary: {
-
-
-
   bubblesCount: 2,
-
-
-
   phase: 'intake',
-
-
-
   handler: 'ai',
-
-
-
   reason: 'ai_fallback',
-
-
-
-  fieldUpdatesKeys: [ 'tattoo_placement' ]
-
-
-
+  fieldUpdatesKeys: [ 'tattoo_summary' ]
 }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'CZj67OBSzvUzpsExstqD', isDm: false, hasPhone: false }
-
-
-
-📨 GHL conversations API response (fallback): { status: 201, contactId: 'CZj67OBSzvUzpsExstqD', type: 'FB' }
-
-
-
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Sick idea — that small forest scene with clouds, sun, wolf, and trees sounds fire.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Where were you thinking to get it done?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
 📤 Sent 2/2 bubbles to GHL conversation
-
-
-
-✅ Updated tattoo fields for contact CZj67OBSzvUzpsExstqD with { tattoo_placement: 'forearm' }
-
-
-
-✅ Persisted field_updates: [ 'tattoo_placement' ]
-
-
-
+✅ Updated tattoo fields for contact q0fYZsGjvzWjnJMu0EEk with {
+  tattoo_summary: 'small forest scenery with clouds, sun, wolf, and trees'
+}
+✅ Persisted field_updates: [ 'tattoo_summary' ]
+💬 ════════════════════════════════════════════════════════
+     ==> Detected service running on port 10000
+     ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "Tattoo Summary": "small forest scenery with clouds, sun, wolf, and trees",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "chest area incorporated into current tattoo that is Roman numerals of birth year across my right chest"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "chest area incorporated into current tattoo that is Roman numerals of birth year across my right chest"
+  }
+}
+📩 Incoming message text: chest area incorporated into current tattoo that is Roman numerals of birth year across my right chest
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "tattoo_summary": "small forest scenery with clouds, sun, wolf, and trees"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "small forest scenery with clouds, sun, wolf, and trees",
+  "tattoo_summary": "small forest scenery with clouds, sun, wolf, and trees"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'chest area incorporated into current tattoo that is Roman numerals of birth year across my right chest',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'small forest scenery with clouds, sun, wolf, and trees',
+  tattooPlacement: null,
+  tattooSize: null,
+  timeline: null,
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'intake'
+}
+🎯 [INTENTS] No specific intents detected for: chest area incorporated into current tattoo that is Roman numerals of birth year across my right chest
+🤖 Raw OpenAI opener response: {
+  "language": "en",
+  "bubbles": [
+    "Got it — that chest piece blending with your Roman numerals sounds tight.",
+    "What size were you thinking for the new part?"
+  ],
+  "internal_notes": "Acknowledged tattoo placement and summary; asking for size to continue intake.",
+  "meta": {
+    "aiPhase": "intake",
+    "leadTemperature": "warm",
+    "wantsDepositLink": false,
+    "depositPushedThisTurn": false,
+    "mentionDecoyOffered": false,
+    "consultMode": "online"
+  },
+  "field_updates": {
+    "tattoo_placement": "right chest",
+    "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+  }
+}
+⏱️ [TIMING] AI call took 3523ms
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'discovery',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: null,
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'ai',
+  routing_reason: 'ai_fallback',
+  intent_flags: []
+}
+⏱️ [TIMING] Total handleInboundMessage took 3889ms
+🤖 AI Response Summary: {
+  bubblesCount: 2,
+  phase: 'discovery',
+  handler: 'ai',
+  reason: 'ai_fallback',
+  fieldUpdatesKeys: [ 'tattoo_placement', 'tattoo_summary' ]
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Got it — that chest piece blending with your Roman numerals sounds tight.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'What size were you thinking for the new part?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 2/2 bubbles to GHL conversation
+✅ Updated tattoo fields for contact q0fYZsGjvzWjnJMu0EEk with {
+  tattoo_placement: 'right chest',
+  tattoo_summary: 'chest piece incorporated into existing Roman numerals tattoo'
+}
+✅ Persisted field_updates: [ 'tattoo_placement', 'tattoo_summary' ]
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "Tattoo Placement": "right chest",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "About 7” x 4”"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "About 7” x 4”"
+  }
+}
+📩 Incoming message text: About 7” x 4”
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "tattoo_placement": "right chest",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "tattoo_placement": "right chest",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'About 7” x 4”',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: null,
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'discovery'
+}
+🎯 [INTENTS] No specific intents detected for: About 7” x 4”
+🤖 Raw OpenAI opener response: {
+  "language": "en",
+  "bubbles": [
+    "Got it — that chest piece incorporating your Roman numerals sounds solid.",
+    "About 7 by 4 inches is a good size to work with. When were you thinking of getting it done?"
+  ],
+  "internal_notes": "Acknowledged tattoo summary and size, moved to ask about timing to qualify lead.",
+  "meta": {
+    "aiPhase": "qualification",
+    "leadTemperature": "warm",
+    "wantsDepositLink": false,
+    "depositPushedThisTurn": false,
+    "mentionDecoyOffered": false,
+    "consultMode": "online"
+  },
+  "field_updates": {
+    "tattoo_size": "7 x 4 inches"
+  }
+}
+⏱️ [TIMING] AI call took 3327ms
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'qualification',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: '7 x 4 inches',
+    timeline: null,
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'ai',
+  routing_reason: 'ai_fallback',
+  intent_flags: []
+}
+⏱️ [TIMING] Total handleInboundMessage took 3535ms
+🤖 AI Response Summary: {
+  bubblesCount: 2,
+  phase: 'qualification',
+  handler: 'ai',
+  reason: 'ai_fallback',
+  fieldUpdatesKeys: [ 'tattoo_size' ]
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Got it — that chest piece incorporating your Roman numerals sounds solid.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'About 7 by 4 inches is a good size to work with. When were you thinking of getting it done?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 2/2 bubbles to GHL conversation
+✅ Updated tattoo fields for contact q0fYZsGjvzWjnJMu0EEk with { tattoo_size: '7 x 4 inches' }
+✅ Persisted field_updates: [ 'tattoo_size' ]
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "Tattoo Placement": "right chest",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "This month"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "This month"
+  }
+}
+📩 Incoming message text: This month
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "tattoo_placement": "right chest",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "kxtfzydeskuys5lltksr": "7 x 4 inches",
+  "tattoo_placement": "right chest",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'This month',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: null,
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'discovery'
+}
+🎯 [INTENTS] No specific intents detected for: This month
+🤖 Raw OpenAI opener response: {
+  "language": "en",
+  "bubbles": [
+    "Perfect, this month works.",
+    "The next step is a quick 15–20 minute consultation with the artist to fully understand your design.",
+    "Would you prefer a video call or to go back and forth in messages?"
+  ],
+  "internal_notes": "Acknowledged timing and introduced consult step, asked for consult mode preference.",
+  "meta": {
+    "aiPhase": "qualification",
+    "leadTemperature": "warm",
+    "wantsDepositLink": false,
+    "depositPushedThisTurn": false,
+    "mentionDecoyOffered": false,
+    "consultMode": "online"
+  },
+  "field_updates": {
+    "how_soon_is_client_deciding": "this month"
+  }
+}
+⏱️ [TIMING] AI call took 3072ms
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'consult_path',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: 'this month',
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'ai',
+  routing_reason: 'ai_fallback',
+  intent_flags: []
+}
+⏱️ [TIMING] Total handleInboundMessage took 3484ms
+🤖 AI Response Summary: {
+  bubblesCount: 3,
+  phase: 'consult_path',
+  handler: 'ai',
+  reason: 'ai_fallback',
+  fieldUpdatesKeys: [ 'how_soon_is_client_deciding' ]
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Perfect, this month works.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'The next step is a quick 15–20 minute consultation with the artist to fully understand your design.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'Would you prefer a video call or to go back and forth in messages?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 3/3 bubbles to GHL conversation
+✅ Updated tattoo fields for contact q0fYZsGjvzWjnJMu0EEk with { how_soon_is_client_deciding: 'this month' }
+✅ Persisted field_updates: [ 'how_soon_is_client_deciding' ]
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "Tattoo Placement": "right chest",
+  "How Soon Is Client Deciding?": "this month",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "A video call!"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "A video call!"
+  }
+}
+📩 Incoming message text: A video call!
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "tattoo_placement": "right chest",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "kxtfzydeskuys5lltksr": "7 x 4 inches",
+  "ra4nk80wma8eqklcfxst": "this month",
+  "tattoo_placement": "right chest",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'A video call!',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: 'this month',
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'consult_path'
+}
+🎯 [INTENTS] Detected intents: [ 'consult_path_choice_intent' ] from message: A video call!
+📝 [CONSULTATION_TYPE] Setting consultation_type="appointment" (translator needed) for contact q0fYZsGjvzWjnJMu0EEk (detected from: "A video call!")
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: false, hasPhone: false }
+📨 GHL conversations API response (fallback): { status: 201, contactId: 'q0fYZsGjvzWjnJMu0EEk', type: 'FB' }
+🔄 [PIPELINE] Syncing opportunity stage for contact q0fYZsGjvzWjnJMu0EEk: {
+  currentStage: '(none)',
+  targetStage: 'INTAKE',
+  context: {
+    aiPhase: 'consult_support',
+    depositLinkSent: false,
+    depositPaid: false,
+    consultType: null,
+    hasUpcomingTattoo: false,
+    tattooCompleted: false,
+    lost: false
+  }
+}
+❌ Error syncing opportunity stage after consult mode = appointment: Request failed with status code 422
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'consult_path',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: 'this month',
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: true,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'consult_path',
+  routing_reason: 'consult_path_choice_intent',
+  intent_flags: [ 'consult_path_choice_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 1573ms
+🤖 AI Response Summary: {
+  bubblesCount: 1,
+  phase: 'consult_path',
+  handler: 'consult_path',
+  reason: 'consult_path_choice_intent',
+  fieldUpdatesKeys: []
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?",
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 1/1 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "consultation_type": "appointment",
+  "language_barrier_explained": "Yes",
+  "Tattoo Placement": "right chest",
+  "translator_needed": "Yes",
+  "How Soon Is Client Deciding?": "this month",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "Yes"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "Yes"
+  }
+}
+📩 Incoming message text: Yes
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "kxtfzydeskuys5lltksr": "7 x 4 inches",
+  "ra4nk80wma8eqklcfxst": "this month",
+  "gm2pvo90ynbdhekv5g64": "appointment",
+  "ikiju6c8apzchvhsyfwr": "Yes",
+  "qvuq2wdv3drhbkhts6td": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Yes',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: 'this month',
+  consultationType: 'appointment',
+  depositPaid: false,
+  derivedPhase: 'discovery'
+}
+🎯 [INTENTS] Detected intents: [ 'scheduling_intent', 'translator_affirm_intent' ] from message: Yes
+📅 [SLOT_GENERATION] Generating synthetic slots (preferredDay: none, preferredTimeWindow: none)
+📅 [SLOT_GENERATION] Generated 2 synthetic slots
+✅ Found 0 appointments for contact q0fYZsGjvzWjnJMu0EEk
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'discovery',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: 'this month',
+    consultationType: 'appointment',
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: true,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: true
+  },
+  selected_handler: 'deterministic',
+  routing_reason: 'scheduling_intent',
+  intent_flags: [ 'scheduling_intent', 'translator_affirm_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 1024ms
+🤖 AI Response Summary: {
+  bubblesCount: 1,
+  phase: 'discovery',
+  handler: 'deterministic',
+  reason: 'scheduling_intent',
+  fieldUpdatesKeys: [ 'consult_explained' ]
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'I pulled a few openings for a consult with an artist:\n' +
+    '1) Tuesday, Dec 16 at 5pm\n' +
+    '2) Wednesday, Dec 17 at 5pm\n' +
+    '\n' +
+    'Which works best?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 1/1 bubbles to GHL conversation
+updateTattooFields: no mapped fields to update for contact q0fYZsGjvzWjnJMu0EEk
+✅ Persisted field_updates: [ 'consult_explained' ]
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "language_barrier_explained": "Yes",
+  "Tattoo Placement": "right chest",
+  "translator_needed": "Yes",
+  "How Soon Is Client Deciding?": "this month",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "Tuesday works"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "Tuesday works"
+  }
+}
+📩 Incoming message text: Tuesday works
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "kxtfzydeskuys5lltksr": "7 x 4 inches",
+  "ra4nk80wma8eqklcfxst": "this month",
+  "gm2pvo90ynbdhekv5g64": "appointment",
+  "ikiju6c8apzchvhsyfwr": "Yes",
+  "qvuq2wdv3drhbkhts6td": "Yes",
+  "eah8fdi5pwfxsqqfd45a": "Yes",
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Tuesday works',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: 'this month',
+  consultationType: 'appointment',
+  depositPaid: false,
+  derivedPhase: 'scheduling'
+}
+🎯 [INTENTS] Detected intents: [ 'slot_selection_intent' ] from message: Tuesday works
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'scheduling',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: 'this month',
+    consultationType: 'appointment',
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: true,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'deterministic',
+  routing_reason: 'slot_selection',
+  intent_flags: [ 'slot_selection_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 196ms
+🤖 AI Response Summary: {
+  bubblesCount: 1,
+  phase: 'scheduling',
+  handler: 'deterministic',
+  reason: 'slot_selection',
+  fieldUpdatesKeys: []
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'I can hold a spot—what day(s) this week and what time window works best (morning / afternoon / evening)?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 1/1 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "language_barrier_explained": "Yes",
+  "Tattoo Placement": "right chest",
+  "translator_needed": "Yes",
+  "How Soon Is Client Deciding?": "this month",
+  "Tattoo Summary": "chest piece incorporated into existing Roman numerals tattoo",
+  "contact_id": "q0fYZsGjvzWjnJMu0EEk",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-15T19:06:01.210Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "Tuesday evening"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "q0fYZsGjvzWjnJMu0EEk",
+    "messageBody": "Tuesday evening"
+  }
+}
+📩 Incoming message text: Tuesday evening
+👤 Contact ID: q0fYZsGjvzWjnJMu0EEk
+📋 Webhook custom fields extracted: {
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "xagtmfmbxtfchdo2oyf7": "chest piece incorporated into existing Roman numerals tattoo",
+  "jd8yhvksbi4agqjqoeov": "right chest",
+  "kxtfzydeskuys5lltksr": "7 x 4 inches",
+  "ra4nk80wma8eqklcfxst": "this month",
+  "gm2pvo90ynbdhekv5g64": "appointment",
+  "ikiju6c8apzchvhsyfwr": "Yes",
+  "qvuq2wdv3drhbkhts6td": "Yes",
+  "eah8fdi5pwfxsqqfd45a": "Yes",
+  "times_sent": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "right chest",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "this month",
+  "tattoo_summary": "chest piece incorporated into existing Roman numerals tattoo"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Tuesday evening',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+  tattooPlacement: 'right chest',
+  tattooSize: null,
+  timeline: 'this month',
+  consultationType: 'appointment',
+  depositPaid: false,
+  derivedPhase: 'scheduling'
+}
+🎯 [INTENTS] Detected intents: [ 'slot_selection_intent' ] from message: Tuesday evening
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'scheduling',
+  canonical: {
+    tattooSummary: 'chest piece incorporated into existing Roman numerals tattoo',
+    tattooPlacement: 'right chest',
+    tattooSize: null,
+    timeline: 'this month',
+    consultationType: 'appointment',
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: true,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'deterministic',
+  routing_reason: 'slot_selection',
+  intent_flags: [ 'slot_selection_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 202ms
+🤖 AI Response Summary: {
+  bubblesCount: 1,
+  phase: 'scheduling',
+  handler: 'deterministic',
+  reason: 'slot_selection',
+  fieldUpdatesKeys: []
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: 'q0fYZsGjvzWjnJMu0EEk', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation bDoAql1XchsZkPPLQfTC with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'bDoAql1XchsZkPPLQfTC',
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  message: 'I can hold a spot—what day(s) this week and what time window works best (morning / afternoon / evening)?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: 'q0fYZsGjvzWjnJMu0EEk',
+  conversationId: 'bDoAql1XchsZkPPLQfTC'
+}
+📤 Sent 1/1 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
 💬 ════════════════════════════════════════════════════════

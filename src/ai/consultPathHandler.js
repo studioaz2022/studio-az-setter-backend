@@ -86,7 +86,8 @@ async function handlePathChoice({
       );
     }
 
-    return { choice: "translator_question", responseBody };
+    // Return WITHOUT responseBody since message was already sent directly
+    return { choice: "translator_question", messageSent: true };
   }
 
   if (choice === "message") {
@@ -97,15 +98,15 @@ async function handlePathChoice({
       translator_needed: false,
     });
 
-    let responseBody = null;
     if (!applyOnly) {
-      responseBody =
-        "Sounds good — we'll keep your consult right here in messages so you can share photos and notes at your own pace. I'll make sure the artist sees this thread.";
+      // Enhanced message for English leads: emphasize flexibility and artist joining after deposit
+      const responseBody =
+        "Perfect — we'll handle your consult right here in messages so you can share photos and notes at your own pace. Once the deposit's locked in, I'll add the artist to this thread so you can go back and forth directly.";
       try {
         await createTaskForContact(contactId, {
           title: "Message consultation (keep in thread)",
           description:
-            "Lead chose to continue consult in messages. Keep thread open; review photos/notes shared here.",
+            "Lead chose to continue consult in messages. Keep thread open; review photos/notes shared here. Add artist after deposit is paid.",
           status: "open",
         });
       } catch (err) {
@@ -117,6 +118,7 @@ async function handlePathChoice({
         body: responseBody,
         channelContext,
       });
+      console.log("📝 [CONSULTATION_TYPE] Sent message-path confirmation directly");
     } else {
       console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for message-path choice");
     }
@@ -137,7 +139,8 @@ async function handlePathChoice({
       }
     }
 
-    return responseBody ? { choice: "message", responseBody } : { choice: "message" };
+    // Return WITHOUT responseBody since message was already sent directly
+    return { choice: "message", messageSent: !applyOnly };
   }
 
   if (choice === "translator") {
@@ -150,9 +153,8 @@ async function handlePathChoice({
       translator_explained: true,
     });
 
-    let responseBody = null;
     if (!applyOnly) {
-      responseBody =
+      const responseBody =
         "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?";
 
       await sendConversationMessage({
@@ -160,6 +162,7 @@ async function handlePathChoice({
         body: responseBody,
         channelContext,
       });
+      console.log("📝 [CONSULTATION_TYPE] Sent translator explanation message directly");
     } else {
       console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for translator-path choice");
     }
@@ -184,8 +187,8 @@ async function handlePathChoice({
     }
 
     // Do NOT generate times here; wait until deposit flow is ready
-
-    return responseBody ? { choice: "translator", responseBody } : { choice: "translator" };
+    // Return WITHOUT responseBody since message was already sent directly
+    return { choice: "translator", messageSent: !applyOnly };
   }
 
   return null;

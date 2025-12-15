@@ -8,10 +8,11 @@ const {
   parseTimeSelection,
   createConsultAppointment,
 } = require("./bookingController");
-const { updateSystemFields, sendConversationMessage } = require("../../ghlClient");
+const { updateSystemFields, sendConversationMessage, getContact } = require("../../ghlClient");
 const { createDepositLinkForContact } = require("../payments/squareClient");
 const { DEPOSIT_CONFIG } = require("../config/constants");
 const { updateAppointmentStatus } = require("../clients/ghlCalendarClient");
+const { parseJsonField } = require("./phaseContract");
 
 async function persistLastSentSlots(contactId, slots = []) {
   if (!contactId || !slots || slots.length === 0) return;
@@ -126,9 +127,28 @@ async function buildDeterministicResponse({
 
   // Slot selection intent: confirm slot, create hold, send deposit link
   if (intents.slot_selection_intent) {
+    // === Slot Recovery: fetch from GHL if missing in webhook ===
+    let recoveredSlots = lastSentSlots;
+    if (recoveredSlots.length === 0 && canonicalState.timesSent && contactId) {
+      console.log("🔄 [SLOT RECOVERY] lastSentSlots empty but timesSent=true, fetching from GHL...");
+      try {
+        const freshContact = await getContact(contactId);
+        const cf = freshContact?.customField || freshContact?.customFields || {};
+        const rawSlots = cf.last_sent_slots || null;
+        recoveredSlots = parseJsonField(rawSlots, []);
+        if (recoveredSlots.length > 0) {
+          console.log(`✅ [SLOT RECOVERY] Recovered ${recoveredSlots.length} slots from GHL`);
+        } else {
+          console.log("⚠️ [SLOT RECOVERY] No slots found in GHL contact either");
+        }
+      } catch (err) {
+        console.error("❌ [SLOT RECOVERY] Failed to fetch contact:", err.message || err);
+      }
+    }
+
     const chosenSlot =
-      parseTimeSelection(messageText, lastSentSlots) ||
-      (lastSentSlots.length === 1 ? lastSentSlots[0] : null);
+      parseTimeSelection(messageText, recoveredSlots) ||
+      (recoveredSlots.length === 1 ? recoveredSlots[0] : null);
 
     if (!chosenSlot || !contactId) {
       // Re-offer structured availability if we cannot parse or have no contact
