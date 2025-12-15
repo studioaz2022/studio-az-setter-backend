@@ -1,6 +1,6 @@
 const { getContact, updateSystemFields } = require("../../ghlClient");
 const {
-  createOpportunity,
+  upsertOpportunity,
   updateOpportunityStage,
   updateOpportunityValue,
   getOpportunitiesByContact,
@@ -85,15 +85,15 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
         ? `${contactRecord.firstName || contactRecord.first_name} Tattoo`
         : "Tattoo Opportunity";
 
-    const created = await createOpportunity({
+    const upserted = await upsertOpportunity({
       contactId,
       pipelineStageId: stageId,
       name,
     });
 
-    const createdOpp = created?.opportunity || created;
+    const createdOpp = upserted?.opportunity || upserted;
     opportunityId = createdOpp?.id || createdOpp?._id;
-    opportunityStage = stageKey;
+    opportunityStage = getStageKeyFromId(createdOpp?.pipelineStageId) || stageKey;
   }
 
   if (opportunityId) {
@@ -140,26 +140,60 @@ async function transitionToStage(contactId, stageKey, options = {}) {
     console.log(`📊 [PIPELINE] Transitioning opportunity ${opportunityId}: ${currentStage || "(none)"} → ${stageKey}`);
   }
 
-  await updateOpportunityStage({
-    opportunityId,
-    pipelineStageId: stageId,
-    status,
-  });
+  let updatedStageKey = stageKey;
+  let updatedOpportunityId = opportunityId;
 
-  if (typeof monetaryValue === "number") {
-    await updateOpportunityValue({ opportunityId, monetaryValue });
+  try {
+    const name =
+      contact?.firstName || contact?.first_name
+        ? `${contact.firstName || contact.first_name} Tattoo`
+        : "Tattoo Opportunity";
+
+    const upserted = await upsertOpportunity({
+      contactId,
+      pipelineStageId: stageId,
+      status,
+      monetaryValue: typeof monetaryValue === "number" ? monetaryValue : undefined,
+      name,
+    });
+
+    const opp = upserted?.opportunity || upserted;
+    updatedOpportunityId = opp?.id || opp?._id || updatedOpportunityId;
+    const returnedStageKey = getStageKeyFromId(opp?.pipelineStageId);
+    if (returnedStageKey) {
+      updatedStageKey = returnedStageKey;
+    }
+  } catch (err) {
+    console.error(
+      `❌ [PIPELINE] upsertOpportunity failed for contact ${contactId}:`,
+      err.message || err
+    );
+
+    if (!opportunityId) {
+      throw err;
+    }
+
+    await updateOpportunityStage({
+      opportunityId,
+      pipelineStageId: stageId,
+      status,
+    });
+
+    if (typeof monetaryValue === "number") {
+      await updateOpportunityValue({ opportunityId, monetaryValue });
+    }
   }
 
   if (note) {
-    await addOpportunityNote({ opportunityId, content: note });
+    await addOpportunityNote({ opportunityId: updatedOpportunityId, content: note });
   }
 
   await updateSystemFields(contactId, {
-    opportunity_stage: stageKey,
-    opportunity_id: opportunityId,
+    opportunity_stage: updatedStageKey,
+    opportunity_id: updatedOpportunityId,
   });
 
-  return { opportunityId, stageKey };
+  return { opportunityId: updatedOpportunityId, stageKey: updatedStageKey };
 }
 
 function determineStageFromContext({

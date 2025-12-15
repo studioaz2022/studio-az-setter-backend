@@ -63,6 +63,51 @@ async function createOpportunity({
   return response.data;
 }
 
+async function upsertOpportunity({
+  contactId,
+  name,
+  pipelineId = PIPELINE_ID,
+  pipelineStageId,
+  status = "open",
+  monetaryValue = 0,
+  tags = [],
+  source = "AI Setter",
+  assignedTo = null,
+  assignedUserId = null,
+}) {
+  if (!contactId) throw new Error("upsertOpportunity requires contactId");
+  if (!pipelineId) throw new Error("upsertOpportunity requires pipelineId");
+  if (!pipelineStageId) throw new Error("upsertOpportunity requires pipelineStageId");
+  if (!GHL_LOCATION_ID) throw new Error("GHL_LOCATION_ID is missing");
+
+  const payload = {
+    locationId: GHL_LOCATION_ID,
+    pipelineId,
+    pipelineStageId,
+    contactId,
+    name: name || "Tattoo Opportunity",
+    status,
+    monetaryValue,
+    tags,
+    source,
+  };
+
+  // GHL API expects "assignedTo"; accept assignedUserId for backwards compatibility
+  const finalAssignee = assignedTo || assignedUserId;
+  if (finalAssignee) {
+    payload.assignedTo = finalAssignee;
+  }
+
+  const url = `${GHL_BASE_URL}/opportunities/upsert`;
+
+  const response = await axios.post(url, payload, {
+    headers: ghlHeaders(),
+    maxBodyLength: Infinity,
+  });
+
+  return response.data;
+}
+
 async function updateOpportunity(opportunityId, body = {}) {
   if (!opportunityId) throw new Error("updateOpportunity requires opportunityId");
 
@@ -163,4 +208,5 @@ module.exports = {
   getOpportunity,
   getOpportunitiesByContact,
   searchOpportunities,
+  upsertOpportunity,
 };
