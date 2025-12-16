@@ -76,6 +76,30 @@ function extractTimePreferences(messageText) {
   return { preferredWeek, preferredDay, preferredTimeWindow, preferredMonth, preferredYear };
 }
 
+function monthIndexFromText(text) {
+  const t = String(text || "").toLowerCase();
+  const m = t.match(
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i
+  );
+  if (!m) return null;
+  const token = m[1].toLowerCase().slice(0, 3);
+  const mapped = {
+    jan: 0,
+    feb: 1,
+    mar: 2,
+    apr: 3,
+    may: 4,
+    jun: 5,
+    jul: 6,
+    aug: 7,
+    sep: 8,
+    oct: 9,
+    nov: 10,
+    dec: 11,
+  }[token];
+  return mapped === undefined ? null : mapped;
+}
+
 function shortSha1(value) {
   try {
     return crypto.createHash("sha1").update(String(value)).digest("hex").slice(0, 12);
@@ -163,6 +187,17 @@ async function buildDeterministicResponse({
   const offerSlots = async (internalNotes = "deterministic_scheduling_slots", userMessage = "") => {
     // Extract time preferences from user message
     const timePrefs = extractTimePreferences(userMessage || messageText);
+    // If user didn't specify a month this turn, fall back to stored timeline (e.g., "January")
+    // This matches lead expectation when they already gave a month earlier.
+    if (
+      (timePrefs.preferredMonth === null || timePrefs.preferredMonth === undefined) &&
+      canonicalState?.timeline
+    ) {
+      const fromTimeline = monthIndexFromText(canonicalState.timeline);
+      if (fromTimeline !== null) {
+        timePrefs.preferredMonth = fromTimeline;
+      }
+    }
     console.log(`📅 [SLOT OFFER] Time preferences extracted:`, timePrefs);
 
     let slots = [];
@@ -442,8 +477,30 @@ async function buildDeterministicResponse({
       };
     } catch (err) {
       console.error("❌ Deterministic slot selection failed:", err.message || err);
+      // If booking fails (e.g., calendar/team config), re-show the same options instead of
+      // asking a broad availability question, so the lead can pick again.
+      const slotsToShow = Array.isArray(recoveredSlots) ? recoveredSlots.slice(0, 4) : [];
+      const lines = slotsToShow.map((slot, idx) => {
+        const label = `${idx + 1})`;
+        const display = slot.displayText
+          ? slot.displayText
+          : formatSlotDisplay
+          ? formatSlotDisplay(new Date(slot.startTime))
+          : slot.startTime;
+        return `${label} ${display}`;
+      });
       const fallback =
-        "I can hold a spot—what day(s) this week and what time window works best (morning / afternoon / evening)?";
+        lines.length > 0
+          ? `I ran into a calendar issue while trying to lock that time.\n\nHere are the openings again:\n${lines.join(
+              "\n"
+            )}\n\nWhich works best?`
+          : "I ran into a calendar issue while trying to lock that time. What day(s) this week and what time window works best (morning / afternoon / evening)?";
+
+      if (lines.length > 0) {
+        try {
+          await persistLastSentSlots(contactId, slotsToShow);
+        } catch {}
+      }
       return {
         language: "en",
         bubbles: [fallback],

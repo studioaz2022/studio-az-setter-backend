@@ -1154,20 +1154,50 @@ async function createConsultAppointment({
     // If deposit already paid, create as CONFIRMED. Otherwise NEW (hold).
     const appointmentStatus = depositPaid ? APPOINTMENT_STATUS.CONFIRMED : APPOINTMENT_STATUS.NEW;
 
-    // Create appointment
-    const appointment = await createAppointment({
-      calendarId,
-      contactId,
-      startTime,
-      endTime,
-      title,
-      description,
-      appointmentStatus,
-      assignedUserId,
-      address,
-      meetingLocationType,
-      meetingLocationId,
-    });
+    // Create appointment (retry without assignedUserId if GHL rejects calendar team membership)
+    let appointment;
+    try {
+      appointment = await createAppointment({
+        calendarId,
+        contactId,
+        startTime,
+        endTime,
+        title,
+        description,
+        appointmentStatus,
+        assignedUserId,
+        address,
+        meetingLocationType,
+        meetingLocationId,
+      });
+    } catch (err) {
+      const msg = err?.response?.data?.message ?? err?.response?.data ?? err?.message ?? "";
+      const asText = typeof msg === "string" ? msg : JSON.stringify(msg);
+      const calendarTeamError =
+        /user id not part of calendar team/i.test(asText) ||
+        /not part of calendar team/i.test(asText);
+
+      if (assignedUserId && calendarTeamError) {
+        console.warn(
+          `⚠️ GHL rejected assignedUserId (${assignedUserId}) for calendar ${calendarId}; retrying createAppointment without assignedUserId`
+        );
+        appointment = await createAppointment({
+          calendarId,
+          contactId,
+          startTime,
+          endTime,
+          title,
+          description,
+          appointmentStatus,
+          assignedUserId: null,
+          address,
+          meetingLocationType,
+          meetingLocationId,
+        });
+      } else {
+        throw err;
+      }
+    }
 
     let translatorAppointment = null;
 

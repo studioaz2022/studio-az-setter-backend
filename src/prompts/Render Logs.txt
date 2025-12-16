@@ -1,12 +1,12 @@
 💬 GHL MESSAGE WEBHOOK HIT
 💬 ════════════════════════════════════════════════════════
 📦 Webhook Payload (non-empty fields): {
-  "contact_id": "OdDJ3aIPJxRCt63ViawC",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
   "first_name": "Leonel",
   "last_name": "Chavez",
   "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
-  "date_created": "2025-12-16T00:29:54.300Z",
+  "date_created": "2025-12-16T01:04:47.559Z",
   "contact_type": "lead",
   "location": {
     "name": "Studio AZ Tattoo",
@@ -55,18 +55,18 @@
     }
   },
   "customData": {
-    "contactId": "OdDJ3aIPJxRCt63ViawC",
+    "contactId": "2hmCxUngp0dlFq2IovW8",
     "messageBody": "How can I make an appt for a tattoo?"
   }
 }
 📩 Incoming message text: How can I make an appt for a tattoo?
-👤 Contact ID: OdDJ3aIPJxRCt63ViawC
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
 📋 Webhook custom fields extracted: {}
 👤 Contact: Leonel Chavez
 📋 Contact custom fields (merged): {}
 🧠 [AI CONTEXT] Processing message: {
   messageText: 'How can I make an appt for a tattoo?',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   contactName: 'Leonel Chavez',
   consultExplained: undefined
 }
@@ -84,9 +84,9 @@
   "language": "en",
   "bubbles": [
     "Leonel, what kind of piece are you thinking?",
-    "Where on your body were you wanting to get it?"
+    "Where on your body were you wanting it?"
   ],
-  "internal_notes": "Opening intake message to gather tattoo idea and placement.",
+  "internal_notes": "Starting intake phase by gathering basic tattoo idea and placement.",
   "meta": {
     "aiPhase": "intake",
     "leadTemperature": "warm",
@@ -97,7 +97,7 @@
   },
   "field_updates": {}
 }
-⏱️ [TIMING] AI call took 3506ms
+⏱️ [TIMING] AI call took 4670ms
 🧭 [PHASE] derived_phase snapshot {
   derived_phase: 'intake',
   canonical: {
@@ -126,7 +126,7 @@
   routing_reason: 'ai_fallback',
   intent_flags: []
 }
-⏱️ [TIMING] Total handleInboundMessage took 3511ms
+⏱️ [TIMING] Total handleInboundMessage took 4673ms
 🤖 AI Response Summary: {
   bubblesCount: 2,
   phase: 'intake',
@@ -135,35 +135,35 @@
   fieldUpdatesKeys: []
 }
 📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   message: 'Leonel, what kind of piece are you thinking?',
   type: 'FB'
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  message: 'Where on your body were you wanting to get it?',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  message: 'Where on your body were you wanting it?',
   type: 'FB'
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
 📤 Sent 2/2 bubbles to GHL conversation
 ℹ️ No field_updates from AI to persist this turn
@@ -172,12 +172,12 @@
 💬 GHL MESSAGE WEBHOOK HIT
 💬 ════════════════════════════════════════════════════════
 📦 Webhook Payload (non-empty fields): {
-  "contact_id": "OdDJ3aIPJxRCt63ViawC",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
   "first_name": "Leonel",
   "last_name": "Chavez",
   "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
-  "date_created": "2025-12-16T00:29:54.300Z",
+  "date_created": "2025-12-16T01:04:47.559Z",
   "contact_type": "lead",
   "location": {
     "name": "Studio AZ Tattoo",
@@ -226,18 +226,18 @@
     }
   },
   "customData": {
-    "contactId": "OdDJ3aIPJxRCt63ViawC",
+    "contactId": "2hmCxUngp0dlFq2IovW8",
     "messageBody": "Im hoping for a lion with roses around it on my shoulder"
   }
 }
 📩 Incoming message text: Im hoping for a lion with roses around it on my shoulder
-👤 Contact ID: OdDJ3aIPJxRCt63ViawC
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
 📋 Webhook custom fields extracted: {}
 👤 Contact: Leonel Chavez
 📋 Contact custom fields (merged): {}
 🧠 [AI CONTEXT] Processing message: {
   messageText: 'Im hoping for a lion with roses around it on my shoulder',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   contactName: 'Leonel Chavez',
   consultExplained: undefined
 }
@@ -254,10 +254,10 @@
 🤖 Raw OpenAI opener response: {
   "language": "en",
   "bubbles": [
-    "Sick — that lion with roses on your shoulder is gonna look fire.",
+    "That lion with roses on your shoulder is gonna look fire.",
     "When were you thinking to get it done?"
   ],
-  "internal_notes": "Acknowledged tattoo idea and placement, asked about timing to continue intake phase.",
+  "internal_notes": "Acknowledged tattoo idea and placement, asked for timing to continue intake.",
   "meta": {
     "aiPhase": "intake",
     "leadTemperature": "warm",
@@ -272,7 +272,7 @@
     "first_tattoo": false
   }
 }
-⏱️ [TIMING] AI call took 4298ms
+⏱️ [TIMING] AI call took 3197ms
 🧭 [PHASE] derived_phase snapshot {
   derived_phase: 'discovery',
   canonical: {
@@ -301,7 +301,7 @@
   routing_reason: 'ai_fallback',
   intent_flags: []
 }
-⏱️ [TIMING] Total handleInboundMessage took 4557ms
+⏱️ [TIMING] Total handleInboundMessage took 3395ms
 🤖 AI Response Summary: {
   bubblesCount: 2,
   phase: 'discovery',
@@ -310,46 +310,44 @@
   fieldUpdatesKeys: [ 'tattoo_placement', 'tattoo_summary', 'first_tattoo' ]
 }
 📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  message: 'Sick — that lion with roses on your shoulder is gonna look fire.',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  message: 'That lion with roses on your shoulder is gonna look fire.',
   type: 'FB'
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   message: 'When were you thinking to get it done?',
   type: 'FB'
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
 📤 Sent 2/2 bubbles to GHL conversation
-✅ Updated tattoo fields for contact OdDJ3aIPJxRCt63ViawC with {
+✅ Updated tattoo fields for contact 2hmCxUngp0dlFq2IovW8 with {
   tattoo_placement: 'shoulder',
   tattoo_summary: 'lion with roses',
   first_tattoo: 'No'
 }
 ✅ Persisted field_updates: [ 'tattoo_placement', 'tattoo_summary', 'first_tattoo' ]
 💬 ════════════════════════════════════════════════════════
-     ==> Detected service running on port 10000
-     ==> Docs on specifying a port: https://render.com/docs/web-services#port-binding
 💬 ════════════════════════════════════════════════════════
 💬 GHL MESSAGE WEBHOOK HIT
 💬 ════════════════════════════════════════════════════════
@@ -357,13 +355,13 @@
   "First Tattoo": "No",
   "Tattoo Placement": "shoulder",
   "Tattoo Summary": "lion with roses",
-  "contact_id": "OdDJ3aIPJxRCt63ViawC",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
   "first_name": "Leonel",
   "last_name": "Chavez",
   "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
   "country": "US",
-  "date_created": "2025-12-16T00:29:54.300Z",
+  "date_created": "2025-12-16T01:04:47.559Z",
   "contact_type": "lead",
   "location": {
     "name": "Studio AZ Tattoo",
@@ -377,7 +375,7 @@
   },
   "message": {
     "type": 11,
-    "body": "Whats available in January?"
+    "body": "Sometime in January"
   },
   "workflow": {
     "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
@@ -412,12 +410,12 @@
     }
   },
   "customData": {
-    "contactId": "OdDJ3aIPJxRCt63ViawC",
-    "messageBody": "Whats available in January?"
+    "contactId": "2hmCxUngp0dlFq2IovW8",
+    "messageBody": "Sometime in January"
   }
 }
-📩 Incoming message text: Whats available in January?
-👤 Contact ID: OdDJ3aIPJxRCt63ViawC
+📩 Incoming message text: Sometime in January
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
 📋 Webhook custom fields extracted: {
   "first_tattoo": "No",
   "tattoo_placement": "shoulder",
@@ -433,8 +431,8 @@
   "tattoo_summary": "lion with roses"
 }
 🧠 [AI CONTEXT] Processing message: {
-  messageText: 'Whats available in January?',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  messageText: 'Sometime in January',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   contactName: 'Leonel Chavez',
   consultExplained: undefined
 }
@@ -447,20 +445,475 @@
   depositPaid: false,
   derivedPhase: 'discovery'
 }
-🎯 [INTENTS] Detected intents: [ 'scheduling_intent' ] from message: Whats available in January?
-📅 [SLOT OFFER] Time preferences extracted: { preferredWeek: null, preferredDay: null, preferredTimeWindow: null }
+🎯 [INTENTS] No specific intents detected for: Sometime in January
+🤖 Raw OpenAI opener response: {
+  "language": "en",
+  "bubbles": [
+    "Got it — that lion with roses on your shoulder in January is a solid plan.",
+    "Perfect, we can make that work. The next step is a quick 15–20 minute consultation with the artist to fully understand your design.",
+    "Would you prefer a video call or to go back and forth in messages for the consult?"
+  ],
+  "internal_notes": "Acknowledged tattoo idea and timeline, introduced consult and asked for preferred consult mode.",
+  "meta": {
+    "aiPhase": "qualification",
+    "leadTemperature": "warm",
+    "wantsDepositLink": false,
+    "depositPushedThisTurn": false,
+    "mentionDecoyOffered": false,
+    "consultMode": "online"
+  },
+  "field_updates": {
+    "how_soon_is_client_deciding": "January",
+    "tattoo_summary": "lion with roses",
+    "tattoo_placement": "shoulder",
+    "first_tattoo": false
+  }
+}
+⏱️ [TIMING] AI call took 4024ms
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'consult_path',
+  canonical: {
+    tattooSummary: 'lion with roses',
+    tattooPlacement: 'shoulder',
+    tattooSize: null,
+    timeline: 'January',
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: false,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'ai',
+  routing_reason: 'ai_fallback',
+  intent_flags: []
+}
+⏱️ [TIMING] Total handleInboundMessage took 4210ms
+🤖 AI Response Summary: {
+  bubblesCount: 3,
+  phase: 'consult_path',
+  handler: 'ai',
+  reason: 'ai_fallback',
+  fieldUpdatesKeys: [
+    'how_soon_is_client_deciding',
+    'tattoo_summary',
+    'tattoo_placement',
+    'first_tattoo'
+  ]
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  message: 'Got it — that lion with roses on your shoulder in January is a solid plan.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
+}
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  message: 'Perfect, we can make that work. The next step is a quick 15–20 minute consultation with the artist to fully understand your design.',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
+}
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
+🔍 No conversationId provided for DM, searching for existing conversation...
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
+✅ Using conversation type FB from GHL conversation - skipping ID validation
+📨 Sending DM reply via GHL: {
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  message: 'Would you prefer a video call or to go back and forth in messages for the consult?',
+  type: 'FB'
+}
+📨 GHL DM reply response: {
+  status: 201,
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
+}
+📤 Sent 3/3 bubbles to GHL conversation
+✅ Updated tattoo fields for contact 2hmCxUngp0dlFq2IovW8 with {
+  how_soon_is_client_deciding: 'January',
+  tattoo_summary: 'lion with roses',
+  tattoo_placement: 'shoulder',
+  first_tattoo: 'No'
+}
+✅ Persisted field_updates: [
+  'how_soon_is_client_deciding',
+  'tattoo_summary',
+  'tattoo_placement',
+  'first_tattoo'
+]
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "First Tattoo": "No",
+  "Tattoo Placement": "shoulder",
+  "How Soon Is Client Deciding?": "January",
+  "Tattoo Summary": "lion with roses",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-16T01:04:47.559Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "Ok. I’ll do a video call"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "2hmCxUngp0dlFq2IovW8",
+    "messageBody": "Ok. I’ll do a video call"
+  }
+}
+📩 Incoming message text: Ok. I’ll do a video call
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
+📋 Webhook custom fields extracted: {
+  "first_tattoo": "No",
+  "tattoo_placement": "shoulder",
+  "how_soon_is_client_deciding": "January",
+  "tattoo_summary": "lion with roses"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "fnydobmyqnxdxlljy5oe": "No",
+  "jd8yhvksbi4agqjqoeov": "shoulder",
+  "xagtmfmbxtfchdo2oyf7": "lion with roses",
+  "ra4nk80wma8eqklcfxst": "January",
+  "first_tattoo": "No",
+  "tattoo_placement": "shoulder",
+  "how_soon_is_client_deciding": "January",
+  "tattoo_summary": "lion with roses"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Ok. I’ll do a video call',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'lion with roses',
+  tattooPlacement: 'shoulder',
+  tattooSize: null,
+  timeline: 'January',
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'consult_path'
+}
+🎯 [INTENTS] Detected intents: [ 'consult_path_choice_intent' ] from message: Ok. I’ll do a video call
+📝 [CONSULTATION_TYPE] Setting consultation_type="appointment" (translator needed) for contact 2hmCxUngp0dlFq2IovW8 (detected from: "Ok. I’ll do a video call")
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: false, hasPhone: false }
+📨 GHL conversations API response (fallback): { status: 201, contactId: '2hmCxUngp0dlFq2IovW8', type: 'FB' }
+📝 [CONSULTATION_TYPE] Sent translator explanation message directly
+🔄 [PIPELINE] Syncing opportunity stage for contact 2hmCxUngp0dlFq2IovW8: {
+  currentStage: '(none)',
+  targetStage: 'CONSULT_APPOINTMENT',
+  context: {
+    aiPhase: 'consult_support',
+    depositLinkSent: false,
+    depositPaid: false,
+    consultType: 'appointment',
+    hasUpcomingTattoo: false,
+    tattooCompleted: false,
+    lost: false
+  }
+}
+❌ Error syncing opportunity stage after consult mode = appointment: Request failed with status code 422
+❌ Pipeline sync response (appointment consult): 422 {
+  message: [ 'Query must not exceed 75 characters', 'query must be a string' ],
+  error: 'Unprocessable Entity',
+  statusCode: 422,
+  traceId: 'f3167d30-a6e8-45b2-9411-33f4970c6cf7'
+}
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'consult_path',
+  canonical: {
+    tattooSummary: 'lion with roses',
+    tattooPlacement: 'shoulder',
+    tattooSize: null,
+    timeline: 'January',
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: true,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false,
+    translator_affirm_intent: false
+  },
+  selected_handler: 'consult_path',
+  routing_reason: 'consult_path_choice_intent',
+  intent_flags: [ 'consult_path_choice_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 1640ms
+🤖 AI Response Summary: {
+  bubblesCount: 0,
+  phase: 'consult_path',
+  handler: 'consult_path',
+  reason: 'consult_path_choice_intent',
+  fieldUpdatesKeys: []
+}
+📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
+📤 Sent 0/0 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "First Tattoo": "No",
+  "translator_explained": "Yes",
+  "consultation_type": "appointment",
+  "language_barrier_explained": "Yes",
+  "Tattoo Placement": "shoulder",
+  "translator_needed": "Yes",
+  "How Soon Is Client Deciding?": "January",
+  "Tattoo Summary": "lion with roses",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "tags": "dm consultation request",
+  "country": "US",
+  "date_created": "2025-12-16T01:04:47.559Z",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 11,
+    "body": "Sure"
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "contact": {
+    "attributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    },
+    "lastAttributionSource": {
+      "photoUrl": null,
+      "sessionSource": "Social media",
+      "adId": null,
+      "productId": null,
+      "videoUrl": null,
+      "mediumId": "9747144365336642",
+      "utmContent": null,
+      "pSid": "9747144365336642",
+      "medium": "facebook",
+      "postId": null,
+      "flowId": null
+    }
+  },
+  "customData": {
+    "contactId": "2hmCxUngp0dlFq2IovW8",
+    "messageBody": "Sure"
+  }
+}
+📩 Incoming message text: Sure
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
+📋 Webhook custom fields extracted: {
+  "first_tattoo": "No",
+  "translator_explained": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "shoulder",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "January",
+  "tattoo_summary": "lion with roses"
+}
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "fnydobmyqnxdxlljy5oe": "No",
+  "jd8yhvksbi4agqjqoeov": "shoulder",
+  "xagtmfmbxtfchdo2oyf7": "lion with roses",
+  "ra4nk80wma8eqklcfxst": "January",
+  "myuihlqvwgjnrnmy1hzu": "Yes",
+  "gm2pvo90ynbdhekv5g64": "appointment",
+  "ikiju6c8apzchvhsyfwr": "Yes",
+  "qvuq2wdv3drhbkhts6td": "Yes",
+  "first_tattoo": "No",
+  "translator_explained": "Yes",
+  "consultation_type": "appointment",
+  "tattoo_placement": "shoulder",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "January",
+  "tattoo_summary": "lion with roses"
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Sure',
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'lion with roses',
+  tattooPlacement: 'shoulder',
+  tattooSize: null,
+  timeline: 'January',
+  consultationType: 'appointment',
+  depositPaid: false,
+  derivedPhase: 'discovery'
+}
+🎯 [INTENTS] Detected intents: [ 'scheduling_intent', 'translator_affirm_intent' ] from message: Sure
+📅 [SLOT OFFER] Time preferences extracted: {
+  preferredWeek: null,
+  preferredDay: null,
+  preferredTimeWindow: null,
+  preferredMonth: null,
+  preferredYear: null
+}
+📅 [SLOTS] Inputs {
+  preferredWeek: null,
+  preferredDay: null,
+  preferredTimeWindow: null,
+  preferredMonth: null,
+  preferredYear: null,
+  nowIso: '2025-12-16T01:06:38.892Z',
+  tzOffsetMinutes: 0
+}
 📅 [SLOTS] Fetching real GHL slots from 2025-12-16T00:00:00.000Z to 2025-12-23T23:59:59.999Z
 ✅ [GHL CALENDAR] Found 12 free slots for calendar 2EJcAtrllnYOtuSx4Dua between 2025-12-16T00:00:00.000Z and 2025-12-23T23:59:59.999Z
 📅 [SLOTS] Returning 4 real GHL slots
-✅ [SLOT PERSIST] Saved 4 slots to GHL for contact OdDJ3aIPJxRCt63ViawC
+🧾 [SLOT PERSIST] Writing last_sent_slots {
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  slotsCount: 4,
+  bytes: 620,
+  sha1: '03c217e22c68',
+  preview: [
+    {
+      startTime: '2025-12-16T20:00:00.000Z',
+      endTime: '2025-12-16T20:30:00.000Z',
+      calendarId: '2EJcAtrllnYOtuSx4Dua',
+      displayText: 'Tuesday, Dec 16 at 8pm'
+    },
+    {
+      startTime: '2025-12-16T20:40:00.000Z',
+      endTime: '2025-12-16T21:10:00.000Z',
+      calendarId: '2EJcAtrllnYOtuSx4Dua',
+      displayText: 'Tuesday, Dec 16 at 8:40pm'
+    },
+    {
+      startTime: '2025-12-16T21:20:00.000Z',
+      endTime: '2025-12-16T21:50:00.000Z',
+      calendarId: '2EJcAtrllnYOtuSx4Dua',
+      displayText: 'Tuesday, Dec 16 at 9:20pm'
+    },
+    {
+      startTime: '2025-12-16T22:00:00.000Z',
+      endTime: '2025-12-16T22:30:00.000Z',
+      calendarId: '2EJcAtrllnYOtuSx4Dua',
+      displayText: 'Tuesday, Dec 16 at 10pm'
+    }
+  ]
+}
+🧾 [SLOT PERSIST] updateSystemFields result { contactId: '2hmCxUngp0dlFq2IovW8', ok: true }
+✅ [SLOT PERSIST] Saved 4 slots to GHL for contact 2hmCxUngp0dlFq2IovW8
 🧭 [PHASE] derived_phase snapshot {
   derived_phase: 'discovery',
   canonical: {
     tattooSummary: 'lion with roses',
     tattooPlacement: 'shoulder',
     tattooSize: null,
-    timeline: null,
-    consultationType: null,
+    timeline: 'January',
+    consultationType: 'appointment',
     consultationTypeLocked: false,
     depositLinkSent: false,
     depositPaid: false,
@@ -475,13 +928,13 @@
     consult_path_choice_intent: false,
     artist_guided_size_intent: false,
     process_or_price_question_intent: false,
-    translator_affirm_intent: false
+    translator_affirm_intent: true
   },
   selected_handler: 'deterministic',
   routing_reason: 'scheduling_intent',
-  intent_flags: [ 'scheduling_intent' ]
+  intent_flags: [ 'scheduling_intent', 'translator_affirm_intent' ]
 }
-⏱️ [TIMING] Total handleInboundMessage took 686ms
+⏱️ [TIMING] Total handleInboundMessage took 992ms
 🤖 AI Response Summary: {
   bubblesCount: 1,
   phase: 'discovery',
@@ -490,13 +943,13 @@
   fieldUpdatesKeys: [ 'consult_explained' ]
 }
 📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   message: 'I pulled a few openings for a consult with an artist:\n' +
     '1) Tuesday, Dec 16 at 8pm\n' +
     '2) Tuesday, Dec 16 at 8:40pm\n' +
@@ -508,28 +961,35 @@
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
 📤 Sent 1/1 bubbles to GHL conversation
-updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
+updateTattooFields: no mapped fields to update for contact 2hmCxUngp0dlFq2IovW8
 ✅ Persisted field_updates: [ 'consult_explained' ]
 💬 ════════════════════════════════════════════════════════
 💬 ════════════════════════════════════════════════════════
 💬 GHL MESSAGE WEBHOOK HIT
 💬 ════════════════════════════════════════════════════════
 📦 Webhook Payload (non-empty fields): {
+  "last_sent_slots": "[{\"startTime\":\"2025-12-16T20:00:00.000Z\",\"endTime\":\"2025-12-16T20:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8pm\"},{\"startTime\":\"2025-12-16T20:40:00.000Z\",\"endTime\":\"2025-12-16T21:10:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8:40pm\"},{\"startTime\":\"2025-12-16T21:20:00.000Z\",\"endTime\":\"2025-12-16T21:50:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 9:20pm\"},{\"startTime\":\"2025-12-16T22:00:00.000Z\",\"endTime\":\"2025-12-16T22:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 10pm\"}]",
   "times_sent": "Yes",
   "First Tattoo": "No",
+  "translator_explained": "Yes",
+  "translator_confirmed": "Yes",
+  "consultation_type": "appointment",
+  "language_barrier_explained": "Yes",
   "Tattoo Placement": "shoulder",
+  "translator_needed": "Yes",
+  "How Soon Is Client Deciding?": "January",
   "Tattoo Summary": "lion with roses",
-  "contact_id": "OdDJ3aIPJxRCt63ViawC",
+  "contact_id": "2hmCxUngp0dlFq2IovW8",
   "first_name": "Leonel",
   "last_name": "Chavez",
   "full_name": "Leonel Chavez",
   "tags": "dm consultation request",
   "country": "US",
-  "date_created": "2025-12-16T00:29:54.300Z",
+  "date_created": "2025-12-16T01:04:47.559Z",
   "contact_type": "lead",
   "location": {
     "name": "Studio AZ Tattoo",
@@ -543,7 +1003,7 @@ updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
   },
   "message": {
     "type": 11,
-    "body": "Let’s do 8pm"
+    "body": "8pm does"
   },
   "workflow": {
     "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
@@ -578,16 +1038,22 @@ updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
     }
   },
   "customData": {
-    "contactId": "OdDJ3aIPJxRCt63ViawC",
-    "messageBody": "Let’s do 8pm"
+    "contactId": "2hmCxUngp0dlFq2IovW8",
+    "messageBody": "8pm does"
   }
 }
-📩 Incoming message text: Let’s do 8pm
-👤 Contact ID: OdDJ3aIPJxRCt63ViawC
+📩 Incoming message text: 8pm does
+👤 Contact ID: 2hmCxUngp0dlFq2IovW8
 📋 Webhook custom fields extracted: {
+  "last_sent_slots": "[{\"startTime\":\"2025-12-16T20:00:00.000Z\",\"endTime\":\"2025-12-16T20:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8pm\"},{\"startTime\":\"2025-12-16T20:40:00.000Z\",\"endTime\":\"2025-12-16T21:10:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8:40pm\"},{\"startTime\":\"2025-12-16T21:20:00.000Z\",\"endTime\":\"2025-12-16T21:50:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 9:20pm\"},{\"startTime\":\"2025-12-16T22:00:00.000Z\",\"endTime\":\"2025-12-16T22:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 10pm\"}]",
   "times_sent": "Yes",
   "first_tattoo": "No",
+  "translator_explained": "Yes",
+  "translator_confirmed": "Yes",
+  "consultation_type": "appointment",
   "tattoo_placement": "shoulder",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "January",
   "tattoo_summary": "lion with roses"
 }
 👤 Contact: Leonel Chavez
@@ -595,15 +1061,28 @@ updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
   "fnydobmyqnxdxlljy5oe": "No",
   "jd8yhvksbi4agqjqoeov": "shoulder",
   "xagtmfmbxtfchdo2oyf7": "lion with roses",
+  "ra4nk80wma8eqklcfxst": "January",
+  "myuihlqvwgjnrnmy1hzu": "Yes",
+  "gm2pvo90ynbdhekv5g64": "appointment",
+  "ikiju6c8apzchvhsyfwr": "Yes",
+  "qvuq2wdv3drhbkhts6td": "Yes",
+  "whwh3aco0mzavhb0vizw": "Yes",
+  "a832mlwirz5cv6xaktna": "[{\"startTime\":\"2025-12-16T20:00:00.000Z\",\"endTime\":\"2025-12-16T20:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8pm\"},{\"startTime\":\"2025-12-16T20:40:00.000Z\",\"endTime\":\"2025-12-16T21:10:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8:40pm\"},{\"startTime\":\"2025-12-16T21:20:00.000Z\",\"endTime\":\"2025-12-16T21:50:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 9:20pm\"},{\"startTime\":\"2025-12-16T22:00:00.000Z\",\"endTime\":\"2025-12-16T22:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 10pm\"}]",
   "eah8fdi5pwfxsqqfd45a": "Yes",
+  "last_sent_slots": "[{\"startTime\":\"2025-12-16T20:00:00.000Z\",\"endTime\":\"2025-12-16T20:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8pm\"},{\"startTime\":\"2025-12-16T20:40:00.000Z\",\"endTime\":\"2025-12-16T21:10:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 8:40pm\"},{\"startTime\":\"2025-12-16T21:20:00.000Z\",\"endTime\":\"2025-12-16T21:50:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 9:20pm\"},{\"startTime\":\"2025-12-16T22:00:00.000Z\",\"endTime\":\"2025-12-16T22:30:00.000Z\",\"calendarId\":\"2EJcAtrllnYOtuSx4Dua\",\"displayText\":\"Tuesday, Dec 16 at 10pm\"}]",
   "times_sent": "Yes",
   "first_tattoo": "No",
+  "translator_explained": "Yes",
+  "translator_confirmed": "Yes",
+  "consultation_type": "appointment",
   "tattoo_placement": "shoulder",
+  "translator_needed": "Yes",
+  "how_soon_is_client_deciding": "January",
   "tattoo_summary": "lion with roses"
 }
 🧠 [AI CONTEXT] Processing message: {
-  messageText: 'Let’s do 8pm',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  messageText: '8pm does',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   contactName: 'Leonel Chavez',
   consultExplained: undefined
 }
@@ -611,28 +1090,31 @@ updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
   tattooSummary: 'lion with roses',
   tattooPlacement: 'shoulder',
   tattooSize: null,
-  timeline: null,
-  consultationType: null,
+  timeline: 'January',
+  consultationType: 'appointment',
   depositPaid: false,
-  derivedPhase: 'discovery'
+  derivedPhase: 'scheduling'
 }
-🎯 [INTENTS] Detected intents: [ 'slot_selection_intent' ] from message: Let’s do 8pm
-🔄 [SLOT RECOVERY] lastSentSlots empty but timesSent=true, fetching from GHL...
-📋 [SLOT RECOVERY] Contact has 4 custom fields. Looking for slot data...
-⚠️ [SLOT RECOVERY] No slots found in GHL contact. Will regenerate fresh slots.
-📅 [SLOTS] Fetching real GHL slots from 2025-12-16T00:00:00.000Z to 2025-12-23T23:59:59.999Z
-✅ [GHL CALENDAR] Found 12 free slots for calendar 2EJcAtrllnYOtuSx4Dua between 2025-12-16T00:00:00.000Z and 2025-12-23T23:59:59.999Z
-📅 [SLOTS] Returning 4 real GHL slots
-✅ [SLOT RECOVERY] Generated 4 fresh slots to match against
+🎯 [INTENTS] Detected intents: [ 'slot_selection_intent' ] from message: 8pm does
 ✅ Matched time 8pm → slot 1
+🧭 [SLOT CHOICE] parseTimeSelection -> 0 number chosenSlot 2025-12-16T20:00:00.000Z
+⚠️ Failed to create Google Meet (continuing without link): Missing Google OAuth credentials (client id/secret/refresh token)
+❌ Error creating appointment: {
+  message: 'The user id not part of calendar team.',
+  error: 'Unprocessable Entity',
+  statusCode: 422,
+  traceId: '759a21b5-ab83-4bae-8047-ee45ae395d11'
+}
+❌ Error creating consult appointment: Request failed with status code 422
+❌ Deterministic slot selection failed: Request failed with status code 422
 🧭 [PHASE] derived_phase snapshot {
-  derived_phase: 'discovery',
+  derived_phase: 'scheduling',
   canonical: {
     tattooSummary: 'lion with roses',
     tattooPlacement: 'shoulder',
     tattooSize: null,
-    timeline: null,
-    consultationType: null,
+    timeline: 'January',
+    consultationType: 'appointment',
     consultationTypeLocked: false,
     depositLinkSent: false,
     depositPaid: false,
@@ -653,197 +1135,31 @@ updateTattooFields: no mapped fields to update for contact OdDJ3aIPJxRCt63ViawC
   routing_reason: 'slot_selection',
   intent_flags: [ 'slot_selection_intent' ]
 }
-⏱️ [TIMING] Total handleInboundMessage took 644ms
+⏱️ [TIMING] Total handleInboundMessage took 568ms
 🤖 AI Response Summary: {
   bubblesCount: 1,
-  phase: 'discovery',
+  phase: 'scheduling',
   handler: 'deterministic',
   reason: 'slot_selection',
-  fieldUpdatesKeys: []
+  fieldUpdatesKeys: [ 'consult_explained' ]
 }
 📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
+✉️ sendConversationMessage context: { contactId: '2hmCxUngp0dlFq2IovW8', isDm: true, hasPhone: false }
 🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
+✅ Found existing conversation rwknop8J4YpazXthsSUc with type FB
 ✅ Using conversation type FB from GHL conversation - skipping ID validation
 📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
+  conversationId: 'rwknop8J4YpazXthsSUc',
+  contactId: '2hmCxUngp0dlFq2IovW8',
   message: 'I can hold a spot—what day(s) this week and what time window works best (morning / afternoon / evening)?',
   type: 'FB'
 }
 📨 GHL DM reply response: {
   status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
+  contactId: '2hmCxUngp0dlFq2IovW8',
+  conversationId: 'rwknop8J4YpazXthsSUc'
 }
 📤 Sent 1/1 bubbles to GHL conversation
-ℹ️ No field_updates from AI to persist this turn
-💬 ════════════════════════════════════════════════════════
-💬 ════════════════════════════════════════════════════════
-💬 GHL MESSAGE WEBHOOK HIT
-💬 ════════════════════════════════════════════════════════
-📦 Webhook Payload (non-empty fields): {
-  "times_sent": "Yes",
-  "First Tattoo": "No",
-  "Tattoo Placement": "shoulder",
-  "Tattoo Summary": "lion with roses",
-  "contact_id": "OdDJ3aIPJxRCt63ViawC",
-  "first_name": "Leonel",
-  "last_name": "Chavez",
-  "full_name": "Leonel Chavez",
-  "tags": "dm consultation request",
-  "country": "US",
-  "date_created": "2025-12-16T00:29:54.300Z",
-  "contact_type": "lead",
-  "location": {
-    "name": "Studio AZ Tattoo",
-    "address": "333 Washington Ave N STE 100",
-    "city": "Minneapolis",
-    "state": "Minnesota",
-    "country": "US",
-    "postalCode": "55401",
-    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-    "id": "mUemx2jG4wly4kJWBkI4"
-  },
-  "message": {
-    "type": 11,
-    "body": "Tuesday evening"
-  },
-  "workflow": {
-    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-    "name": "Testing Ai Bot"
-  },
-  "contact": {
-    "attributionSource": {
-      "photoUrl": null,
-      "sessionSource": "Social media",
-      "adId": null,
-      "productId": null,
-      "videoUrl": null,
-      "mediumId": "9747144365336642",
-      "utmContent": null,
-      "pSid": "9747144365336642",
-      "medium": "facebook",
-      "postId": null,
-      "flowId": null
-    },
-    "lastAttributionSource": {
-      "photoUrl": null,
-      "sessionSource": "Social media",
-      "adId": null,
-      "productId": null,
-      "videoUrl": null,
-      "mediumId": "9747144365336642",
-      "utmContent": null,
-      "pSid": "9747144365336642",
-      "medium": "facebook",
-      "postId": null,
-      "flowId": null
-    }
-  },
-  "customData": {
-    "contactId": "OdDJ3aIPJxRCt63ViawC",
-    "messageBody": "Tuesday evening"
-  }
-}
-📩 Incoming message text: Tuesday evening
-👤 Contact ID: OdDJ3aIPJxRCt63ViawC
-📋 Webhook custom fields extracted: {
-  "times_sent": "Yes",
-  "first_tattoo": "No",
-  "tattoo_placement": "shoulder",
-  "tattoo_summary": "lion with roses"
-}
-👤 Contact: Leonel Chavez
-📋 Contact custom fields (merged): {
-  "fnydobmyqnxdxlljy5oe": "No",
-  "jd8yhvksbi4agqjqoeov": "shoulder",
-  "xagtmfmbxtfchdo2oyf7": "lion with roses",
-  "eah8fdi5pwfxsqqfd45a": "Yes",
-  "times_sent": "Yes",
-  "first_tattoo": "No",
-  "tattoo_placement": "shoulder",
-  "tattoo_summary": "lion with roses"
-}
-🧠 [AI CONTEXT] Processing message: {
-  messageText: 'Tuesday evening',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  contactName: 'Leonel Chavez',
-  consultExplained: undefined
-}
-📊 [CANONICAL] State before routing: {
-  tattooSummary: 'lion with roses',
-  tattooPlacement: 'shoulder',
-  tattooSize: null,
-  timeline: null,
-  consultationType: null,
-  depositPaid: false,
-  derivedPhase: 'discovery'
-}
-🎯 [INTENTS] Detected intents: [ 'slot_selection_intent' ] from message: Tuesday evening
-🔄 [SLOT RECOVERY] lastSentSlots empty but timesSent=true, fetching from GHL...
-📋 [SLOT RECOVERY] Contact has 4 custom fields. Looking for slot data...
-⚠️ [SLOT RECOVERY] No slots found in GHL contact. Will regenerate fresh slots.
-📅 [SLOTS] Fetching real GHL slots from 2025-12-16T00:00:00.000Z to 2025-12-23T23:59:59.999Z
-✅ [GHL CALENDAR] Found 12 free slots for calendar 2EJcAtrllnYOtuSx4Dua between 2025-12-16T00:00:00.000Z and 2025-12-23T23:59:59.999Z
-📅 [SLOTS] Filtered to tuesday: 12 slots
-📅 [SLOTS] Filtered to evening: 6 slots
-📅 [SLOTS] Returning 4 real GHL slots
-✅ [SLOT RECOVERY] Generated 4 fresh slots to match against
-✅ Matched day name with time: tuesday → slot 1
-🧭 [PHASE] derived_phase snapshot {
-  derived_phase: 'discovery',
-  canonical: {
-    tattooSummary: 'lion with roses',
-    tattooPlacement: 'shoulder',
-    tattooSize: null,
-    timeline: null,
-    consultationType: null,
-    consultationTypeLocked: false,
-    depositLinkSent: false,
-    depositPaid: false,
-    holdAppointmentId: null
-  },
-  intents: {
-    reschedule_intent: false,
-    cancel_intent: false,
-    scheduling_intent: false,
-    slot_selection_intent: true,
-    deposit_intent: false,
-    consult_path_choice_intent: false,
-    artist_guided_size_intent: false,
-    process_or_price_question_intent: false,
-    translator_affirm_intent: false
-  },
-  selected_handler: 'deterministic',
-  routing_reason: 'slot_selection',
-  intent_flags: [ 'slot_selection_intent' ]
-}
-⏱️ [TIMING] Total handleInboundMessage took 596ms
-🤖 AI Response Summary: {
-  bubblesCount: 1,
-  phase: 'discovery',
-  handler: 'deterministic',
-  reason: 'slot_selection',
-  fieldUpdatesKeys: []
-}
-📡 Channel context: { isDm: true, hasPhone: false, conversationId: null, phone: null }
-✉️ sendConversationMessage context: { contactId: 'OdDJ3aIPJxRCt63ViawC', isDm: true, hasPhone: false }
-🔍 No conversationId provided for DM, searching for existing conversation...
-✅ Found existing conversation 5tO6jUJu8HtRkLo8zvN5 with type FB
-✅ Using conversation type FB from GHL conversation - skipping ID validation
-📨 Sending DM reply via GHL: {
-  conversationId: '5tO6jUJu8HtRkLo8zvN5',
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  message: 'I can hold a spot—what day(s) this week and what time window works best (morning / afternoon / evening)?',
-  type: 'FB'
-}
-📨 GHL DM reply response: {
-  status: 201,
-  contactId: 'OdDJ3aIPJxRCt63ViawC',
-  conversationId: '5tO6jUJu8HtRkLo8zvN5'
-}
-📤 Sent 1/1 bubbles to GHL conversation
-ℹ️ No field_updates from AI to persist this turn
+updateTattooFields: no mapped fields to update for contact 2hmCxUngp0dlFq2IovW8
+✅ Persisted field_updates: [ 'consult_explained' ]
 💬 ════════════════════════════════════════════════════════

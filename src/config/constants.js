@@ -171,8 +171,8 @@ const APPOINTMENT_STATUS = {
 // Assigned user IDs for artists (used when creating GHL appointments)
 // These should match the "team member" IDs in GHL
 const ARTIST_ASSIGNED_USER_IDS = {
-  JOAN: "1wuLf50VMODExBSJ9xPI",
-  ANDREW: "O8ChoMYj1BmMWJJsDlvC",
+  JOAN: "Wl24x1ZrucHuHatM0ODD",
+  ANDREW: "Wl24x1ZrucHuHatM0ODD",
 };
 
 const ARTIST_NAME_TO_ID = Object.fromEntries(
