@@ -468,8 +468,11 @@ async function updateTattooFields(contactId, fields = {}) {
   }
 }
 
-// Search for conversations for a contact and return the most recent one
-async function findConversationForContact(contactId) {
+// Search for conversations for a contact
+// Options:
+//   preferDm: boolean - if true, prioritize FB/IG conversations over SMS
+//   typeFilter: "DM" | "SMS" | null - filter by conversation type
+async function findConversationForContact(contactId, { preferDm = false, typeFilter = null } = {}) {
   if (!contactId) return null;
 
   const url = `https://services.leadconnectorhq.com/conversations/search?locationId=${encodeURIComponent(
@@ -490,6 +493,52 @@ async function findConversationForContact(contactId) {
       return null;
     }
 
+    // Helper to check if a conversation is a DM (FB/IG)
+    const isDmConversation = (conv) => {
+      const type = (conv.type || conv.lastMessageType || "").toUpperCase();
+      return type.includes("FACEBOOK") || type.includes("FB") || 
+             type.includes("INSTAGRAM") || type.includes("IG") ||
+             type.includes("MESSENGER");
+    };
+
+    // Helper to check if a conversation is SMS
+    const isSmsConversation = (conv) => {
+      const type = (conv.type || conv.lastMessageType || "").toUpperCase();
+      return type.includes("SMS");
+    };
+
+    // If a specific type filter is requested
+    if (typeFilter === "DM") {
+      const dmConv = convs.find(isDmConversation);
+      if (dmConv) {
+        console.log(`🔍 Found DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
+        return dmConv;
+      }
+      console.log("🔍 No DM conversation found for contact");
+      return null;
+    }
+    
+    if (typeFilter === "SMS") {
+      const smsConv = convs.find(isSmsConversation);
+      if (smsConv) {
+        console.log(`🔍 Found SMS conversation: ${smsConv.id}`);
+        return smsConv;
+      }
+      console.log("🔍 No SMS conversation found for contact");
+      return null;
+    }
+
+    // If preferDm is true, try to find a DM conversation first
+    if (preferDm) {
+      const dmConv = convs.find(isDmConversation);
+      if (dmConv) {
+        console.log(`🔍 Preferring DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
+        return dmConv;
+      }
+      // Fall back to most recent if no DM found
+      console.log("🔍 No DM conversation found, falling back to most recent");
+    }
+
     // Return the most recent conversation (they're sorted newest-first)
     return convs[0];
   } catch (err) {
@@ -502,11 +551,70 @@ async function findConversationForContact(contactId) {
 }
 
 // Infer the outbound "type" for /conversations/messages by looking at the last inbound message
-async function inferConversationMessageType(contactId) {
+// Options:
+//   preferDm: boolean - if true, prioritize FB/IG over SMS when checking contact
+async function inferConversationMessageType(contactId, { preferDm = false } = {}) {
   if (!contactId) return "SMS";
 
-  const conversation = await findConversationForContact(contactId);
+  // If preferDm, check contact's social IDs first before looking at conversations
+  if (preferDm) {
+    try {
+      const contact = await getContact(contactId);
+      const hasInstagramId = !!(
+        contact?.instagramId || 
+        contact?.instagram || 
+        contact?.socialProfiles?.instagram ||
+        contact?.customField?.instagram_id
+      );
+      const hasFacebookId = !!(
+        contact?.facebookId || 
+        contact?.facebook || 
+        contact?.socialProfiles?.facebook ||
+        contact?.customField?.facebook_id
+      );
+      
+      // Check tags for DM indicators
+      const tags = contact?.tags || [];
+      const tagsLower = Array.isArray(tags) ? tags.map(t => String(t).toLowerCase()) : [];
+      const hasInstagramTag = tagsLower.some(t => t.includes("instagram") || t.includes("ig"));
+      const hasFacebookTag = tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger"));
+      
+      if (hasInstagramId || hasInstagramTag) {
+        console.log("inferConversationMessageType: found Instagram from contact, returning IG");
+        return "IG";
+      }
+      if (hasFacebookId || hasFacebookTag) {
+        console.log("inferConversationMessageType: found Facebook from contact, returning FB");
+        return "FB";
+      }
+    } catch (err) {
+      console.warn("Error checking contact for type inference:", err.message);
+    }
+  }
+
+  // Try to find a DM conversation first if preferDm
+  const searchOptions = preferDm ? { typeFilter: "DM" } : {};
+  const conversation = await findConversationForContact(contactId, searchOptions);
+  
   if (!conversation) {
+    // If preferDm and no DM conversation found, still check contact for social IDs
+    if (preferDm) {
+      console.warn("inferConversationMessageType: no DM conversation found, checking contact tags...");
+      try {
+        const contact = await getContact(contactId);
+        const tags = contact?.tags || [];
+        const tagsLower = Array.isArray(tags) ? tags.map(t => String(t).toLowerCase()) : [];
+        
+        if (tagsLower.some(t => t.includes("instagram") || t.includes("ig"))) {
+          return "IG";
+        }
+        if (tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger") || t.includes("dm"))) {
+          return "FB";
+        }
+      } catch (err) {
+        console.warn("Error checking contact tags:", err.message);
+      }
+    }
     console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
     return "SMS";
   }
@@ -612,40 +720,37 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
   // 1) DM reply path (no phone required)
   if (isDm) {
-    // If no conversationId provided, try to find existing conversation
+    // If no conversationId provided, try to find existing DM conversation
     let finalConversationId = conversationId;
     let dmType = null;
 
     let foundConversation = null;
     if (!finalConversationId) {
-      console.log("🔍 No conversationId provided for DM, searching for existing conversation...");
-      foundConversation = await findConversationForContact(contactId);
+      console.log("🔍 No conversationId provided for DM, searching for DM conversation...");
+      
+      // Specifically search for a DM conversation (FB/IG), not SMS
+      foundConversation = await findConversationForContact(contactId, { typeFilter: "DM" });
+      
       if (foundConversation) {
         finalConversationId = foundConversation.id || foundConversation._id;
         
-        // Check if this is actually a DM conversation (not SMS)
-        const convType = (foundConversation.type || "").toUpperCase();
-        if (convType.includes("SMS")) {
-          console.warn("⚠️ Conversation type is SMS, but isDm=true. This might be a mismatch.");
-          // Don't try to send SMS conversations as DM - fall through to error handling
+        // Infer type from the conversation
+        const lastType = (foundConversation.lastMessageType || foundConversation.type || "").toUpperCase();
+        if (lastType.includes("INSTAGRAM") || lastType.includes("IG")) {
+          dmType = "IG";
+        } else if (lastType.includes("FACEBOOK") || lastType.includes("FB") || lastType.includes("MESSENGER")) {
+          dmType = "FB";
         } else {
-          // If we found an existing conversation, infer type from the conversation itself first
-          // Trust GHL's conversation type - if it exists, GHL knows how to send to it
-          const lastType = (foundConversation.lastMessageType || foundConversation.type || "").toUpperCase();
-          if (lastType.includes("INSTAGRAM")) {
-            dmType = "IG";
-          } else if (lastType.includes("FACEBOOK")) {
-            dmType = "FB";
-          } else {
-            // Fall back to inference function if conversation type is unclear
-            dmType = await inferConversationMessageType(contactId);
-          }
-          console.log(`✅ Found existing conversation ${finalConversationId} with type ${dmType}`);
+          // Fall back to inference function if conversation type is unclear (prefer DM since isDm=true)
+          dmType = await inferConversationMessageType(contactId, { preferDm: true });
         }
+        console.log(`✅ Found DM conversation ${finalConversationId} with type ${dmType}`);
+      } else {
+        console.log("🔍 No existing DM conversation found, will try to infer type from contact...");
       }
     } else {
-      // If conversationId was provided, still infer the type
-      dmType = await inferConversationMessageType(contactId);
+      // If conversationId was provided, still infer the type (prefer DM since isDm=true)
+      dmType = await inferConversationMessageType(contactId, { preferDm: true });
     }
 
     // If we have a conversationId and valid DM type, use it
@@ -766,8 +871,8 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     // GHL will create a new conversation if needed
     if (!finalConversationId) {
       try {
-        // Infer DM type from contact tags or default to IG/FB
-        const inferredType = await inferConversationMessageType(contactId);
+        // Infer DM type from contact tags or default to IG/FB (prefer DM since isDm=true)
+        const inferredType = await inferConversationMessageType(contactId, { preferDm: true });
         
         // Only proceed if it's a social media type
         if (inferredType === "IG" || inferredType === "FB") {
