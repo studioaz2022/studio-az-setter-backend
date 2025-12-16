@@ -261,11 +261,72 @@ async function getConsultAppointmentsForContact(contactId, consultCalendarIds) {
   });
 }
 
+/**
+ * Get free/available slots from a GHL calendar
+ * @param {string} calendarId - Calendar ID to query
+ * @param {Date} startDate - Start of date range
+ * @param {Date} endDate - End of date range
+ * @returns {Promise<Array>} Array of slot objects with startTime, endTime, displayText
+ */
+async function getCalendarFreeSlots(calendarId, startDate, endDate) {
+  if (!calendarId) {
+    throw new Error("calendarId is required for getCalendarFreeSlots");
+  }
+  if (!startDate || !endDate) {
+    throw new Error("startDate and endDate are required for getCalendarFreeSlots");
+  }
+
+  // Convert to milliseconds timestamp for GHL API
+  const startMs = startDate.getTime();
+  const endMs = endDate.getTime();
+
+  const url = `${GHL_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/free-slots?startDate=${startMs}&endDate=${endMs}`;
+
+  try {
+    const resp = await axios.get(url, {
+      headers: ghlHeaders(),
+    });
+
+    const data = resp.data || {};
+    const slots = [];
+
+    // Parse the response - it's organized by date with slots array
+    // Example: { "2025-12-22": { "slots": ["2025-12-22T10:00:00-06:00", ...] }, ... }
+    for (const [dateKey, dateData] of Object.entries(data)) {
+      if (dateKey === "traceId") continue; // Skip the traceId field
+      
+      const dateSlots = dateData?.slots || [];
+      for (const slotTime of dateSlots) {
+        const startTime = new Date(slotTime);
+        const endTime = new Date(startTime);
+        endTime.setMinutes(endTime.getMinutes() + 30); // Assume 30-min slots
+
+        slots.push({
+          startTime: startTime.toISOString(),
+          endTime: endTime.toISOString(),
+          calendarId,
+        });
+      }
+    }
+
+    // Sort by start time
+    slots.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+    console.log(`✅ [GHL CALENDAR] Found ${slots.length} free slots for calendar ${calendarId} between ${startDate.toISOString()} and ${endDate.toISOString()}`);
+
+    return slots;
+  } catch (err) {
+    console.error("❌ Error fetching calendar free slots:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
 module.exports = {
   createAppointment,
   listAppointmentsForContact,
   updateAppointmentStatus,
   getConsultAppointmentsForContact,
   rescheduleAppointment,
+  getCalendarFreeSlots,
 };
 

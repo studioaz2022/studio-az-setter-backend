@@ -16,6 +16,7 @@ const {
   createAppointment,
   listAppointmentsForContact,
   getConsultAppointmentsForContact,
+  getCalendarFreeSlots,
 } = require("../clients/ghlCalendarClient");
 const { createGoogleMeet } = require("../clients/googleMeet");
 const {
@@ -279,7 +280,8 @@ function generateSuggestedSlots(options = {}) {
 }
 
 /**
- * Fetch available slots (synthetic in tests/dev, calendar-aware in prod)
+ * Fetch available slots from GHL calendar (real availability)
+ * Falls back to synthetic slots if GHL fails or in test mode
  */
 async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
   const preferredTimeWindow = context.preferredTimeWindow || null;
@@ -293,29 +295,92 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
     String(process.env.USE_SYNTHETIC_SLOTS || "").toLowerCase() === "true";
 
   if (useSynthetic) {
+    console.log("📅 [SLOTS] Using synthetic slots (test mode or USE_SYNTHETIC_SLOTS=true)");
     return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
   }
 
-  let slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
-
-  if (contactId) {
-    try {
-      const appointments = await listAppointmentsForContact(contactId);
-      const busyStarts = (appointments || []).map((apt) => apt.startTime).filter(Boolean);
-      if (busyStarts.length > 0) {
-        slots = slots.filter((s) => !busyStarts.includes(s.startTime));
-      }
-    } catch (err) {
-      console.warn("⚠️ Failed to fetch calendar appointments, using synthetic slots:", err.message || err);
+  // === Fetch REAL slots from GHL calendar ===
+  try {
+    // Use the default calendar (Joan's calendar for now - could be made dynamic)
+    const calendarId = CALENDARS.JOAN_ONLINE || Object.values(CALENDARS)[0];
+    
+    if (!calendarId) {
+      console.warn("⚠️ No calendar ID configured, falling back to synthetic slots");
+      return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
     }
-  }
 
-  if (slots.length === 0) {
-    console.warn("⚠️ No slots available after filtering; falling back to synthetic suggestions");
-    slots = generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
-  }
+    // Calculate date range
+    const now = new Date();
+    let startDate = new Date(now);
+    startDate.setHours(0, 0, 0, 0);
 
-  return slots.slice(0, 4);
+    // If "next week" preference, skip to next Monday
+    if (preferredWeek === "next") {
+      const currentDayIndex = startDate.getDay();
+      const daysUntilNextMonday = currentDayIndex === 0 ? 1 : (8 - currentDayIndex);
+      startDate.setDate(startDate.getDate() + daysUntilNextMonday);
+      console.log(`📅 [SLOTS] "Next week" preference - starting from ${startDate.toDateString()}`);
+    }
+
+    // End date: 7 days from start
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 7);
+    endDate.setHours(23, 59, 59, 999);
+
+    console.log(`📅 [SLOTS] Fetching real GHL slots from ${startDate.toISOString()} to ${endDate.toISOString()}`);
+
+    // Fetch real slots from GHL
+    const rawSlots = await getCalendarFreeSlots(calendarId, startDate, endDate);
+
+    if (!rawSlots || rawSlots.length === 0) {
+      console.warn("⚠️ No slots returned from GHL, falling back to synthetic");
+      return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
+    }
+
+    // Filter by preferred day if specified
+    let filteredSlots = rawSlots;
+    if (preferredDay) {
+      const targetDayIndex = WEEKDAY_MAP[preferredDay.toLowerCase()];
+      if (targetDayIndex !== undefined) {
+        filteredSlots = rawSlots.filter((slot) => {
+          const slotDate = new Date(slot.startTime);
+          return slotDate.getDay() === targetDayIndex;
+        });
+        console.log(`📅 [SLOTS] Filtered to ${preferredDay}: ${filteredSlots.length} slots`);
+      }
+    }
+
+    // Filter by preferred time window if specified
+    if (preferredTimeWindow) {
+      const tw = preferredTimeWindow.toLowerCase();
+      filteredSlots = filteredSlots.filter((slot) => {
+        const slotDate = new Date(slot.startTime);
+        const hour = slotDate.getHours();
+        if (tw.includes("morning")) return hour >= 9 && hour < 12;
+        if (tw.includes("afternoon")) return hour >= 12 && hour < 17;
+        if (tw.includes("evening")) return hour >= 17 && hour <= 21;
+        return true;
+      });
+      console.log(`📅 [SLOTS] Filtered to ${preferredTimeWindow}: ${filteredSlots.length} slots`);
+    }
+
+    // Add displayText to each slot
+    const slotsWithDisplay = filteredSlots.map((slot) => ({
+      ...slot,
+      displayText: formatSlotDisplay(new Date(slot.startTime)),
+    }));
+
+    // Return up to 4 slots
+    const finalSlots = slotsWithDisplay.slice(0, 4);
+    console.log(`📅 [SLOTS] Returning ${finalSlots.length} real GHL slots`);
+    
+    return finalSlots;
+
+  } catch (err) {
+    console.error("❌ Error fetching GHL calendar slots:", err.message || err);
+    console.warn("⚠️ Falling back to synthetic slots");
+    return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
+  }
 }
 
 /**
