@@ -12,9 +12,10 @@ const {
 } = require("./bookingController");
 const { updateSystemFields, sendConversationMessage, getContact } = require("../../ghlClient");
 const { createDepositLinkForContact } = require("../payments/squareClient");
-const { DEPOSIT_CONFIG } = require("../config/constants");
+const { DEPOSIT_CONFIG, OPPORTUNITY_STAGES } = require("../config/constants");
 const { updateAppointmentStatus } = require("../clients/ghlCalendarClient");
 const { parseJsonField } = require("./phaseContract");
+const { transitionToStage } = require("./opportunityManager");
 
 /**
  * Extract time preferences from user message
@@ -506,6 +507,14 @@ async function buildDeterministicResponse({
         deposit_link_url: deposit?.url || null,
       });
 
+      // Sync pipeline to DEPOSIT_PENDING
+      try {
+        await transitionToStage(contactId, OPPORTUNITY_STAGES.DEPOSIT_PENDING);
+        console.log(`📊 [PIPELINE] Slot held + deposit link sent → DEPOSIT_PENDING`);
+      } catch (pipeErr) {
+        console.error("❌ [PIPELINE] Failed to transition to DEPOSIT_PENDING:", pipeErr.message || pipeErr);
+      }
+
       const display =
         chosenSlot.displayText ||
         (chosenSlot.startTime && formatSlotDisplay
@@ -609,6 +618,14 @@ async function buildDeterministicResponse({
             description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
           });
           depositPart = `The $${amount} deposit locks in your spot and is fully refundable if you don't love the design — it goes toward your tattoo total.\n\nHere's the link: ${deposit?.url}`;
+          
+          // Sync pipeline to DEPOSIT_PENDING
+          try {
+            await transitionToStage(contactId, OPPORTUNITY_STAGES.DEPOSIT_PENDING);
+            console.log(`📊 [PIPELINE] Deposit link sent (multi-intent) → DEPOSIT_PENDING`);
+          } catch (pipeErr) {
+            console.error("❌ [PIPELINE] Failed to transition to DEPOSIT_PENDING:", pipeErr.message || pipeErr);
+          }
         } catch (err) {
           console.error("❌ Failed to create deposit link for multi-intent response:", err.message || err);
           depositPart = `Just finish up the $${amount} refundable deposit to lock it in.`;
@@ -709,8 +726,16 @@ async function buildDeterministicResponse({
         deposit_paid: false,
       });
 
+      // Sync pipeline to DEPOSIT_PENDING
+      try {
+        await transitionToStage(contactId, OPPORTUNITY_STAGES.DEPOSIT_PENDING);
+        console.log(`📊 [PIPELINE] Deposit link sent → DEPOSIT_PENDING`);
+      } catch (pipeErr) {
+        console.error("❌ [PIPELINE] Failed to transition to DEPOSIT_PENDING:", pipeErr.message || pipeErr);
+      }
+
       const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
-      const message = `Here’s your $${amount} refundable deposit to lock your consult: ${deposit?.url}`;
+      const message = `Here's your $${amount} refundable deposit to lock your consult: ${deposit?.url}`;
 
       return {
         language: "en",

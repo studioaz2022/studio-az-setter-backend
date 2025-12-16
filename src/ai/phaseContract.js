@@ -48,6 +48,8 @@ function buildCanonicalState(contact = {}) {
   const holdAppointmentId = cf[SYSTEM_FIELDS.HOLD_APPOINTMENT_ID] || null;
 
   return {
+    opportunityId: cf[SYSTEM_FIELDS.OPPORTUNITY_ID] || null,
+    opportunityStage: cf[SYSTEM_FIELDS.OPPORTUNITY_STAGE] || null,
     languagePreference: cf[TATTOO_FIELDS.LANGUAGE_PREFERENCE] || cf[SYSTEM_FIELDS.LANGUAGE_PREFERENCE] || null,
     tattooTitle: cf[TATTOO_FIELDS.TATTOO_TITLE] || null,
     tattooSummary: cf[TATTOO_FIELDS.TATTOO_SUMMARY] || null,

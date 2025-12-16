@@ -6,8 +6,9 @@ const { shouldHardSkipAI } = require("./hardSkip");
 const { buildDeterministicResponse } = require("./deterministicResponses");
 const { evaluateHoldState } = require("./holdLifecycle");
 const { updateSystemFields, sendConversationMessage } = require("../../ghlClient");
-const { SYSTEM_FIELDS } = require("../config/constants");
+const { SYSTEM_FIELDS, OPPORTUNITY_STAGES } = require("../config/constants");
 const { buildContactProfile, buildEffectiveContact } = require("./contextBuilder");
+const { advanceFromIntakeToDiscovery } = require("./opportunityManager");
 
 function applyFieldUpdatesToContact(contact, fieldUpdates = {}) {
   if (!contact) return contact;
@@ -85,6 +86,19 @@ async function handleInboundMessage({
     console.log("🎯 [INTENTS] Detected intents:", activeIntents, "from message:", latestMessageText);
   } else {
     console.log("🎯 [INTENTS] No specific intents detected for:", latestMessageText);
+  }
+
+  // === Advance Widget leads from INTAKE to DISCOVERY on first AI response ===
+  // When a lead comes from the React widget, they start at INTAKE.
+  // Once they respond to our AI opener, we advance them to DISCOVERY.
+  const opportunityStage = canonicalBefore.opportunityStage;
+  if (opportunityStage === OPPORTUNITY_STAGES.INTAKE && latestMessageText && latestMessageText.trim()) {
+    console.log(`📊 [PIPELINE] Widget lead responded - advancing from INTAKE to DISCOVERY...`);
+    try {
+      await advanceFromIntakeToDiscovery(effectiveContact?.id || effectiveContact?._id, { contact: effectiveContact });
+    } catch (err) {
+      console.error("❌ [PIPELINE] Failed to advance to DISCOVERY:", err.message || err);
+    }
   }
 
   let response = null;

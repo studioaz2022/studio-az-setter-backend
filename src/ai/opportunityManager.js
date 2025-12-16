@@ -288,12 +288,77 @@ async function syncOpportunityStageFromContact(contactId, { aiPhase, fieldOverri
   return result;
 }
 
+/**
+ * Sync pipeline stage for lead entry based on channel type.
+ * - SMS, DM (Facebook/Instagram), WhatsApp → Start at DISCOVERY
+ * - Widget/Form → Start at INTAKE
+ */
+async function syncPipelineOnEntry(contactId, { channelType, isFirstMessage = true, contact = null }) {
+  if (!contactId) return null;
+
+  // Determine entry stage based on channel
+  let entryStage;
+  const directChannels = ["sms", "dm", "facebook", "instagram", "whatsapp", "messenger"];
+  
+  if (directChannels.includes(channelType?.toLowerCase())) {
+    // Direct message channels start at DISCOVERY (they reached out proactively)
+    entryStage = OPPORTUNITY_STAGES.DISCOVERY;
+    console.log(`📊 [PIPELINE] Direct channel (${channelType}) → starting at DISCOVERY`);
+  } else {
+    // Widget/form submissions start at INTAKE
+    entryStage = OPPORTUNITY_STAGES.INTAKE;
+    console.log(`📊 [PIPELINE] Widget/form channel → starting at INTAKE`);
+  }
+
+  try {
+    const result = await transitionToStage(contactId, entryStage, { contact });
+    if (result && !result.skipped) {
+      console.log(`✅ [PIPELINE] Entry stage set: ${entryStage} (contact: ${contactId})`);
+    }
+    return result;
+  } catch (err) {
+    console.error(`❌ [PIPELINE] Failed to set entry stage:`, err.message || err);
+    return null;
+  }
+}
+
+/**
+ * Move a lead from INTAKE to DISCOVERY (for widget leads after first AI response)
+ */
+async function advanceFromIntakeToDiscovery(contactId, { contact = null } = {}) {
+  if (!contactId) return null;
+
+  const contactRecord = contact || (await getContact(contactId));
+  const cf = normalizeCustomFields(contactRecord?.customField || contactRecord?.customFields || {});
+  const currentStage = cf.opportunity_stage;
+
+  // Only advance if currently at INTAKE
+  if (currentStage && currentStage !== OPPORTUNITY_STAGES.INTAKE) {
+    console.log(`ℹ️ [PIPELINE] Not advancing - already past INTAKE (current: ${currentStage})`);
+    return null;
+  }
+
+  try {
+    const result = await transitionToStage(contactId, OPPORTUNITY_STAGES.DISCOVERY, { contact: contactRecord });
+    if (result && !result.skipped) {
+      console.log(`✅ [PIPELINE] Advanced from INTAKE to DISCOVERY (contact: ${contactId})`);
+    }
+    return result;
+  } catch (err) {
+    console.error(`❌ [PIPELINE] Failed to advance to DISCOVERY:`, err.message || err);
+    return null;
+  }
+}
+
 module.exports = {
   ensureOpportunity,
   transitionToStage,
   determineStageFromContext,
   syncOpportunityStageFromContact,
+  syncPipelineOnEntry,
+  advanceFromIntakeToDiscovery,
   getStageKeyFromId,
   boolField,
+  normalizeCustomFields,
 };
 

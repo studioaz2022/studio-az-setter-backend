@@ -16,6 +16,11 @@ const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
 } = require("../ai/contextBuilder");
+const {
+  syncPipelineOnEntry,
+  transitionToStage,
+} = require("../ai/opportunityManager");
+const { OPPORTUNITY_STAGES } = require("../config/constants");
 
 // Helper: Filter object to only show non-empty fields (for cleaner logs)
 function filterNonEmpty(obj) {
@@ -45,6 +50,9 @@ function deriveChannelContext(payload, contact) {
     ""
   ).toLowerCase();
   
+  // Check message type from GHL (type 11 = DM, type 1 = SMS, etc.)
+  const messageType = payload?.message?.type;
+  
   // Check tags for DM indicators
   const tagsRaw = payload?.tags || contact?.tags || [];
   const tags = Array.isArray(tagsRaw) ? tagsRaw : [tagsRaw];
@@ -58,12 +66,33 @@ function deriveChannelContext(payload, contact) {
     t.includes("messenger")
   );
   
-  const isDm = isDmFromMedium || isDmFromTags;
+  // Detect WhatsApp
+  const isWhatsApp = tagsLower.some(t => t.includes("whatsapp")) || medium === "whatsapp";
+  
+  // Detect SMS (has phone, not DM, not WhatsApp)
   const hasPhone = !!(contact?.phone || contact?.phoneNumber || payload?.phone);
+  const isDm = isDmFromMedium || isDmFromTags;
+  const isSms = hasPhone && !isDm && !isWhatsApp && messageType !== 11;
+  
+  // Determine channel type for pipeline purposes
+  let channelType = "unknown";
+  if (isDm) {
+    channelType = medium === "instagram" || medium === "ig" ? "instagram" : "facebook";
+  } else if (isWhatsApp) {
+    channelType = "whatsapp";
+  } else if (isSms) {
+    channelType = "sms";
+  } else if (messageType === 11) {
+    // GHL message type 11 is typically DM/social
+    channelType = "dm";
+  }
   
   return {
     isDm,
     hasPhone,
+    isWhatsApp,
+    isSms,
+    channelType,
     conversationId: null,
     phone: contact?.phone || contact?.phoneNumber || payload?.phone || null,
   };
@@ -145,6 +174,22 @@ function createApp() {
       console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
       console.log("📋 Contact custom fields (merged):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
 
+      // Derive channel context for message sending and pipeline sync
+      const channelContext = deriveChannelContext(payload, contact);
+      console.log("📡 Channel context:", channelContext);
+
+      // Sync pipeline on entry - SMS/DM/WhatsApp start at DISCOVERY
+      const cf = contact?.customField || contact?.customFields || {};
+      const hasOpportunity = !!cf.opportunity_id;
+      if (!hasOpportunity && channelContext.channelType !== "unknown") {
+        console.log(`📊 [PIPELINE] New lead from ${channelContext.channelType} - syncing entry stage...`);
+        await syncPipelineOnEntry(contactId, {
+          channelType: channelContext.channelType,
+          isFirstMessage: true,
+          contact,
+        });
+      }
+
       const result = await handleInboundMessage({
         contact,
         aiPhase: null,
@@ -162,10 +207,6 @@ function createApp() {
         reason: result?.routing?.reason,
         fieldUpdatesKeys: Object.keys(result?.aiResult?.field_updates || {}),
       });
-
-      // Derive channel context for message sending
-      const channelContext = deriveChannelContext(payload, contact);
-      console.log("📡 Channel context:", channelContext);
 
       // Send the AI's bubbles to the user
       const bubbles = result?.aiResult?.bubbles || [];
@@ -271,6 +312,18 @@ function createApp() {
         console.log("📩 Form message/notes:", syntheticText);
         console.log("📋 Contact custom fields (non-empty):", JSON.stringify(getNonEmptyCustomFields(effectiveContact), null, 2));
 
+        // Sync pipeline on entry - Widget/Form submissions start at INTAKE
+        const cf = effectiveContact?.customField || effectiveContact?.customFields || {};
+        const hasOpportunity = !!cf.opportunity_id;
+        if (!hasOpportunity) {
+          console.log(`📊 [PIPELINE] New lead from Widget/Form - syncing entry stage to INTAKE...`);
+          await syncPipelineOnEntry(contactId, {
+            channelType: "widget",
+            isFirstMessage: true,
+            contact: effectiveContact,
+          });
+        }
+
         const result = await handleInboundMessage({
           contact: effectiveContact,
           aiPhase: null,
@@ -361,6 +414,10 @@ function createApp() {
     }
 
     try {
+      console.log("\n💳 ════════════════════════════════════════════════════════");
+      console.log("💳 SQUARE PAYMENT WEBHOOK HIT");
+      console.log("💳 ════════════════════════════════════════════════════════");
+
       const payment = payload?.data?.object?.payment || {};
       const orderId = payment.order_id || payment.orderId || null;
       let contactId = payment.reference_id || payment.referenceId || null;
@@ -370,12 +427,22 @@ function createApp() {
       }
 
       if (contactId) {
+        console.log(`💳 Deposit paid for contact: ${contactId}`);
+        
+        // Update deposit_paid field
         await updateSystemFields(contactId, {
           deposit_paid: true,
         });
+
+        // Sync pipeline to QUALIFIED stage
+        console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
+        await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
+        console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
       } else {
         console.warn("⚠️ /square/webhook could not resolve contactId from payment");
       }
+
+      console.log("💳 ════════════════════════════════════════════════════════\n");
     } catch (err) {
       console.error("❌ /square/webhook processing error:", err.message || err);
     }
