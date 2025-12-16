@@ -160,21 +160,44 @@ async function addOpportunityNote({ opportunityId, content }) {
 
 async function searchOpportunities({
   query = {},
+  pagination = null,
 }) {
-  const url = `${GHL_BASE_URL}/opportunities/search`;
-  const payload = {
-    locationId: GHL_LOCATION_ID,
-    query: {
-      pipelineId: PIPELINE_ID,
-      ...query,
-    },
-  };
+  // NOTE: LeadConnector/GHL supports searching opportunities by contact via GET:
+  // /opportunities/search?location_id=...&contact_id=...
+  // This is the canonical path used by our CRM and avoids 422 errors seen with the POST schema.
+  const q = query || {};
+  const contactId = q.contactId || q.contact_id || null;
+  const locationId = q.locationId || q.location_id || GHL_LOCATION_ID;
 
-  const response = await axios.post(url, payload, {
-    headers: ghlHeaders(),
-  });
+  if (!locationId) {
+    throw new Error("GHL_LOCATION_ID is missing");
+  }
 
-  return response.data?.opportunities || [];
+  // Prefer GET-by-contact when contactId is present (most critical path: pipeline sync / ensureOpportunity).
+  if (contactId) {
+    const params = new URLSearchParams();
+    params.set("location_id", String(locationId));
+    params.set("contact_id", String(contactId));
+
+    // Optional pagination support (GHL returns nextPageUrl with startAfter + startAfterId)
+    if (pagination?.startAfter !== undefined && pagination?.startAfter !== null) {
+      params.set("startAfter", String(pagination.startAfter));
+    }
+    if (pagination?.startAfterId) {
+      params.set("startAfterId", String(pagination.startAfterId));
+    }
+
+    const url = `${GHL_BASE_URL}/opportunities/search?${params.toString()}`;
+    const response = await axios.get(url, { headers: ghlHeaders() });
+    return response.data?.opportunities || [];
+  }
+
+  // Fallback: we don't currently have a reliable, documented schema for a broad "search" without contact_id.
+  // Returning [] prevents hard failures in non-critical paths (e.g., workload estimation) until implemented.
+  console.warn(
+    "⚠️ [GHL Opportunities] searchOpportunities called without contact_id; returning empty list. Provide contactId/contact_id to use the supported GET search."
+  );
+  return [];
 }
 
 async function getOpportunity(opportunityId) {
@@ -186,15 +209,10 @@ async function getOpportunity(opportunityId) {
 
 async function getOpportunitiesByContact({ contactId, pipelineId = PIPELINE_ID }) {
   if (!contactId) throw new Error("getOpportunitiesByContact requires contactId");
+  // Use GET /opportunities/search?location_id=...&contact_id=...
+  // pipelineId is kept for signature compatibility but is not required for the GET-by-contact endpoint.
   return searchOpportunities({
-    query: {
-      contactId,
-      pipelineId,
-    },
-    pagination: {
-      limit: 50,
-      page: 1,
-    },
+    query: { contactId, pipelineId },
   });
 }
 

@@ -56,8 +56,16 @@ function boolField(value) {
 }
 
 async function findExistingOpportunity(contactId) {
-  const opportunities = await getOpportunitiesByContact({ contactId });
-  return opportunities?.[0] || null;
+  try {
+    const opportunities = await getOpportunitiesByContact({ contactId });
+    return opportunities?.[0] || null;
+  } catch (err) {
+    console.warn(
+      `⚠️ [PIPELINE] getOpportunitiesByContact failed; will create a new opportunity for ${contactId}:`,
+      err.response?.data || err.message || err
+    );
+    return null;
+  }
 }
 
 async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTAKE, contact = null }) {
