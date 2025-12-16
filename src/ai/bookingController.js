@@ -287,6 +287,9 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
   const preferredTimeWindow = context.preferredTimeWindow || null;
   const preferredDay = context.preferredDay || null;
   const preferredWeek = context.preferredWeek || null;
+  const preferredMonth =
+    context.preferredMonth === 0 ? 0 : context.preferredMonth || null; // allow January (0)
+  const preferredYear = context.preferredYear || null;
   const contact = context.contact || null;
   const contactId = contact?.id || contact?._id || canonicalState.contactId || null;
 
@@ -311,21 +314,47 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
 
     // Calculate date range
     const now = new Date();
+    console.log("📅 [SLOTS] Inputs", {
+      preferredWeek,
+      preferredDay,
+      preferredTimeWindow,
+      preferredMonth,
+      preferredYear,
+      nowIso: now.toISOString(),
+      tzOffsetMinutes: now.getTimezoneOffset(),
+    });
     let startDate = new Date(now);
     startDate.setHours(0, 0, 0, 0);
+    let endDate = null;
 
-    // If "next week" preference, skip to next Monday
-    if (preferredWeek === "next") {
-      const currentDayIndex = startDate.getDay();
-      const daysUntilNextMonday = currentDayIndex === 0 ? 1 : (8 - currentDayIndex);
-      startDate.setDate(startDate.getDate() + daysUntilNextMonday);
-      console.log(`📅 [SLOTS] "Next week" preference - starting from ${startDate.toDateString()}`);
+    if (preferredMonth !== null) {
+      const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const nowYear = now.getFullYear();
+      const targetYear =
+        preferredYear ||
+        (preferredMonth < now.getMonth() ? nowYear + 1 : nowYear);
+
+      startDate = new Date(targetYear, preferredMonth, 1);
+      startDate.setHours(0, 0, 0, 0);
+      endDate = new Date(targetYear, preferredMonth + 1, 0, 23, 59, 59, 999);
+
+      console.log(
+        `📅 [SLOTS] Month preference "${monthNames[preferredMonth]}" ${targetYear} - fetching full month`
+      );
+    } else {
+      // If "next week" preference, skip to next Monday
+      if (preferredWeek === "next") {
+        const currentDayIndex = startDate.getDay();
+        const daysUntilNextMonday = currentDayIndex === 0 ? 1 : 8 - currentDayIndex;
+        startDate.setDate(startDate.getDate() + daysUntilNextMonday);
+        console.log(`📅 [SLOTS] "Next week" preference - starting from ${startDate.toDateString()}`);
+      }
+
+      // End date: 7 days from start
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 7);
+      endDate.setHours(23, 59, 59, 999);
     }
-
-    // End date: 7 days from start
-    const endDate = new Date(startDate);
-    endDate.setDate(endDate.getDate() + 7);
-    endDate.setHours(23, 59, 59, 999);
 
     console.log(`📅 [SLOTS] Fetching real GHL slots from ${startDate.toISOString()} to ${endDate.toISOString()}`);
 

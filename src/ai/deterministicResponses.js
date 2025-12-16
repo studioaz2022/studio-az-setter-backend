@@ -1,6 +1,8 @@
 // deterministicResponses.js
 // Deterministic system responses for hard-skip scenarios (scheduling, slots, etc.)
 
+const crypto = require("crypto");
+
 const {
   generateSuggestedSlots,
   getAvailableSlots,
@@ -23,6 +25,37 @@ function extractTimePreferences(messageText) {
   let preferredWeek = null;
   let preferredDay = null;
   let preferredTimeWindow = null;
+  let preferredMonth = null;
+  let preferredYear = null;
+
+  const monthMatch = text.match(
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i
+  );
+  if (monthMatch) {
+    const monthToken = monthMatch[1].toLowerCase().slice(0, 3);
+    const mapped = {
+      jan: 0,
+      feb: 1,
+      mar: 2,
+      apr: 3,
+      may: 4,
+      jun: 5,
+      jul: 6,
+      aug: 7,
+      sep: 8,
+      oct: 9,
+      nov: 10,
+      dec: 11,
+    }[monthToken];
+    if (mapped !== undefined) {
+      preferredMonth = mapped;
+    }
+  }
+
+  const yearMatch = text.match(/\b(20\d{2})\b/);
+  if (yearMatch) {
+    preferredYear = parseInt(yearMatch[1], 10);
+  }
 
   // Detect week preference
   if (/next week/i.test(text)) {
@@ -40,17 +73,69 @@ function extractTimePreferences(messageText) {
   const dayMatch = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
   if (dayMatch) preferredDay = dayMatch[1].toLowerCase();
 
-  return { preferredWeek, preferredDay, preferredTimeWindow };
+  return { preferredWeek, preferredDay, preferredTimeWindow, preferredMonth, preferredYear };
+}
+
+function shortSha1(value) {
+  try {
+    return crypto.createHash("sha1").update(String(value)).digest("hex").slice(0, 12);
+  } catch {
+    return null;
+  }
 }
 
 async function persistLastSentSlots(contactId, slots = []) {
   if (!contactId || !slots || slots.length === 0) return;
   try {
-    await updateSystemFields(contactId, {
-      last_sent_slots: JSON.stringify(slots),
+    const slotsJson = JSON.stringify(slots);
+    const bytes = Buffer.byteLength(slotsJson, "utf8");
+    console.log("🧾 [SLOT PERSIST] Writing last_sent_slots", {
+      contactId,
+      slotsCount: slots.length,
+      bytes,
+      sha1: shortSha1(slotsJson),
+      preview: slots.slice(0, 4).map((s) => ({
+        startTime: s?.startTime || null,
+        endTime: s?.endTime || null,
+        calendarId: s?.calendarId || null,
+        displayText: s?.displayText || null,
+      })),
+    });
+
+    const res = await updateSystemFields(contactId, {
+      last_sent_slots: slotsJson,
       times_sent: true,
     });
+    console.log("🧾 [SLOT PERSIST] updateSystemFields result", {
+      contactId,
+      ok: !!res,
+    });
     console.log(`✅ [SLOT PERSIST] Saved ${slots.length} slots to GHL for contact ${contactId}`);
+
+    if (String(process.env.DEBUG_SLOT_PERSIST_READBACK || "").toLowerCase() === "true") {
+      try {
+        const verifyContact = await getContact(contactId);
+        const verifyCf = verifyContact?.customField || verifyContact?.customFields || {};
+        const stored =
+          verifyCf.last_sent_slots || verifyCf.lastSentSlots || verifyCf["Last Sent Slots"] || null;
+        console.log("🧾 [SLOT PERSIST] Readback", {
+          contactId,
+          present: !!stored,
+          type: Array.isArray(stored) ? "array" : typeof stored,
+          len:
+            typeof stored === "string"
+              ? stored.length
+              : Array.isArray(stored)
+              ? stored.length
+              : stored && typeof stored === "object"
+              ? Object.keys(stored).length
+              : 0,
+          sha1: typeof stored === "string" ? shortSha1(stored) : null,
+        });
+      } catch (readErr) {
+        console.error("❌ [SLOT PERSIST] Readback failed:", readErr.message || readErr);
+      }
+    }
   } catch (err) {
     console.error("❌ Failed to persist last_sent_slots:", err.message || err);
   }
@@ -89,6 +174,8 @@ async function buildDeterministicResponse({
           preferredDay: timePrefs.preferredDay,
           preferredTimeWindow: timePrefs.preferredTimeWindow,
           preferredWeek: timePrefs.preferredWeek,
+          preferredMonth: timePrefs.preferredMonth,
+          preferredYear: timePrefs.preferredYear,
         },
       });
     } catch (err) {
@@ -176,10 +263,31 @@ async function buildDeterministicResponse({
         
         // Try multiple possible field names/keys
         const rawSlots = cf.last_sent_slots || cf.lastSentSlots || cf["Last Sent Slots"] || null;
+        const rawSlotsSourceKey =
+          (cf.last_sent_slots && "last_sent_slots") ||
+          (cf.lastSentSlots && "lastSentSlots") ||
+          (cf["Last Sent Slots"] && "Last Sent Slots") ||
+          null;
         
         // Log available fields for debugging
         const cfKeys = Object.keys(cf || {});
         console.log(`📋 [SLOT RECOVERY] Contact has ${cfKeys.length} custom fields. Looking for slot data...`);
+        if (rawSlots) {
+          const rawType = Array.isArray(rawSlots) ? "array" : typeof rawSlots;
+          const rawLen =
+            typeof rawSlots === "string"
+              ? rawSlots.length
+              : Array.isArray(rawSlots)
+              ? rawSlots.length
+              : rawSlots && typeof rawSlots === "object"
+              ? Object.keys(rawSlots).length
+              : 0;
+          console.log("📋 [SLOT RECOVERY] Found last_sent_slots field", {
+            sourceKey: rawSlotsSourceKey,
+            type: rawType,
+            len: rawLen,
+          });
+        }
         
         // Try to find any field that looks like slot data (JSON array)
         if (!rawSlots) {
@@ -187,11 +295,25 @@ async function buildDeterministicResponse({
             const val = cf[key];
             if (typeof val === "string" && val.startsWith("[{") && val.includes("startTime")) {
               console.log(`📋 [SLOT RECOVERY] Found potential slot data in field: ${key}`);
+              console.log("📋 [SLOT RECOVERY] Potential slot field details", {
+                key,
+                type: typeof val,
+                len: val.length,
+                sha1: shortSha1(val),
+              });
               recoveredSlots = parseJsonField(val, []);
               if (recoveredSlots.length > 0) break;
             }
           }
         } else {
+          if (typeof rawSlots === "string") {
+            console.log("📋 [SLOT RECOVERY] Raw slot field details", {
+              key: rawSlotsSourceKey,
+              type: "string",
+              len: rawSlots.length,
+              sha1: shortSha1(rawSlots),
+            });
+          }
           recoveredSlots = parseJsonField(rawSlots, []);
         }
         
@@ -209,6 +331,8 @@ async function buildDeterministicResponse({
                 preferredDay: timePrefs.preferredDay,
                 preferredTimeWindow: timePrefs.preferredTimeWindow,
                 preferredWeek: timePrefs.preferredWeek,
+                preferredMonth: timePrefs.preferredMonth,
+                preferredYear: timePrefs.preferredYear,
               },
             });
             if (freshSlots.length > 0) {
@@ -220,13 +344,28 @@ async function buildDeterministicResponse({
           }
         }
       } catch (err) {
-        console.error("❌ [SLOT RECOVERY] Failed to fetch contact:", err.message || err);
+          console.error("❌ [SLOT RECOVERY] Failed to fetch contact:", err.message || err);
+        }
       }
-    }
 
+    const selectionResult = parseTimeSelection(messageText, recoveredSlots);
+    const selectionFromIndex =
+      Number.isInteger(selectionResult) && selectionResult >= 0
+        ? recoveredSlots[selectionResult] || null
+        : null;
     const chosenSlot =
-      parseTimeSelection(messageText, recoveredSlots) ||
+      (selectionResult && typeof selectionResult === "object" && !Array.isArray(selectionResult)
+        ? selectionResult
+        : selectionFromIndex) ||
       (recoveredSlots.length === 1 ? recoveredSlots[0] : null);
+
+    console.log(
+      "🧭 [SLOT CHOICE] parseTimeSelection ->",
+      selectionResult,
+      typeof selectionResult,
+      "chosenSlot",
+      chosenSlot ? chosenSlot.startTime : null
+    );
 
     if (!chosenSlot || !contactId) {
       // Re-offer structured availability if we cannot parse or have no contact
