@@ -29,7 +29,6 @@ async function createOpportunity({
   pipelineStageId,
   status = "open",
   monetaryValue = 0,
-  tags = [],
   source = "AI Setter",
   assignedUserId = null,
 }) {
@@ -46,7 +45,6 @@ async function createOpportunity({
     name: name || "Tattoo Opportunity",
     status,
     monetaryValue,
-    tags,
     source,
   };
 
@@ -70,7 +68,6 @@ async function upsertOpportunity({
   pipelineStageId,
   status = "open",
   monetaryValue = 0,
-  tags = [],
   source = "AI Setter",
   assignedTo = null,
   assignedUserId = null,
@@ -88,7 +85,6 @@ async function upsertOpportunity({
     name: name || "Tattoo Opportunity",
     status,
     monetaryValue,
-    tags,
     source,
   };
 
