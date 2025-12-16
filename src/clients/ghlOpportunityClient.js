@@ -162,41 +162,35 @@ async function searchOpportunities({
   query = {},
   pagination = null,
 }) {
-  // NOTE: LeadConnector/GHL supports searching opportunities by contact via GET:
+  // NOTE: LeadConnector/GHL supports searching opportunities via GET:
   // /opportunities/search?location_id=...&contact_id=...
-  // This is the canonical path used by our CRM and avoids 422 errors seen with the POST schema.
+  // /opportunities/search?location_id=...&assigned_to=...
+  // This avoids 422 errors seen with the POST schema.
   const q = query || {};
   const contactId = q.contactId || q.contact_id || null;
   const assignedTo = q.assignedTo || q.assigned_to || null;
-  const status = q.status || null;
-  const pipelineStageId = q.pipelineStageId || q.pipeline_stage_id || null;
+  const status = q.status || null; // For client-side filtering
+  const pipelineStageId = q.pipelineStageId || q.pipeline_stage_id || null; // For client-side filtering
   const locationId = q.locationId || q.location_id || GHL_LOCATION_ID;
 
   if (!locationId) {
     throw new Error("GHL_LOCATION_ID is missing");
   }
 
+  // Build query params - require at least contactId OR assignedTo
   const params = new URLSearchParams();
   params.set("location_id", String(locationId));
 
-  // Prefer GET-by-contact when contactId is present (most critical path: pipeline sync / ensureOpportunity).
   if (contactId) {
     params.set("contact_id", String(contactId));
+  } else if (assignedTo) {
+    params.set("assigned_to", String(assignedTo));
   } else {
-    // Workload queries: allow assigned_to and status filters
-    if (assignedTo) {
-      params.set("assigned_to", String(assignedTo));
-    }
-    if (status) {
-      params.set("status", String(status));
-    }
-    // If no filters are provided, warn and return empty to avoid unintended broad queries
-    if (!assignedTo && !status) {
-      console.warn(
-        "⚠️ [GHL Opportunities] searchOpportunities called without contact_id/assigned_to/status; returning empty list."
-      );
-      return [];
-    }
+    // No supported filter provided
+    console.warn(
+      "⚠️ [GHL Opportunities] searchOpportunities called without contact_id or assigned_to; returning empty list."
+    );
+    return [];
   }
 
   // Optional pagination inputs for first page
@@ -207,6 +201,7 @@ async function searchOpportunities({
     params.set("startAfterId", String(pagination.startAfterId));
   }
 
+  // Fetch all pages
   let url = `${GHL_BASE_URL}/opportunities/search?${params.toString()}`;
   const results = [];
 
@@ -215,22 +210,25 @@ async function searchOpportunities({
     const opportunities = response.data?.opportunities || [];
     results.push(...opportunities);
 
+    // Check for next page
     const nextPageUrl = response.data?.meta?.nextPageUrl || response.data?.meta?.nextPageURL || null;
-    if (nextPageUrl) {
-      url = nextPageUrl;
-    } else {
-      url = null;
-    }
+    url = nextPageUrl || null;
   }
 
-  // If caller provided pipelineStageId, filter client-side (API filter is not guaranteed for this param)
+  // Client-side filtering for status (GHL GET doesn't support status param directly)
+  let filtered = results;
+  if (status) {
+    filtered = filtered.filter((opp) => opp.status === status);
+  }
+
+  // Client-side filtering for pipelineStageId
   if (pipelineStageId) {
-    return results.filter(
+    filtered = filtered.filter(
       (opp) => opp.pipelineStageId === pipelineStageId || opp.pipeline_stage_id === pipelineStageId
     );
   }
 
-  return results;
+  return filtered;
 }
 
 async function getOpportunity(opportunityId) {

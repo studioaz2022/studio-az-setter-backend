@@ -204,18 +204,36 @@ function mapAssignedUserIdToArtist(userId) {
 async function getArtistWorkloads() {
   const base = buildInitialWorkloadMap();
 
-  try {
-    const opportunities = await searchOpportunities({
-      query: { status: "open" },
-    });
+  // Query opportunities per artist using their assigned user ID
+  // GHL GET search supports: /opportunities/search?location_id=...&assigned_to=...
+  const artistUserIds = Object.entries(ARTIST_ASSIGNED_USER_IDS || {});
 
-    opportunities.forEach((opp) => {
-      const assignedUserId = opp.assignedTo || opp.assignedUserId || opp.assigned_user_id;
-      const artistName = mapAssignedUserIdToArtist(assignedUserId);
+  // Dedupe user IDs (in case multiple artists share same ID)
+  const uniqueUserIds = [...new Set(artistUserIds.map(([, id]) => id))];
+
+  try {
+    // Fetch opportunities for each unique user ID in parallel
+    const results = await Promise.all(
+      uniqueUserIds.map(async (userId) => {
+        try {
+          const opportunities = await searchOpportunities({
+            query: { assigned_to: userId, status: "open" },
+          });
+          return { userId, opportunities };
+        } catch (err) {
+          console.warn(`⚠️ Failed to fetch opportunities for user ${userId}:`, err.message);
+          return { userId, opportunities: [] };
+        }
+      })
+    );
+
+    // Aggregate counts per artist
+    for (const { userId, opportunities } of results) {
+      const artistName = mapAssignedUserIdToArtist(userId);
       if (artistName) {
-        base[artistName] = (base[artistName] || 0) + 1;
+        base[artistName] = (base[artistName] || 0) + opportunities.length;
       }
-    });
+    }
 
     artistWorkloads = { ...base };
   } catch (err) {
@@ -492,60 +510,59 @@ function getCalendarIdForArtist(artistName, consultMode = "online") {
  */
 async function refreshArtistWorkloads({ force = false } = {}) {
   const { PIPELINE_STAGE_CONFIG } = require("../config/pipelineConfig");
-  const { OPPORTUNITY_STAGES, TATTOO_FIELDS } = require("../config/constants");
+  const { OPPORTUNITY_STAGES } = require("../config/constants");
   
   const scores = buildInitialWorkloadMap();
   
-  // Stage scores mapping
+  // Stage scores mapping (stageId -> score)
   const stageScores = {
-    [OPPORTUNITY_STAGES.CONSULT_MESSAGE]: 1,
-    [OPPORTUNITY_STAGES.CONSULT_APPOINTMENT]: 2,
-    [OPPORTUNITY_STAGES.TATTOO_BOOKED]: 3,
+    [PIPELINE_STAGE_CONFIG[OPPORTUNITY_STAGES.CONSULT_MESSAGE]?.id]: 1,
+    [PIPELINE_STAGE_CONFIG[OPPORTUNITY_STAGES.CONSULT_APPOINTMENT]?.id]: 2,
+    [PIPELINE_STAGE_CONFIG[OPPORTUNITY_STAGES.TATTOO_BOOKED]?.id]: 3,
   };
 
-  // Search opportunities for each tracked stage
-  for (const [stageKey, score] of Object.entries(stageScores)) {
-    const stageConfig = PIPELINE_STAGE_CONFIG[stageKey];
-    if (!stageConfig) continue;
+  // Query opportunities per artist and apply stage-based scoring
+  const artistUserIds = Object.entries(ARTIST_ASSIGNED_USER_IDS || {});
+  const uniqueUserIds = [...new Set(artistUserIds.map(([, id]) => id))];
 
-    try {
-      const opportunities = await searchOpportunities({
-        query: { pipelineStageId: stageConfig.id },
-      });
+  try {
+    // Fetch all opportunities for each artist in parallel
+    const results = await Promise.all(
+      uniqueUserIds.map(async (userId) => {
+        try {
+          const opportunities = await searchOpportunities({
+            query: { assigned_to: userId },
+          });
+          return { userId, opportunities };
+        } catch (err) {
+          console.warn(`⚠️ Failed to fetch opportunities for user ${userId}:`, err.message);
+          return { userId, opportunities: [] };
+        }
+      })
+    );
+
+    // Score each artist based on their opportunities' pipeline stages
+    for (const { userId, opportunities } of results) {
+      const artistName = mapAssignedUserIdToArtist(userId);
+      if (!artistName) continue;
 
       for (const opp of opportunities) {
-        const assignedUserId = opp.assignedTo || opp.assignedUserId || opp.assigned_user_id;
-        let artistName = null;
-
-        if (assignedUserId) {
-          artistName = mapAssignedUserIdToArtist(assignedUserId);
-        } else if (opp.contactId) {
-          // Fallback: check contact's inquired_technician field
-          try {
-            const contact = await getContact(opp.contactId);
-            if (contact) {
-              const cf = contact.customField || contact.customFields || {};
-              const inquiredTechnician = cf[TATTOO_FIELDS.INQUIRED_TECHNICIAN];
-              if (inquiredTechnician) {
-                artistName = normalizeArtistName(inquiredTechnician);
-              }
-            }
-          } catch (err) {
-            console.warn(`⚠️ Failed to fetch contact ${opp.contactId} for workload calculation:`, err.message);
-          }
-        }
-
-        if (artistName) {
-          scores[artistName] = (scores[artistName] || 0) + score;
+        const stageId = opp.pipelineStageId || opp.pipeline_stage_id;
+        const stageScore = stageScores[stageId] || 0;
+        if (stageScore > 0) {
+          scores[artistName] = (scores[artistName] || 0) + stageScore;
         }
       }
-    } catch (err) {
-      console.error(`❌ Error fetching opportunities for stage ${stageKey}:`, err.message || err);
     }
-  }
 
-  // Update in-memory cache
-  artistWorkloads = { ...scores };
+    // Update in-memory cache
+    artistWorkloads = { ...scores };
+  } catch (err) {
+    console.error(
+      "❌ Error refreshing artist workloads:",
+      err.response?.data || err.message
+    );
+  }
   
   return scores;
 }
