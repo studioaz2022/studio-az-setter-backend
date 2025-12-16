@@ -290,6 +290,7 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
   const preferredMonth =
     context.preferredMonth === 0 ? 0 : context.preferredMonth || null; // allow January (0)
   const preferredYear = context.preferredYear || null;
+  const preferredWeekStartDate = context.preferredWeekStartDate || null; // Specific week start date
   const contact = context.contact || null;
   const contactId = contact?.id || contact?._id || canonicalState.contactId || null;
 
@@ -320,6 +321,7 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
       preferredTimeWindow,
       preferredMonth,
       preferredYear,
+      preferredWeekStartDate: preferredWeekStartDate?.toISOString?.() || null,
       nowIso: now.toISOString(),
       tzOffsetMinutes: now.getTimezoneOffset(),
     });
@@ -327,7 +329,18 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
     startDate.setHours(0, 0, 0, 0);
     let endDate = null;
 
-    if (preferredMonth !== null) {
+    // Handle specific week start date (from "week of January 11th" patterns)
+    if (preferredWeekStartDate) {
+      startDate = new Date(preferredWeekStartDate);
+      startDate.setHours(0, 0, 0, 0);
+      
+      // End date: Sunday of that week (6 days from Monday)
+      endDate = new Date(startDate);
+      endDate.setDate(endDate.getDate() + 6);
+      endDate.setHours(23, 59, 59, 999);
+      
+      console.log(`📅 [SLOTS] Specific week requested - fetching ${startDate.toDateString()} to ${endDate.toDateString()}`);
+    } else if (preferredMonth !== null) {
       const monthNames = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
       const nowYear = now.getFullYear();
       const targetYear =

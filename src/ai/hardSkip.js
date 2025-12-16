@@ -10,6 +10,12 @@ function shouldHardSkipAI({ intents = {}, derivedPhase = null, canonicalState = 
     return { skip: true, reason: "slot_selection" };
   }
 
+  // Multi-intent handling - if they ask a question alongside deposit intent,
+  // route to deterministic but with awareness of the question
+  if (intents.deposit_intent && intents.consult_path_choice_intent) {
+    return { skip: true, reason: "deposit_with_consult_question" };
+  }
+
   if (intents.deposit_intent) {
     return { skip: true, reason: "deposit_intent" };
   }

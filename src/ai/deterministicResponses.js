@@ -18,7 +18,7 @@ const { parseJsonField } = require("./phaseContract");
 
 /**
  * Extract time preferences from user message
- * Detects: "next week", "this week", day names, time windows
+ * Detects: "next week", "this week", "week of [date]", day names, time windows
  */
 function extractTimePreferences(messageText) {
   const text = String(messageText || "").toLowerCase();
@@ -27,41 +27,92 @@ function extractTimePreferences(messageText) {
   let preferredTimeWindow = null;
   let preferredMonth = null;
   let preferredYear = null;
+  let preferredWeekStartDate = null; // Specific date for "week of X"
 
-  const monthMatch = text.match(
-    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i
-  );
-  if (monthMatch) {
-    const monthToken = monthMatch[1].toLowerCase().slice(0, 3);
-    const mapped = {
-      jan: 0,
-      feb: 1,
-      mar: 2,
-      apr: 3,
-      may: 4,
-      jun: 5,
-      jul: 6,
-      aug: 7,
-      sep: 8,
-      oct: 9,
-      nov: 10,
-      dec: 11,
-    }[monthToken];
-    if (mapped !== undefined) {
-      preferredMonth = mapped;
+  // --- Detect "week of [date]" patterns ---
+  // Matches: "week of January 11", "week of the 11th", "week of jan 11th", etc.
+  const weekOfDatePattern = /\bweek\s+of\s+(?:the\s+)?(?:(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\s+)?(\d{1,2})(?:st|nd|rd|th)?\b/i;
+  const weekOfMatch = text.match(weekOfDatePattern);
+  
+  if (weekOfMatch) {
+    const monthToken = weekOfMatch[1]?.toLowerCase()?.slice(0, 3);
+    const dayOfMonth = parseInt(weekOfMatch[2], 10);
+    
+    // Determine the month
+    let targetMonth = null;
+    if (monthToken) {
+      const monthMap = {
+        jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
+        jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
+      };
+      targetMonth = monthMap[monthToken];
+    }
+    
+    // Calculate the week start date
+    const now = new Date();
+    const targetYear = targetMonth !== null && targetMonth < now.getMonth() 
+      ? now.getFullYear() + 1 
+      : now.getFullYear();
+    
+    // Use current month if none specified
+    const month = targetMonth !== null ? targetMonth : now.getMonth();
+    
+    // Create the target date and find the week's Monday
+    const targetDate = new Date(targetYear, month, dayOfMonth);
+    const dayOfWeek = targetDate.getDay();
+    const mondayOffset = dayOfWeek === 0 ? -6 : 1 - dayOfWeek; // Adjust to Monday
+    const weekStartMonday = new Date(targetDate);
+    weekStartMonday.setDate(targetDate.getDate() + mondayOffset);
+    
+    preferredWeekStartDate = weekStartMonday;
+    preferredMonth = month;
+    preferredYear = targetYear;
+    
+    console.log(`📅 [TIME PREFS] Detected "week of ${monthToken || 'current'} ${dayOfMonth}" → week starting ${weekStartMonday.toDateString()}`);
+  }
+
+  // Existing month detection (only if not already set by "week of" pattern)
+  if (preferredMonth === null) {
+    const monthMatch = text.match(
+      /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\b/i
+    );
+    if (monthMatch) {
+      const monthToken = monthMatch[1].toLowerCase().slice(0, 3);
+      const mapped = {
+        jan: 0,
+        feb: 1,
+        mar: 2,
+        apr: 3,
+        may: 4,
+        jun: 5,
+        jul: 6,
+        aug: 7,
+        sep: 8,
+        oct: 9,
+        nov: 10,
+        dec: 11,
+      }[monthToken];
+      if (mapped !== undefined) {
+        preferredMonth = mapped;
+      }
     }
   }
 
-  const yearMatch = text.match(/\b(20\d{2})\b/);
-  if (yearMatch) {
-    preferredYear = parseInt(yearMatch[1], 10);
+  // Existing year detection (only if not already set)
+  if (preferredYear === null) {
+    const yearMatch = text.match(/\b(20\d{2})\b/);
+    if (yearMatch) {
+      preferredYear = parseInt(yearMatch[1], 10);
+    }
   }
 
-  // Detect week preference
-  if (/next week/i.test(text)) {
-    preferredWeek = "next";
-  } else if (/this week/i.test(text)) {
-    preferredWeek = "this";
+  // Detect week preference (only if not "week of [date]")
+  if (!preferredWeekStartDate) {
+    if (/next week/i.test(text)) {
+      preferredWeek = "next";
+    } else if (/this week/i.test(text)) {
+      preferredWeek = "this";
+    }
   }
 
   // Detect time window
@@ -73,7 +124,7 @@ function extractTimePreferences(messageText) {
   const dayMatch = text.match(/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/i);
   if (dayMatch) preferredDay = dayMatch[1].toLowerCase();
 
-  return { preferredWeek, preferredDay, preferredTimeWindow, preferredMonth, preferredYear };
+  return { preferredWeek, preferredDay, preferredTimeWindow, preferredMonth, preferredYear, preferredWeekStartDate };
 }
 
 function monthIndexFromText(text) {
@@ -211,6 +262,7 @@ async function buildDeterministicResponse({
           preferredWeek: timePrefs.preferredWeek,
           preferredMonth: timePrefs.preferredMonth,
           preferredYear: timePrefs.preferredYear,
+          preferredWeekStartDate: timePrefs.preferredWeekStartDate,
         },
       });
     } catch (err) {
@@ -461,7 +513,11 @@ async function buildDeterministicResponse({
           : chosenSlot.startTime);
       const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
 
-      const message = `Got you for ${display}.\nHere’s the $${amount} refundable deposit to lock it: ${deposit?.url}\nI’ll keep it on hold for ~20 minutes.`;
+      const message = `Got you for ${display}.\n` +
+        `To lock in your consultation, we require a $${amount} deposit. ` +
+        `It's fully refundable if you don't end up loving the design, and it goes toward your tattoo total.\n\n` +
+        `Here's the link: ${deposit?.url}\n` +
+        `I'll keep that spot on hold for about 20 minutes.`;
 
       return {
         language: "en",
@@ -505,6 +561,68 @@ async function buildDeterministicResponse({
         language: "en",
         bubbles: [fallback],
         internal_notes: "deterministic_slot_selection_error_fallback",
+        meta: {
+          aiPhase: derivedPhase || null,
+          leadTemperature: null,
+        },
+        field_updates: {
+          consult_explained: true,
+        },
+      };
+    }
+  }
+
+  // === Multi-intent: deposit_intent + consult_path_choice_intent (question about consult) ===
+  // When lead asks a question while we're in deposit phase, ANSWER FIRST, then provide deposit context
+  if (intents.deposit_intent && intents.consult_path_choice_intent) {
+    const questionText = String(messageText).toLowerCase();
+    
+    // Detect what they're asking about
+    const asksAboutInPerson = /\bin[\s-]?person\b/.test(questionText) || /\bcome in\b/.test(questionText) || /\bstudio\b/.test(questionText);
+    const asksAboutVideo = /\bvideo\b/.test(questionText) || /\bcall\b/.test(questionText) || /\bzoom\b/.test(questionText);
+    const asksAboutFormat = asksAboutInPerson || asksAboutVideo || /\bhow\b.*\bconsult/.test(questionText);
+    
+    if (asksAboutFormat) {
+      // Build response that ANSWERS their question first
+      let answerPart = "";
+      
+      if (asksAboutInPerson) {
+        answerPart = "The consultation is actually done online — either through a quick video call or right here in messages, whichever you prefer.\n\n";
+      } else if (asksAboutVideo) {
+        answerPart = "Yep! We can do a video call. Since our artist's native language is Spanish, we include a translator on the call to keep everything clear.\n\n";
+      } else {
+        answerPart = "Great question! Since our artist's native language is Spanish, clients either do a video call with a translator or message the artist directly — both work great.\n\n";
+      }
+      
+      // Now provide deposit context
+      const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
+      let depositPart = "";
+      
+      if (depositPaid) {
+        depositPart = "Your deposit is already confirmed, so we're all set on that front!";
+      } else if (holdAppointmentId) {
+        // They have a hold, remind them about the deposit
+        try {
+          const deposit = await createDepositLinkForContact({
+            contactId,
+            amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+            description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+          });
+          depositPart = `The $${amount} deposit locks in your spot and is fully refundable if you don't love the design — it goes toward your tattoo total.\n\nHere's the link: ${deposit?.url}`;
+        } catch (err) {
+          console.error("❌ Failed to create deposit link for multi-intent response:", err.message || err);
+          depositPart = `Just finish up the $${amount} refundable deposit to lock it in.`;
+        }
+      } else {
+        depositPart = `Once you're ready, the $${amount} refundable deposit locks in your consultation. It goes toward your tattoo total and is fully refundable if you don't love the concept.`;
+      }
+      
+      const message = answerPart + depositPart;
+      
+      return {
+        language: "en",
+        bubbles: [message],
+        internal_notes: "deterministic_deposit_with_consult_question_answered",
         meta: {
           aiPhase: derivedPhase || null,
           leadTemperature: null,

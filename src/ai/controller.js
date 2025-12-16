@@ -91,6 +91,79 @@ async function handleInboundMessage({
   let selectedHandler = null;
   let routingReason = null;
 
+  // === Proactive consultation options explanation for consult_path phase ===
+  // When entering consult_path phase and consultation hasn't been explained yet,
+  // proactively explain the options before any scheduling happens
+  const shouldExplainConsultOptions = 
+    derivedPhaseBefore === "consult_path" &&
+    !canonicalBefore.consultExplained &&
+    !canonicalBefore.consultationType &&
+    !canonicalBefore.consultationTypeLocked &&
+    !intents.scheduling_intent && // Don't interrupt if they're already asking for times
+    !intents.slot_selection_intent &&
+    !intents.consult_path_choice_intent; // Don't explain if they're already choosing
+
+  if (shouldExplainConsultOptions && (effectiveContact?.id || effectiveContact?._id)) {
+    const consultContactId = effectiveContact.id || effectiveContact._id;
+    
+    // Determine language preference
+    const languagePreference = canonicalBefore.languagePreference || "English";
+    const isSpanish = String(languagePreference).toLowerCase().includes("span") || 
+                      String(languagePreference).toLowerCase() === "es";
+    
+    let consultOptionsMessage = "";
+    
+    if (isSpanish) {
+      // Spanish-speaking leads get simple choice
+      consultOptionsMessage = 
+        "El siguiente paso es una consulta rápida de 15-20 minutos con el artista para entender completamente tu diseño.\n\n" +
+        "¿Prefieres una videollamada o hacerlo por mensajes?";
+    } else {
+      // English leads get the full explanation with translator context
+      consultOptionsMessage = 
+        "Since our artist's native language is Spanish, our clients either do a video call with a translator or message the artist directly about their idea.\n\n" +
+        "Both options have worked great — which do you prefer?";
+    }
+    
+    // Send the consultation options message
+    try {
+      await sendConversationMessage({
+        contactId: consultContactId,
+        body: consultOptionsMessage,
+        channelContext: {},
+      });
+      
+      // Mark that we've explained the consult options
+      await updateSystemFields(consultContactId, {
+        consult_explained: true,
+      });
+      
+      console.log("📝 [CONSULT_PATH] Proactively sent consultation options explanation");
+      
+      // Return early - don't process further this turn
+      const endTime = Date.now();
+      console.log(`⏱️ [TIMING] Total handleInboundMessage took ${endTime - startTime}ms`);
+      
+      return {
+        aiResult: {
+          language: isSpanish ? "es" : "en",
+          bubbles: [], // Message already sent directly
+          internal_notes: "proactive_consult_options_explanation",
+          meta: { aiPhase: derivedPhaseBefore, leadTemperature: null },
+          field_updates: { consult_explained: true },
+          _messageSentDirectly: true,
+        },
+        ai_phase: derivedPhaseBefore,
+        lead_temperature: null,
+        flags: {},
+        routing: { intents, selected_handler: "consult_path_proactive", reason: "consult_path_explanation" },
+      };
+    } catch (err) {
+      console.error("❌ Failed to send proactive consult options:", err.message || err);
+      // Continue with normal flow if this fails
+    }
+  }
+
   // Multi-intent: consult path + scheduling → apply consult choice side effects before scheduling
   if (intents.scheduling_intent && intents.consult_path_choice_intent && (effectiveContact?.id || effectiveContact?._id)) {
     try {
