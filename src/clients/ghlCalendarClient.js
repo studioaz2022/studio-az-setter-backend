@@ -265,8 +265,10 @@ async function getConsultAppointmentsForContact(contactId, consultCalendarIds) {
  * Get free/available slots from a GHL calendar
  * @param {string} calendarId - Calendar ID to query
  * @param {Date} startDate - Start of date range
- * @param {Date} endDate - End of date range
+ * @param {Date} endDate - End of date range (max 31 days from startDate)
  * @returns {Promise<Array>} Array of slot objects with startTime, endTime, displayText
+ * 
+ * NOTE: GHL API constraint - date range cannot exceed 31 days
  */
 async function getCalendarFreeSlots(calendarId, startDate, endDate) {
   if (!calendarId) {
@@ -280,7 +282,15 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate) {
   const startMs = startDate.getTime();
   const endMs = endDate.getTime();
 
-  const url = `${GHL_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/free-slots?startDate=${startMs}&endDate=${endMs}`;
+  // GHL API constraint: date range cannot exceed 31 days
+  const maxRangeMs = 31 * 24 * 60 * 60 * 1000; // 31 days in milliseconds
+  let finalEndMs = endMs;
+  if (endMs - startMs > maxRangeMs) {
+    console.warn(`⚠️ [GHL CALENDAR] Date range exceeds 31 days, capping to 31 days from start`);
+    finalEndMs = startMs + maxRangeMs;
+  }
+
+  const url = `${GHL_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/free-slots?startDate=${startMs}&endDate=${finalEndMs}`;
 
   try {
     const resp = await axios.get(url, {
