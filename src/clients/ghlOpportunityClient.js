@@ -167,37 +167,70 @@ async function searchOpportunities({
   // This is the canonical path used by our CRM and avoids 422 errors seen with the POST schema.
   const q = query || {};
   const contactId = q.contactId || q.contact_id || null;
+  const assignedTo = q.assignedTo || q.assigned_to || null;
+  const status = q.status || null;
+  const pipelineStageId = q.pipelineStageId || q.pipeline_stage_id || null;
   const locationId = q.locationId || q.location_id || GHL_LOCATION_ID;
 
   if (!locationId) {
     throw new Error("GHL_LOCATION_ID is missing");
   }
 
+  const params = new URLSearchParams();
+  params.set("location_id", String(locationId));
+
   // Prefer GET-by-contact when contactId is present (most critical path: pipeline sync / ensureOpportunity).
   if (contactId) {
-    const params = new URLSearchParams();
-    params.set("location_id", String(locationId));
     params.set("contact_id", String(contactId));
-
-    // Optional pagination support (GHL returns nextPageUrl with startAfter + startAfterId)
-    if (pagination?.startAfter !== undefined && pagination?.startAfter !== null) {
-      params.set("startAfter", String(pagination.startAfter));
+  } else {
+    // Workload queries: allow assigned_to and status filters
+    if (assignedTo) {
+      params.set("assigned_to", String(assignedTo));
     }
-    if (pagination?.startAfterId) {
-      params.set("startAfterId", String(pagination.startAfterId));
+    if (status) {
+      params.set("status", String(status));
     }
-
-    const url = `${GHL_BASE_URL}/opportunities/search?${params.toString()}`;
-    const response = await axios.get(url, { headers: ghlHeaders() });
-    return response.data?.opportunities || [];
+    // If no filters are provided, warn and return empty to avoid unintended broad queries
+    if (!assignedTo && !status) {
+      console.warn(
+        "⚠️ [GHL Opportunities] searchOpportunities called without contact_id/assigned_to/status; returning empty list."
+      );
+      return [];
+    }
   }
 
-  // Fallback: we don't currently have a reliable, documented schema for a broad "search" without contact_id.
-  // Returning [] prevents hard failures in non-critical paths (e.g., workload estimation) until implemented.
-  console.warn(
-    "⚠️ [GHL Opportunities] searchOpportunities called without contact_id; returning empty list. Provide contactId/contact_id to use the supported GET search."
-  );
-  return [];
+  // Optional pagination inputs for first page
+  if (pagination?.startAfter !== undefined && pagination?.startAfter !== null) {
+    params.set("startAfter", String(pagination.startAfter));
+  }
+  if (pagination?.startAfterId) {
+    params.set("startAfterId", String(pagination.startAfterId));
+  }
+
+  let url = `${GHL_BASE_URL}/opportunities/search?${params.toString()}`;
+  const results = [];
+
+  while (url) {
+    const response = await axios.get(url, { headers: ghlHeaders() });
+    const opportunities = response.data?.opportunities || [];
+    results.push(...opportunities);
+
+    const nextPageUrl = response.data?.meta?.nextPageUrl || response.data?.meta?.nextPageURL || null;
+    if (nextPageUrl) {
+      url = nextPageUrl;
+    } else {
+      url = null;
+    }
+  }
+
+  // If caller provided pipelineStageId, filter client-side (API filter is not guaranteed for this param)
+  if (pipelineStageId) {
+    return results.filter(
+      (opp) => opp.pipelineStageId === pipelineStageId || opp.pipeline_stage_id === pipelineStageId
+    );
+  }
+
+  return results;
 }
 
 async function getOpportunity(opportunityId) {

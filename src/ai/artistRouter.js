@@ -210,7 +210,7 @@ async function getArtistWorkloads() {
     });
 
     opportunities.forEach((opp) => {
-      const assignedUserId = opp.assignedUserId || opp.assigned_user_id;
+      const assignedUserId = opp.assignedTo || opp.assignedUserId || opp.assigned_user_id;
       const artistName = mapAssignedUserIdToArtist(assignedUserId);
       if (artistName) {
         base[artistName] = (base[artistName] || 0) + 1;
@@ -514,7 +514,7 @@ async function refreshArtistWorkloads({ force = false } = {}) {
       });
 
       for (const opp of opportunities) {
-        const assignedUserId = opp.assignedUserId || opp.assigned_user_id;
+        const assignedUserId = opp.assignedTo || opp.assignedUserId || opp.assigned_user_id;
         let artistName = null;
 
         if (assignedUserId) {
