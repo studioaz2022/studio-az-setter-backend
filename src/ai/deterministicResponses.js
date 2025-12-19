@@ -498,6 +498,11 @@ async function buildDeterministicResponse({
       });
 
       const holdTimestamp = new Date().toISOString();
+      const slotDisplayText = chosenSlot.displayText ||
+        (chosenSlot.startTime && formatSlotDisplay
+          ? formatSlotDisplay(new Date(chosenSlot.startTime))
+          : chosenSlot.startTime);
+      
       await updateSystemFields(contactId, {
         hold_appointment_id: appointment?.id || appointment?._id,
         hold_created_at: holdTimestamp,
@@ -505,6 +510,9 @@ async function buildDeterministicResponse({
         hold_warning_sent: false,
         deposit_link_sent: true,
         deposit_link_url: deposit?.url || null,
+        // Store slot details for deposit confirmation message
+        pending_slot_display: slotDisplayText,
+        pending_slot_start_time: chosenSlot.startTime || null,
       });
 
       // Sync pipeline to DEPOSIT_PENDING
@@ -656,7 +664,7 @@ async function buildDeterministicResponse({
     // If already paid, do not resend link; advance to scheduling/confirmation
     if (depositPaid) {
       const slots =
-        lastSentSlots.length > 0 ? lastSentSlots.slice(0, 3) : generateSuggestedSlots({}).slice(0, 3);
+        lastSentSlots.length > 0 ? lastSentSlots.slice(0, 4) : generateSuggestedSlots({}).slice(0, 4);
 
       if (slots.length > 0) {
         const lines = slots.map((slot, idx) => {

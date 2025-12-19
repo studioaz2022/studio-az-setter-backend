@@ -145,27 +145,17 @@ async function handlePathChoice({
 
   if (choice === "translator") {
     console.log(`📝 [CONSULTATION_TYPE] Setting consultation_type="appointment" (translator needed) for contact ${contactId} (detected from: "${messageText}")`);
+    
+    // Auto-confirm translator when they pick video - they implicitly accepted it
+    // since video call option was presented WITH translator context already
     await updateSystemFields(contactId, {
       consultation_type: "appointment",
       consultation_type_locked: true,
       translator_needed: true,
+      translator_confirmed: true, // AUTO-CONFIRM: They chose video which was explained with translator
       language_barrier_explained: true,
       translator_explained: true,
     });
-
-    if (!applyOnly) {
-      const responseBody =
-        "Our artist's native language is Spanish, so for video consults we include a translator on the call to keep every detail clear. Does that work for you?";
-
-      await sendConversationMessage({
-        contactId,
-        body: responseBody,
-        channelContext,
-      });
-      console.log("📝 [CONSULTATION_TYPE] Sent translator explanation message directly");
-    } else {
-      console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for translator-path choice");
-    }
 
     // 🔁 Sync pipeline: appointment-based consult → CONSULT_APPOINTMENT stage
     try {
@@ -174,6 +164,7 @@ async function handlePathChoice({
         fieldOverrides: {
           consultation_type: "appointment",
           translator_needed: true,
+          translator_confirmed: true,
           translator_explained: true,
           language_barrier_explained: true,
         },
@@ -186,9 +177,14 @@ async function handlePathChoice({
       }
     }
 
-    // Do NOT generate times here; wait until deposit flow is ready
-    // Return WITHOUT responseBody since message was already sent directly
-    return { choice: "translator", messageSent: !applyOnly };
+    // CHANGED: Don't ask "Does that work for you?" - they already chose video
+    // Instead, return flag to trigger immediate slot offering
+    // The controller will handle offering slots directly
+    return { 
+      choice: "translator", 
+      messageSent: false, // No message sent - let scheduling flow handle it
+      shouldOfferSlots: true, // Signal to controller to offer slots immediately
+    };
   }
 
   return null;

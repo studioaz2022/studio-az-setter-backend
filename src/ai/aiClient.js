@@ -112,6 +112,11 @@ function buildOpenerMessages({
     handoff_context: conversationThread.handoffContext || null,
   } : null;
 
+  // Determine if this is the first outbound message (for personalization rules)
+  const isFirstMessage = !conversationThread || 
+    conversationThread.totalCount <= 1 || 
+    !conversationThread.thread?.some(msg => msg.startsWith('STUDIO:'));
+
   const userPayload = {
     phase: "opener",              // human-readable phase label
     ai_phase: aiPhase || "intake", // matches what we store in GHL system field
@@ -124,6 +129,7 @@ function buildOpenerMessages({
     intake: intake,
     latest_message_text: latestMessageText || intake?.latestMessageText || null,
     conversation_context: conversationContext, // NEW: Full conversation history
+    is_first_message: isFirstMessage, // Flag for personalization
     instructions: {
       goal:
         "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
@@ -216,6 +222,17 @@ ${threadContextSection}
 - **DO NOT repeat information** that's already in contactProfile or visible in conversation history.
 - **DO NOT repeat greetings** - only greet in the very first message of a new conversation.
 - Only acknowledge tattoo details when changedFieldsThisTurn includes them OR when the lead asks about them.
+
+**PERSONALIZATION (CRITICAL - FIRST MESSAGE RULE):**
+- is_first_message = ${isFirstMessage}
+- Lead's first name: "${contactSafe.firstName || 'unknown'}"
+- IF is_first_message === true AND contact.firstName exists:
+  - You MUST start your first bubble with "Hey ${contactSafe.firstName} —" or "Hey ${contactSafe.firstName},"
+  - Example: "Hey Maria — sick idea! What size were you thinking?"
+  - This makes the conversation personal and warm from the start.
+- IF is_first_message === false:
+  - Do NOT greet them again. Dive straight into the response.
+  - No "Hey", "Hi", "Hello" at the start of messages.
 
 **CONSULT EXPLANATION RULE (CRITICAL):**
 - consultExplained = ${consultExplained ? 'true' : 'false'}

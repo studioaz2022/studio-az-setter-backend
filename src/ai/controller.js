@@ -225,19 +225,50 @@ async function handleInboundMessage({
         applyOnly: false,
       });
 
-      // Don't add to bubbles if message was already sent directly by handlePathChoice
-      const messageSent = consultResult?.messageSent === true;
+      // If video call was picked, offer slots immediately (translator auto-confirmed)
+      if (consultResult?.shouldOfferSlots) {
+        console.log("📅 [ROUTING] Video call selected → offering slots immediately (translator auto-confirmed)");
+        
+        // Send a brief acknowledgment then offer slots
+        await sendConversationMessage({
+          contactId: effectiveContact.id || effectiveContact._id,
+          body: "Perfect — let me pull up some times for you.",
+          channelContext: {},
+        });
+        
+        // Trigger scheduling flow by setting scheduling intent
+        const schedulingResponse = await buildDeterministicResponse({
+          intents: { scheduling_intent: true },
+          derivedPhase: derivedPhaseBefore,
+          canonicalState: { ...canonicalBefore, translatorConfirmed: true },
+          contact: effectiveContact,
+          channelContext: {},
+          messageText: latestMessageText,
+          changedFields: {},
+        });
+        
+        response = {
+          ...schedulingResponse,
+          internal_notes: "consult_path_video_with_immediate_slots",
+          _messageSentDirectly: true,
+        };
+        selectedHandler = "consult_path_scheduling";
+        routingReason = "video_consult_with_slots";
+      } else {
+        // Don't add to bubbles if message was already sent directly by handlePathChoice
+        const messageSent = consultResult?.messageSent === true;
 
-      response = {
-        language: "en",
-        bubbles: [], // Empty - message already sent by consultPathHandler
-        internal_notes: "consult_path_choice",
-        meta: { aiPhase: derivedPhaseBefore || null, leadTemperature: null },
-        field_updates: {},
-        _messageSentDirectly: messageSent, // Flag to prevent double-send
-      };
-      selectedHandler = "consult_path";
-      routingReason = "consult_path_choice_intent";
+        response = {
+          language: "en",
+          bubbles: [], // Empty - message already sent by consultPathHandler
+          internal_notes: "consult_path_choice",
+          meta: { aiPhase: derivedPhaseBefore || null, leadTemperature: null },
+          field_updates: {},
+          _messageSentDirectly: messageSent, // Flag to prevent double-send
+        };
+        selectedHandler = "consult_path";
+        routingReason = "consult_path_choice_intent";
+      }
     } catch (err) {
       console.error("❌ [ROUTING] Failed to process consult-path choice:", err.message || err);
     }

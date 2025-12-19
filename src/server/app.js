@@ -23,6 +23,7 @@ const {
   transitionToStage,
 } = require("../ai/opportunityManager");
 const { OPPORTUNITY_STAGES } = require("../config/constants");
+const { formatSlotDisplay } = require("../ai/bookingController");
 
 // Helper: Filter object to only show non-empty fields (for cleaner logs)
 function filterNonEmpty(obj) {
@@ -503,6 +504,69 @@ function createApp() {
         console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
         await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
         console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
+
+        // === SEND DEPOSIT CONFIRMATION MESSAGE ===
+        try {
+          // Fetch contact info for personalization and appointment details
+          const contact = await getContact(contactId);
+          const cf = contact?.customField || contact?.customFields || {};
+          const firstName = contact?.firstName || contact?.first_name || "";
+          
+          // Get the pending/hold slot info
+          const pendingSlotDisplay = cf.pending_slot_display || cf.pendingSlotDisplay || null;
+          const pendingSlotStartTime = cf.pending_slot_start_time || cf.pendingSlotStartTime || null;
+          const consultationType = cf.consultation_type || cf.consultationType || "online";
+          const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true";
+          
+          // Format the appointment time if we have it
+          let appointmentDisplay = pendingSlotDisplay;
+          if (!appointmentDisplay && pendingSlotStartTime) {
+            try {
+              appointmentDisplay = formatSlotDisplay(new Date(pendingSlotStartTime));
+            } catch (e) {
+              appointmentDisplay = pendingSlotStartTime;
+            }
+          }
+          
+          // Build confirmation message
+          let confirmationMessage = "";
+          if (appointmentDisplay) {
+            const consultTypeText = consultationType === "message" 
+              ? "message-based consult" 
+              : translatorNeeded 
+                ? "video consultation with translator" 
+                : "video consultation";
+            
+            confirmationMessage = firstName 
+              ? `Got your deposit${firstName ? `, ${firstName}` : ""} — your consultation is confirmed! 🎉\n\n` +
+                `📅 ${appointmentDisplay}\n` +
+                `📍 ${consultTypeText}\n\n` +
+                `You'll get a reminder before the call. See you then!`
+              : `Got your deposit — your consultation is confirmed! 🎉\n\n` +
+                `📅 ${appointmentDisplay}\n` +
+                `📍 ${consultTypeText}\n\n` +
+                `You'll get a reminder before the call. See you then!`;
+          } else {
+            // No specific appointment time found - generic confirmation
+            confirmationMessage = firstName
+              ? `Got your deposit${firstName ? `, ${firstName}` : ""} — you're all set! 🎉\n\n` +
+                `Your consultation is confirmed. We'll follow up with the details shortly.`
+              : `Got your deposit — you're all set! 🎉\n\n` +
+                `Your consultation is confirmed. We'll follow up with the details shortly.`;
+          }
+          
+          // Send the confirmation message
+          await sendConversationMessage({
+            contactId,
+            body: confirmationMessage,
+            channelContext: {},
+          });
+          console.log(`✅ [DEPOSIT] Sent confirmation message to contact ${contactId}`);
+          
+        } catch (msgErr) {
+          console.error("❌ [DEPOSIT] Failed to send confirmation message:", msgErr.message || msgErr);
+          // Don't fail the webhook - deposit was already processed
+        }
       } else {
         console.warn("⚠️ /square/webhook could not resolve contactId from payment");
       }

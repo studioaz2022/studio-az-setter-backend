@@ -228,31 +228,60 @@ function generateSuggestedSlots(options = {}) {
     }
   }
 
-  // Determine hour based on time preference
-  let hour = 17; // Default: 5pm (evening)
+  // Time windows for variety - spread across morning, afternoon, evening
+  const TIME_WINDOWS = [
+    { hour: 10, label: "morning" },   // 10am
+    { hour: 14, label: "afternoon" }, // 2pm  
+    { hour: 17, label: "evening" },   // 5pm
+    { hour: 11, label: "late-morning" }, // 11am
+  ];
+
+  // Determine base hour if user specified preference
+  let userPreferredHour = null;
   if (preferredTimeWindow) {
     const tw = preferredTimeWindow.toLowerCase();
     if (tw.includes("morning")) {
-      hour = 10; // 10am
+      userPreferredHour = 10;
     } else if (tw.includes("afternoon")) {
-      hour = 14; // 2pm
+      userPreferredHour = 14;
     } else if (tw.includes("evening") || tw.includes("night")) {
-      hour = 17; // 5pm
+      userPreferredHour = 17;
     }
   }
 
-  // Generate 3 options
-  console.log(`📅 [SLOT_GENERATION] Generating synthetic slots (preferredDay: ${preferredDay || "none"}, preferredTimeWindow: ${preferredTimeWindow || "none"}, preferredWeek: ${preferredWeek || "none"})`);
+  // Generate 4 options spread across different days with varied times
+  console.log(`📅 [SLOT_GENERATION] Generating synthetic slots with VARIETY (preferredDay: ${preferredDay || "none"}, preferredTimeWindow: ${preferredTimeWindow || "none"}, preferredWeek: ${preferredWeek || "none"})`);
   
-  for (let i = 0; i < 3; i++) {
-    // If not a specific day request, skip weekends
-    if (!preferredDay) {
-      while (currentDate.getDay() === 0 || currentDate.getDay() === 6) {
-        currentDate.setDate(currentDate.getDate() + 1);
+  // Day spreads: Mon, Wed, Fri pattern or similar for variety
+  const DAY_SPREADS = [0, 2, 4, 6]; // Skip days: today, +2, +4, +6 (spread across week)
+  
+  for (let i = 0; i < 4; i++) {
+    // Calculate the target date with spread
+    let targetDate = new Date(currentDate);
+    
+    if (preferredDay) {
+      // If specific day requested, show same day across different weeks
+      targetDate.setDate(targetDate.getDate() + (i * 7));
+    } else {
+      // Spread across different days within the week/weeks
+      targetDate.setDate(currentDate.getDate() + DAY_SPREADS[i]);
+      
+      // Skip weekends
+      while (targetDate.getDay() === 0 || targetDate.getDay() === 6) {
+        targetDate.setDate(targetDate.getDate() + 1);
       }
     }
 
-    const slotDate = new Date(currentDate);
+    // Determine hour - use user preference or rotate through time windows
+    let hour;
+    if (userPreferredHour !== null) {
+      hour = userPreferredHour;
+    } else {
+      // Rotate through time windows for variety
+      hour = TIME_WINDOWS[i % TIME_WINDOWS.length].hour;
+    }
+
+    const slotDate = new Date(targetDate);
     slotDate.setHours(hour, 0, 0, 0);
 
     // Make sure it's in the future
@@ -266,17 +295,10 @@ function generateSuggestedSlots(options = {}) {
         displayText: formatSlotDisplay(slotDate),
       });
     }
-
-    // Move to next day (or next week if specific day requested)
-    if (preferredDay) {
-      currentDate.setDate(currentDate.getDate() + 7); // Same day next week
-    } else {
-      currentDate.setDate(currentDate.getDate() + 1);
-    }
   }
 
-  console.log(`📅 [SLOT_GENERATION] Generated ${slots.length} synthetic slots`);
-  return slots.slice(0, 3); // Return up to 3 options
+  console.log(`📅 [SLOT_GENERATION] Generated ${slots.length} synthetic slots with variety`);
+  return slots.slice(0, 4); // Return up to 4 options for variety
 }
 
 /**
@@ -1333,3 +1355,4 @@ module.exports = {
   getExplicitArtistPreference,
   getAvailableSlots,
 };
+
