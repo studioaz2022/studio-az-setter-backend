@@ -9,12 +9,14 @@ const {
   lookupContactIdByEmailOrPhone,
   sendConversationMessage,
   updateTattooFields,
+  getConversationHistory,
 } = require("../../ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { getContactIdFromOrder } = require("../payments/squareClient");
 const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
+  formatThreadForLLM,
 } = require("../ai/contextBuilder");
 const {
   syncPipelineOnEntry,
@@ -190,6 +192,37 @@ function createApp() {
         });
       }
 
+      // Fetch conversation history for context
+      console.log("📜 Fetching conversation history...");
+      const rawMessages = await getConversationHistory(contactId, {
+        limit: 100, // Fetch last 100 messages
+        sortOrder: "desc", // Newest first
+      });
+      
+      // Format thread for LLM with CRM fields for image context
+      const conversationThread = formatThreadForLLM(rawMessages, {
+        recentCount: 20, // Keep last 20 messages in full detail
+        includeTimestamps: true,
+        maxTotalMessages: 100,
+        crmFields: {
+          tattoo_photo_description: cf.tattoo_photo_description || null,
+          tattoo_summary: cf.tattoo_summary || null,
+          tattoo_ideasreferences: cf.tattoo_ideasreferences || null,
+          previous_conversation_summary: cf.previous_conversation_summary || null,
+          returning_client: cf.returning_client || null,
+          total_tattoos_completed: cf.total_tattoos_completed || null,
+        },
+      });
+      
+      console.log("📜 Thread context:", {
+        totalMessages: conversationThread.totalCount,
+        recentCount: conversationThread.thread?.length || 0,
+        hasSummary: !!conversationThread.summary,
+        hasImageContext: !!conversationThread.imageContext,
+        wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+        isReturningClient: !!cf.returning_client,
+      });
+
       const result = await handleInboundMessage({
         contact,
         aiPhase: null,
@@ -197,6 +230,7 @@ function createApp() {
         latestMessageText: messageText,
         contactProfile: {},
         consultExplained: contact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
+        conversationThread, // Pass thread context to AI
       });
 
       // Log AI result summary
@@ -324,6 +358,36 @@ function createApp() {
           });
         }
 
+        // Fetch conversation history for context (may be empty for new leads from form)
+        console.log("📜 Fetching conversation history...");
+        const rawMessages = await getConversationHistory(contactId, {
+          limit: 100,
+          sortOrder: "desc",
+        });
+        
+        // Format thread for LLM with CRM fields for image context
+        const conversationThread = formatThreadForLLM(rawMessages, {
+          recentCount: 20,
+          includeTimestamps: true,
+          maxTotalMessages: 100,
+          crmFields: {
+            tattoo_photo_description: cf.tattoo_photo_description || null,
+            tattoo_summary: cf.tattoo_summary || null,
+            tattoo_ideasreferences: cf.tattoo_ideasreferences || null,
+            previous_conversation_summary: cf.previous_conversation_summary || null,
+            returning_client: cf.returning_client || null,
+            total_tattoos_completed: cf.total_tattoos_completed || null,
+          },
+        });
+        
+        console.log("📜 Thread context:", {
+          totalMessages: conversationThread.totalCount,
+          recentCount: conversationThread.thread?.length || 0,
+          hasSummary: !!conversationThread.summary,
+          hasImageContext: !!conversationThread.imageContext,
+          wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+        });
+
         const result = await handleInboundMessage({
           contact: effectiveContact,
           aiPhase: null,
@@ -331,6 +395,7 @@ function createApp() {
           latestMessageText: syntheticText,
           contactProfile: {},
           consultExplained: effectiveContact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
+          conversationThread, // Pass thread context to AI
         });
 
         // Log AI result summary

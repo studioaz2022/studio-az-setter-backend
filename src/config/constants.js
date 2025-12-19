@@ -73,6 +73,9 @@ const SYSTEM_FIELDS = {
   LAST_RELEASED_SLOT_START: "last_released_slot_start", // Timestamp of released slot
   LAST_RELEASED_SLOT_END: "last_released_slot_end", // End timestamp of released slot
   LAST_SEEN_FIELDS: "last_seen_fields_snapshot",
+  // Returning client context
+  PREVIOUS_CONVERSATION_SUMMARY: "previous_conversation_summary", // Summarized history from previous tattoo cycles
+  LAST_TATTOO_COMPLETED_AT: "last_tattoo_completed_at", // When the last tattoo was completed
 };
 
 // Tattoo Custom Field Keys

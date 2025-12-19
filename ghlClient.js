@@ -550,6 +550,65 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
   }
 }
 
+/**
+ * Fetch conversation history for a contact from GHL
+ * Uses the /conversations/messages/export endpoint
+ * 
+ * @param {string} contactId - The contact's ID
+ * @param {object} options - Query options
+ * @param {number} options.limit - Number of messages to fetch (default 50, max 500)
+ * @param {string} options.channel - Filter by channel: "SMS", "Instagram", "Facebook", "WhatsApp", "Email"
+ * @param {string} options.sortOrder - "desc" (newest first) or "asc" (oldest first)
+ * @returns {Promise<Array>} Array of messages with direction, body, attachments, dateAdded, source
+ */
+async function getConversationHistory(contactId, {
+  limit = 50,
+  channel = null,
+  sortOrder = "desc",
+} = {}) {
+  if (!contactId) {
+    console.warn("getConversationHistory called without contactId");
+    return [];
+  }
+
+  const params = new URLSearchParams({
+    locationId: GHL_LOCATION_ID,
+    contactId,
+    limit: String(Math.min(limit, 500)), // Cap at 500 (API max)
+    sortBy: "createdAt",
+    sortOrder,
+  });
+
+  // Only add channel filter if specified
+  // When null, API returns all non-email messages including activity messages
+  if (channel) {
+    params.append("channel", channel);
+  }
+
+  const url = `https://services.leadconnectorhq.com/conversations/messages/export?${params}`;
+
+  try {
+    const resp = await axios.get(url, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        Accept: "application/json",
+        Version: "2021-04-15",
+      },
+    });
+
+    const messages = resp.data?.messages || [];
+    console.log(`📜 Fetched ${messages.length} messages for contact ${contactId}`);
+    return messages;
+  } catch (err) {
+    console.error(
+      "❌ Error fetching conversation history from GHL:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return [];
+  }
+}
+
 // Infer the outbound "type" for /conversations/messages by looking at the last inbound message
 // Options:
 //   preferDm: boolean - if true, prioritize FB/IG over SMS when checking contact
@@ -1010,5 +1069,6 @@ module.exports = {
   sendConversationMessage,
   updateContactAssignedUser,
   createTaskForContact,
+  getConversationHistory,
 };
 

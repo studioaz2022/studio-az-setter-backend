@@ -1,4 +1,4 @@
-const { getContact, updateSystemFields } = require("../../ghlClient");
+const { getContact, updateSystemFields, getConversationHistory } = require("../../ghlClient");
 const {
   upsertOpportunity,
   updateOpportunityStage,
@@ -7,7 +7,11 @@ const {
   addOpportunityNote,
 } = require("../clients/ghlOpportunityClient");
 const { PIPELINE_STAGE_ORDER, PIPELINE_STAGE_CONFIG, getStageId } = require("../config/pipelineConfig");
-const { AI_PHASES, OPPORTUNITY_STAGES } = require("../config/constants");
+const { AI_PHASES, OPPORTUNITY_STAGES, SYSTEM_FIELDS } = require("../config/constants");
+const { 
+  generateComprehensiveConversationSummary, 
+  appendToConversationHistory 
+} = require("./contextBuilder");
 
 const STAGE_RANK = PIPELINE_STAGE_ORDER.reduce((acc, key, idx) => {
   acc[key] = idx;
@@ -120,7 +124,7 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
 
 async function transitionToStage(contactId, stageKey, options = {}) {
   if (!stageKey) return null;
-  const { contact: providedContact, allowRegression = false, monetaryValue, note, status } = options;
+  const { contact: providedContact, allowRegression = false, monetaryValue, note, status, skipCompletionArchive = false } = options;
   const { contact, opportunityId, currentStage } = await ensureOpportunity({
     contactId,
     stageKey,
@@ -146,6 +150,58 @@ async function transitionToStage(contactId, stageKey, options = {}) {
   // Only log actual transitions (not when staying the same)
   if (currentStage !== stageKey) {
     console.log(`📊 [PIPELINE] Transitioning opportunity ${opportunityId}: ${currentStage || "(none)"} → ${stageKey}`);
+  }
+
+  // Handle tattoo completion - archive conversation when moving to COMPLETED
+  if (stageKey === OPPORTUNITY_STAGES.COMPLETED && currentStage !== OPPORTUNITY_STAGES.COMPLETED && !skipCompletionArchive) {
+    console.log(`🎉 [PIPELINE] Tattoo marked as complete - archiving conversation...`);
+    try {
+      // Note: handleTattooCompletion is called after the transition completes
+      // We defer this to avoid circular dependency issues
+      setTimeout(async () => {
+        try {
+          const { generateComprehensiveConversationSummary: genSummary, appendToConversationHistory: appendSummary } = require("./contextBuilder");
+          const { getConversationHistory: getHistory } = require("../../ghlClient");
+          
+          const cf = contact?.customField || contact?.customFields || {};
+          
+          // Fetch full conversation history
+          const allMessages = await getHistory(contactId, { limit: 500, sortOrder: "desc" });
+          
+          const crmFields = {
+            tattoo_summary: cf.tattoo_summary || null,
+            tattoo_placement: cf.tattoo_placement || null,
+            tattoo_style: cf.tattoo_style || null,
+            tattoo_size: cf.tattoo_size || null,
+            tattoo_color_preference: cf.tattoo_color_preference || null,
+            assigned_artist: cf.assigned_artist || null,
+            inquired_technician: cf.inquired_technician || null,
+            consultation_type: cf.consultation_type || null,
+            language_preference: cf.language_preference || null,
+          };
+          
+          const completedAt = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
+          const newSummary = genSummary(allMessages, crmFields, { completedAt });
+          const existingSummary = cf[SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY] || "";
+          const combinedSummary = appendSummary(existingSummary, newSummary);
+          
+          const currentCount = parseInt(cf.total_tattoos_completed || "0", 10) || 0;
+          
+          await updateSystemFields(contactId, {
+            [SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY]: combinedSummary,
+            [SYSTEM_FIELDS.LAST_TATTOO_COMPLETED_AT]: new Date().toISOString(),
+            [SYSTEM_FIELDS.RETURNING_CLIENT]: true,
+            total_tattoos_completed: String(currentCount + 1),
+          });
+          
+          console.log(`✅ [COMPLETION] Archived ${allMessages.length} messages for contact ${contactId}`);
+        } catch (archiveErr) {
+          console.error(`❌ [COMPLETION] Failed to archive conversation:`, archiveErr.message);
+        }
+      }, 100);
+    } catch (err) {
+      console.error(`❌ [COMPLETION] Error initiating archive:`, err.message);
+    }
   }
 
   let updatedStageKey = stageKey;
@@ -350,6 +406,131 @@ async function advanceFromIntakeToDiscovery(contactId, { contact = null } = {}) 
   }
 }
 
+/**
+ * Handle tattoo completion - archive conversation history and prepare for next cycle.
+ * Called when a lead is marked as "won" / tattoo_completed.
+ * 
+ * @param {string} contactId - The contact ID
+ * @param {object} options - Additional options
+ * @returns {Promise<object>} Result with summary and reset info
+ */
+async function handleTattooCompletion(contactId, { contact = null, notes = "" } = {}) {
+  if (!contactId) {
+    console.warn("⚠️ [COMPLETION] handleTattooCompletion called without contactId");
+    return null;
+  }
+
+  console.log(`🎉 [COMPLETION] Processing tattoo completion for contact ${contactId}...`);
+
+  try {
+    // Fetch contact if not provided
+    const contactRecord = contact || (await getContact(contactId));
+    if (!contactRecord) {
+      console.error(`❌ [COMPLETION] Could not fetch contact ${contactId}`);
+      return null;
+    }
+
+    const cf = normalizeCustomFields(contactRecord.customField || contactRecord.customFields || {});
+
+    // Fetch full conversation history (up to 500 messages for archival)
+    console.log("📜 [COMPLETION] Fetching full conversation history for archival...");
+    const allMessages = await getConversationHistory(contactId, {
+      limit: 500, // Max for archival
+      sortOrder: "desc",
+    });
+
+    console.log(`📜 [COMPLETION] Fetched ${allMessages.length} messages for summary`);
+
+    // Build CRM fields object for the summarizer
+    const crmFields = {
+      tattoo_summary: cf.tattoo_summary || null,
+      tattoo_placement: cf.tattoo_placement || null,
+      tattoo_style: cf.tattoo_style || null,
+      tattoo_size: cf.tattoo_size || null,
+      tattoo_color_preference: cf.tattoo_color_preference || null,
+      assigned_artist: cf.assigned_artist || null,
+      inquired_technician: cf.inquired_technician || null,
+      consultation_type: cf.consultation_type || null,
+      language_preference: cf.language_preference || null,
+    };
+
+    // Generate comprehensive summary
+    const completedAt = new Date().toLocaleDateString("en-US", {
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+
+    const newSummary = generateComprehensiveConversationSummary(allMessages, crmFields, {
+      completedAt,
+      notes,
+    });
+
+    console.log("📝 [COMPLETION] Generated summary:", newSummary.substring(0, 200) + "...");
+
+    // Get existing summary (for returning clients with multiple tattoos)
+    const existingSummary = cf[SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY] || "";
+
+    // Append new summary to existing history
+    const combinedSummary = appendToConversationHistory(existingSummary, newSummary);
+
+    // Increment tattoo count
+    const currentCount = parseInt(cf.total_tattoos_completed || "0", 10) || 0;
+    const newCount = currentCount + 1;
+
+    // Update fields in GHL
+    const fieldsToUpdate = {
+      [SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY]: combinedSummary,
+      [SYSTEM_FIELDS.LAST_TATTOO_COMPLETED_AT]: new Date().toISOString(),
+      [SYSTEM_FIELDS.RETURNING_CLIENT]: true,
+      total_tattoos_completed: String(newCount),
+      // Reset fields for next tattoo cycle
+      tattoo_summary: "",
+      tattoo_placement: "",
+      tattoo_style: "",
+      tattoo_size: "",
+      tattoo_size_notes: "",
+      tattoo_color_preference: "",
+      tattoo_concerns: "",
+      tattoo_photo_description: "",
+      how_soon_is_client_deciding: "",
+      first_tattoo: "",
+      // Reset booking state
+      deposit_link_sent: "",
+      deposit_paid: "",
+      deposit_link_url: "",
+      times_sent: "",
+      last_sent_slots: "",
+      hold_appointment_id: "",
+      hold_last_activity_at: "",
+      hold_warning_sent: "",
+      consult_explained: "",
+      consultation_type: "",
+      consultation_type_locked: "",
+      // Reset phase
+      ai_phase: "",
+      lead_temperature: "",
+      tattoo_completed: "",
+      tattoo_booked: "",
+    };
+
+    await updateSystemFields(contactId, fieldsToUpdate);
+
+    console.log(`✅ [COMPLETION] Archived conversation and reset fields for contact ${contactId}`);
+    console.log(`📊 [COMPLETION] Client now has ${newCount} completed tattoo(s)`);
+
+    return {
+      success: true,
+      summary: newSummary,
+      totalTattoos: newCount,
+      messagesArchived: allMessages.length,
+    };
+  } catch (err) {
+    console.error(`❌ [COMPLETION] Error handling tattoo completion:`, err.message || err);
+    return { success: false, error: err.message || String(err) };
+  }
+}
+
 module.exports = {
   ensureOpportunity,
   transitionToStage,
@@ -357,6 +538,7 @@ module.exports = {
   syncOpportunityStageFromContact,
   syncPipelineOnEntry,
   advanceFromIntakeToDiscovery,
+  handleTattooCompletion,
   getStageKeyFromId,
   boolField,
   normalizeCustomFields,

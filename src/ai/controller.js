@@ -33,6 +33,7 @@ async function handleInboundMessage({
   contactProfile,
   consultExplained,
   payloadCustomFields = {},
+  conversationThread = null, // NEW: Formatted conversation history
 }) {
   const startTime = Date.now();
   
@@ -42,6 +43,13 @@ async function handleInboundMessage({
     contactId: contact?.id || contact?._id,
     contactName: `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)",
     consultExplained,
+    threadStats: conversationThread ? {
+      totalMessages: conversationThread.totalCount,
+      recentMessages: conversationThread.thread?.length || 0,
+      hasSummary: !!conversationThread.summary,
+      hasImageContext: !!conversationThread.imageContext,
+      wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+    } : null,
   });
 
   const effectiveContact = buildEffectiveContact(contact, payloadCustomFields);
@@ -274,6 +282,7 @@ async function handleInboundMessage({
         latestMessageText,
         contactProfile: resolvedContactProfile,
         consultExplained: consultExplainedResolved,
+        conversationThread, // Pass thread context to AI
       });
       console.log(`⏱️ [TIMING] AI call took ${Date.now() - aiStartTime}ms`);
 

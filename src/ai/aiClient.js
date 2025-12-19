@@ -85,6 +85,7 @@ function buildOpenerMessages({
   consultExplained,
   latestMessageText,
   contactProfile,
+  conversationThread, // NEW: Formatted conversation history
 }) {
   // Normalize contact so we never blow up on missing fields
   const contactSafe = {
@@ -102,6 +103,15 @@ function buildOpenerMessages({
     contactSafe.tags || []
   );
 
+  // Build conversation context from thread if available
+  const conversationContext = conversationThread ? {
+    recent_messages: conversationThread.thread || [],
+    previous_summary: conversationThread.summary || null,
+    total_message_count: conversationThread.totalCount || 0,
+    image_context: conversationThread.imageContext || null,
+    handoff_context: conversationThread.handoffContext || null,
+  } : null;
+
   const userPayload = {
     phase: "opener",              // human-readable phase label
     ai_phase: aiPhase || "intake", // matches what we store in GHL system field
@@ -113,6 +123,7 @@ function buildOpenerMessages({
     changed_fields_this_turn: contactProfile?.changedFieldsThisTurn || {},
     intake: intake,
     latest_message_text: latestMessageText || intake?.latestMessageText || null,
+    conversation_context: conversationContext, // NEW: Full conversation history
     instructions: {
       goal:
         "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
@@ -127,6 +138,66 @@ function buildOpenerMessages({
     },
   };
 
+  // Build conversation thread context section for system prompt
+  const hasThreadContext = conversationThread && conversationThread.totalCount > 0;
+  const threadContextSection = hasThreadContext ? `
+**FULL CONVERSATION HISTORY (USE THIS FOR CONTEXT):**
+You have access to the complete conversation history in "conversation_context". This is your PRIMARY source for understanding the conversation flow.
+
+${conversationThread.summary ? `📜 EARLIER CONVERSATION SUMMARY:\n${conversationThread.summary}\n` : ''}
+📝 RECENT MESSAGES (last ${conversationThread.thread?.length || 0} messages):
+${conversationThread.thread?.join('\n') || '(no recent messages)'}
+
+${conversationThread.imageContext ? `
+🖼️ IMAGE CONTEXT:
+- Total images in conversation: ${conversationThread.imageContext.totalImagesInThread || 0}
+- Has reference photos: ${conversationThread.imageContext.hasReferencePhotos ? 'Yes' : 'No'}
+${conversationThread.imageContext.photoDescription ? `- Photo description (CRM - TRUST THIS): "${conversationThread.imageContext.photoDescription}"` : ''}
+${conversationThread.imageContext.tattooSummary ? `- Tattoo summary (CRM): "${conversationThread.imageContext.tattooSummary}"` : ''}
+${conversationThread.imageContext.hasFormUploadedReferences ? `- Lead uploaded references via form (stored in ${conversationThread.imageContext.formReferencesField})` : ''}
+${conversationThread.imageContext.leadSentImages ? `- Lead sent ${conversationThread.imageContext.leadSentImages} image(s) in recent messages` : ''}
+` : ''}
+${conversationThread.handoffContext?.wasHumanHandling ? `
+🤝 HUMAN HANDOFF DETECTED:
+- A human rep was recently handling this conversation
+- Last human message: ${conversationThread.handoffContext.lastHumanMessageDate || 'unknown'}
+- Continue seamlessly where the human left off - match their tone and approach
+- Do NOT re-introduce yourself or restart the conversation
+` : ''}
+${conversationThread.returningClientContext ? `
+⭐ RETURNING CLIENT:
+- This client has gotten ${conversationThread.returningClientContext.totalPreviousTattoos} tattoo(s) with us before!
+- Treat them warmly as a returning customer - they already know and trust us
+- Reference their previous experience positively (e.g., "great to have you back!", "excited to work with you again")
+- They already know our process, so you can be more casual about explaining consult/deposit
+
+📋 PREVIOUS TATTOO HISTORY:
+${conversationThread.returningClientContext.previousConversationSummary || '(no detailed history available)'}
+
+**IMPORTANT FOR RETURNING CLIENTS:**
+- The "PREVIOUS TATTOO HISTORY" above summarizes their past tattoo conversations
+- Use this to personalize the conversation (e.g., reference their previous tattoo, artist they worked with)
+- Don't ask questions you already have answers to from their history
+- The current 100 message thread is for THIS tattoo cycle - start fresh for the new design
+` : ''}
+
+**HOW TO USE CONVERSATION HISTORY:**
+1. The "recent_messages" show the actual back-and-forth. Use them to understand:
+   - What has already been discussed (don't repeat)
+   - What questions were asked and answered
+   - The lead's communication style and preferences
+   - Any objections that were raised and how they were handled
+2. "LEAD" = messages from the potential customer, "STUDIO" = messages from you/the team
+3. The LATEST message to respond to is in "latest_message_text" - respond to THIS
+4. If a human was handling, continue their approach seamlessly
+5. Reference things discussed earlier naturally (e.g., "like we were saying about...")
+6. For returning clients, use their previous tattoo history to personalize the experience
+` : `
+**CONVERSATION CONTEXT:**
+- This appears to be a NEW conversation with no prior history.
+- Generate an appropriate opener based on the intake information.
+`;
+
   const systemContent = `
 ${MASTER_PROMPT_V3}
 
@@ -136,16 +207,15 @@ You are currently in: PHASE = "${aiPhase || 'intake'}".
 
 Use the following Phase Prompts V3 content as reference for behavior, tone, and objectives:
 ${PHASE_PROMPTS_V3}
+${threadContextSection}
 
-**CONVERSATION CONTEXT:**
-- This is ${aiPhase === 'intake' ? 'the FIRST message' : 'an ONGOING conversation'}.
-- You have access to contactProfile which shows what information you've already collected.
-- If contactProfile has fields filled (tattooPlacement, tattooSize, etc.), you've already discussed those topics.
-- If you're in "closing" or "qualification" phase, you've likely already explained the consult + deposit process.
-- **DO NOT repeat information** that's already in contactProfile or that you've explained in previous messages.
+**CRM STATE & MEMORY:**
+- contactProfile shows what information has been collected and stored in the CRM.
+- If contactProfile has fields filled (tattooPlacement, tattooSize, etc.), these are CONFIRMED facts.
+- changedFieldsThisTurn shows what changed THIS turn specifically.
+- **DO NOT repeat information** that's already in contactProfile or visible in conversation history.
 - **DO NOT repeat greetings** - only greet in the very first message of a new conversation.
-- Only explicitly acknowledge tattoo details (placement, summary, size, timeline) when changedFieldsThisTurn includes them (you get this as contactProfile.changedFieldsThisTurn AND changed_fields_this_turn in the JSON payload). If changedFieldsThisTurn is empty, do NOT restate existing tattoo details unless the lead explicitly changes them.
-- Treat contactProfile and changedFieldsThisTurn as the authoritative memory; do not invent context from conversation history you cannot see.
+- Only acknowledge tattoo details when changedFieldsThisTurn includes them OR when the lead asks about them.
 
 **CONSULT EXPLANATION RULE (CRITICAL):**
 - consultExplained = ${consultExplained ? 'true' : 'false'}
@@ -171,7 +241,7 @@ You MUST also maintain and output the "meta" object as described in the AI META 
 - Set wantsDepositLink and depositPushedThisTurn to true ONLY on turns where you are actively inviting them to move forward with the consult + refundable deposit.
 - Set mentionDecoyOffered to true ONLY on turns where you actually offer the lower-priced decoy consult after they resisted the main refundable deposit option.
 
-You will receive the lead's most recent message as "latest_message_text". Use THAT text (plus any relevant past context mentioned in the intake or your own summaries) to:
+You will receive the lead's most recent message as "latest_message_text". Use THAT text (plus the conversation_context history) to:
 - Understand what they want (placement, size, style, timing, first tattoo or not, concerns).
 - Fill the "field_updates" object with ONLY the information that is clearly stated or strongly implied by their words, following the FIELD UPDATES rules from the master prompt.
 - Even on the very first message of the conversation, if they give enough detail (e.g., "half sleeve", "inner forearm", "black and grey", "next month", "first tattoo"), you SHOULD write those into field_updates so the CRM can store them.
@@ -230,6 +300,7 @@ async function generateOpenerForContact({
   latestMessageText,
   contactProfile,
   consultExplained,
+  conversationThread, // NEW: Formatted conversation history
 }) {
   if (!MASTER_PROMPT_V3) {
     console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
@@ -247,6 +318,17 @@ async function generateOpenerForContact({
   const resolvedContactProfile = contactProfile || {};
   const resolvedConsultExplained = consultExplained || false;
   
+  // Log thread context for debugging
+  if (conversationThread && conversationThread.totalCount > 0) {
+    console.log("📜 [AI] Thread context included:", {
+      totalMessages: conversationThread.totalCount,
+      recentCount: conversationThread.thread?.length || 0,
+      hasSummary: !!conversationThread.summary,
+      hasImageContext: !!conversationThread.imageContext,
+      wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+    });
+  }
+  
   const messages = buildOpenerMessages({
     contact,
     canonicalState: canonicalResolved,
@@ -256,6 +338,7 @@ async function generateOpenerForContact({
     consultExplained: resolvedConsultExplained,
     latestMessageText,
     contactProfile: resolvedContactProfile,
+    conversationThread, // Pass thread to message builder
   });
 
 
