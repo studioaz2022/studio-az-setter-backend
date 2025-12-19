@@ -114,12 +114,11 @@ async function handleInboundMessage({
   let routingReason = null;
 
   // === Proactive consultation options explanation for consult_path phase ===
-  // When entering consult_path phase and consultation hasn't been explained yet,
-  // proactively explain the options before any scheduling happens
+  // SIMPLIFIED: Only check if they haven't chosen a consultation type yet
+  // The AI with thread context will handle not repeating the explanation
   const shouldExplainConsultOptions = 
     derivedPhaseBefore === "consult_path" &&
-    !canonicalBefore.consultExplained &&
-    !canonicalBefore.consultationType &&
+    !canonicalBefore.consultationType && // Only trigger if no choice made yet
     !canonicalBefore.consultationTypeLocked &&
     !intents.scheduling_intent && // Don't interrupt if they're already asking for times
     !intents.slot_selection_intent &&

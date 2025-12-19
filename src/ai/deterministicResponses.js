@@ -317,22 +317,8 @@ async function buildDeterministicResponse({
     };
   };
 
-  // Translator affirmation: mark confirmed and proceed to scheduling
-  if (intents.translator_affirm_intent) {
-    if (contactId) {
-      try {
-        await updateSystemFields(contactId, {
-          translator_confirmed: true,
-          translator_needed: true,
-          consultation_type: "appointment",
-          consultation_type_locked: true,
-        });
-      } catch (err) {
-        console.error("❌ Failed to persist translator confirmation:", err.message || err);
-      }
-    }
-    return await offerSlots("deterministic_translator_confirmed_slots");
-  }
+  // REMOVED: translator_affirm_intent handler
+  // Translator is now auto-confirmed when video is selected in consultPathHandler
 
   // Scheduling intent: offer slots immediately
   if (intents.scheduling_intent) {
@@ -773,22 +759,8 @@ async function buildDeterministicResponse({
     }
   }
 
-  // Translator affirmation: mark confirmed and proceed to scheduling
-  if (intents.translator_affirm_intent) {
-    if (contactId) {
-      try {
-        await updateSystemFields(contactId, {
-          translator_confirmed: true,
-          translator_needed: true,
-          consultation_type: "appointment",
-          consultation_type_locked: true,
-        });
-      } catch (err) {
-        console.error("❌ Failed to persist translator confirmation:", err.message || err);
-      }
-    }
-    return await offerSlots("deterministic_translator_confirmed_slots");
-  }
+  // REMOVED: Second translator_affirm_intent handler (duplicate)
+  // Translator is now auto-confirmed when video is selected in consultPathHandler
 
   // Process question after consult explained: avoid re-explaining, move to scheduling
   if (intents.process_or_price_question_intent && consultExplained) {

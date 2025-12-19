@@ -20,7 +20,7 @@ function detectIntents(messageText, canonicalState = {}) {
     consult_path_choice_intent: false,
     artist_guided_size_intent: false,
     process_or_price_question_intent: false,
-    translator_affirm_intent: false,
+    // REMOVED: translator_affirm_intent - now auto-confirmed when video is selected
   };
 
   if (!messageText) {
@@ -127,28 +127,9 @@ function detectIntents(messageText, canonicalState = {}) {
     intents.process_or_price_question_intent = true;
   }
 
-  // Translator affirmation (only when translator needed for appointment consult)
-  const translatorAffirmEligible =
-    canonicalState?.translatorNeeded === true &&
-    (canonicalState?.consultationType === "appointment" || canonicalState?.consultationTypeLocked);
-  if (translatorAffirmEligible) {
-    const affirmPatterns = [
-      /\byes\b/,
-      /\byeah\b/,
-      /\byup\b/,
-      /\bsure\b/,
-      /\bok\b/,
-      /\bokay\b/,
-      /\bthat works\b/,
-      /\bsounds good\b/,
-      /\bperfect\b/,
-      /\bgreat\b/,
-    ];
-    if (affirmPatterns.some((re) => re.test(lower))) {
-      intents.translator_affirm_intent = true;
-      intents.scheduling_intent = true; // proceed to scheduling immediately
-    }
-  }
+  // REMOVED: translator_affirm_intent detection
+  // Translator is now auto-confirmed when lead selects "video call" in consultPathHandler
+  // This eliminates the redundant "Does that work for you?" step
 
   return intents;
 }
