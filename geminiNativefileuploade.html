@@ -570,8 +570,12 @@ function App() {
   const submitFinalLead = async (currentData) => {
         setIsSubmitting(true);
         try {
-            let bodyData;
-            let isMultipart = false;
+            const isMultipart = uploadedFiles.length > 0;
+
+            console.log(
+            "Submitting Final Lead...",
+            isMultipart ? "With Files" : "No Files"
+            );
 
             if (uploadedFiles.length > 0) {
               const formData = new FormData();
@@ -589,18 +593,6 @@ function App() {
                 body: JSON.stringify(buildPayloadJSON(currentData)),
               });
             }
-
-
-            console.log(
-            "Submitting Final Lead...",
-            isMultipart ? "With Files" : "No Files"
-            );
-
-            await fetch(`${API_BASE}/lead/final`, {
-            method: "POST",
-            body: bodyData,
-            headers: isMultipart ? {} : { "Content-Type": "application/json" },
-            });
 
             setIsSubmitting(false);
             setIsFinished(true);

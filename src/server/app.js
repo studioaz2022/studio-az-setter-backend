@@ -1,5 +1,7 @@
 const express = require("express");
+const cors = require("cors");
 const crypto = require("crypto");
+const multer = require("multer");
 
 const {
   getContact,
@@ -10,6 +12,8 @@ const {
   sendConversationMessage,
   updateTattooFields,
   getConversationHistory,
+  upsertContactFromWidget,
+  uploadFilesToTattooCustomField,
 } = require("../../ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { getContactIdFromOrder } = require("../payments/squareClient");
@@ -104,6 +108,19 @@ function deriveChannelContext(payload, contact) {
 function createApp() {
   const app = express();
 
+  // CORS configuration - allow requests from frontend domain
+  app.use(cors({
+    origin: [
+      'https://tattooshopminneapolis.com',
+      'http://localhost:3000',
+      'http://localhost:8080',
+      'http://127.0.0.1:5500', // Common local dev server port
+    ],
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
+  }));
+
   // Use JSON body parsing for all routes except the Square webhook (raw body needed for signature)
   app.use((req, res, next) => {
     if (req.path === "/square/webhook") {
@@ -123,6 +140,120 @@ function createApp() {
       },
     })
   );
+
+  // Multer configuration for file uploads (memory storage)
+  const upload = multer({
+    storage: multer.memoryStorage(),
+    limits: {
+      fileSize: 10 * 1024 * 1024, // 10MB limit per file
+      files: 3, // Max 3 files
+    },
+  });
+
+  // Lead endpoints for widget form submissions
+  app.post("/lead/partial", async (req, res) => {
+    try {
+      console.log("\n📝 ════════════════════════════════════════════════════════");
+      console.log("📝 LEAD PARTIAL SUBMISSION");
+      console.log("📝 ════════════════════════════════════════════════════════");
+
+      const payload = req.body || {};
+      console.log("📦 Payload:", JSON.stringify(filterNonEmpty(payload), null, 2));
+
+      const result = await upsertContactFromWidget(payload, "partial");
+      
+      if (result?.contactId) {
+        // Sync pipeline on entry - Widget submissions start at INTAKE
+        const contact = await getContact(result.contactId);
+        const cf = contact?.customField || contact?.customFields || {};
+        const hasOpportunity = !!cf.opportunity_id;
+        if (!hasOpportunity) {
+          console.log(`📊 [PIPELINE] New lead from Widget - syncing entry stage to INTAKE...`);
+          await syncPipelineOnEntry(result.contactId, {
+            channelType: "widget",
+            isFirstMessage: true,
+            contact,
+          });
+        }
+        console.log(`✅ Partial lead created/updated: ${result.contactId}`);
+      }
+
+      console.log("📝 ════════════════════════════════════════════════════════\n");
+      return res.status(200).json({ ok: true, contactId: result?.contactId });
+    } catch (err) {
+      console.error("❌ /lead/partial error:", err.message || err);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/lead/final", upload.array("files", 3), async (req, res) => {
+    try {
+      console.log("\n📝 ════════════════════════════════════════════════════════");
+      console.log("📝 LEAD FINAL SUBMISSION");
+      console.log("📝 ════════════════════════════════════════════════════════");
+
+      let payload = {};
+      
+      // Handle both JSON and multipart/form-data
+      if (req.body.data) {
+        // Multipart form data - parse JSON from 'data' field
+        try {
+          payload = JSON.parse(req.body.data);
+        } catch (e) {
+          console.error("❌ Failed to parse JSON from form data:", e.message);
+          return res.status(400).json({ ok: false, error: "Invalid JSON in data field" });
+        }
+      } else {
+        // Regular JSON body
+        payload = req.body || {};
+      }
+
+      console.log("📦 Payload:", JSON.stringify(filterNonEmpty(payload), null, 2));
+      console.log("📎 Files:", req.files?.length || 0);
+
+      // Upsert contact with final mode (ensures consultation tag)
+      const result = await upsertContactFromWidget(payload, "final");
+      
+      if (!result?.contactId) {
+        console.error("❌ Failed to create/update contact");
+        return res.status(500).json({ ok: false, error: "Failed to create contact" });
+      }
+
+      const contactId = result.contactId;
+
+      // Upload files if any
+      if (req.files && req.files.length > 0) {
+        try {
+          console.log(`📎 Uploading ${req.files.length} file(s) to contact ${contactId}...`);
+          await uploadFilesToTattooCustomField(contactId, req.files);
+          console.log("✅ Files uploaded successfully");
+        } catch (fileErr) {
+          console.error("❌ File upload error:", fileErr.message || fileErr);
+          // Don't fail the whole request if file upload fails
+        }
+      }
+
+      // Sync pipeline on entry - Widget submissions start at INTAKE
+      const contact = await getContact(contactId);
+      const cf = contact?.customField || contact?.customFields || {};
+      const hasOpportunity = !!cf.opportunity_id;
+      if (!hasOpportunity) {
+        console.log(`📊 [PIPELINE] New lead from Widget - syncing entry stage to INTAKE...`);
+        await syncPipelineOnEntry(contactId, {
+          channelType: "widget",
+          isFirstMessage: true,
+          contact,
+        });
+      }
+
+      console.log(`✅ Final lead created/updated: ${contactId}`);
+      console.log("📝 ════════════════════════════════════════════════════════\n");
+      return res.status(200).json({ ok: true, contactId });
+    } catch (err) {
+      console.error("❌ /lead/final error:", err.message || err);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
 
   app.post("/ghl/message-webhook", async (req, res) => {
     try {
