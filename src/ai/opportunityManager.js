@@ -5,6 +5,8 @@ const {
   updateOpportunityValue,
   getOpportunitiesByContact,
   addOpportunityNote,
+  getOpportunity,
+  updateOpportunity,
 } = require("../clients/ghlOpportunityClient");
 const { PIPELINE_STAGE_ORDER, PIPELINE_STAGE_CONFIG, getStageId } = require("../config/pipelineConfig");
 const { AI_PHASES, OPPORTUNITY_STAGES, SYSTEM_FIELDS } = require("../config/constants");
@@ -72,6 +74,36 @@ async function findExistingOpportunity(contactId) {
   }
 }
 
+/**
+ * Update opportunity name if it's still the fallback "Tattoo Opportunity"
+ * and we now have the contact's name
+ */
+async function updateOpportunityNameIfNeeded({ opportunityId, contact }) {
+  if (!opportunityId || !contact) return;
+
+  try {
+    // Get current opportunity to check its name
+    const currentOpp = await getOpportunity(opportunityId);
+    const currentName = currentOpp?.opportunity?.name || currentOpp?.name || "";
+
+    // If it's still the fallback name, update it
+    if (currentName === "Tattoo Opportunity") {
+      const firstName = contact?.firstName || contact?.first_name || "";
+      const lastName = contact?.lastName || contact?.last_name || "";
+      const newName = `${firstName} ${lastName}`.trim();
+
+      // Only update if we have a name
+      if (newName && newName !== "Tattoo Opportunity") {
+        await updateOpportunity(opportunityId, { name: newName });
+        console.log(`📝 [PIPELINE] Updated opportunity ${opportunityId} name from "Tattoo Opportunity" to "${newName}"`);
+      }
+    }
+  } catch (err) {
+    // Don't fail the whole operation if name update fails
+    console.warn(`⚠️ [PIPELINE] Failed to update opportunity name for ${opportunityId}:`, err.message || err);
+  }
+}
+
 async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTAKE, contact = null }) {
   const contactRecord = contact || (await getContact(contactId));
   if (!contactRecord) {
@@ -108,7 +140,10 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
     opportunityStage = getStageKeyFromId(createdOpp?.pipelineStageId) || stageKey;
   }
 
+  // Update opportunity name if it's still the fallback and we now have a name
   if (opportunityId) {
+    await updateOpportunityNameIfNeeded({ opportunityId, contact: contactRecord });
+    
     await updateSystemFields(contactId, {
       opportunity_id: opportunityId,
       opportunity_stage: opportunityStage || stageKey,
@@ -249,6 +284,11 @@ async function transitionToStage(contactId, stageKey, options = {}) {
     if (typeof monetaryValue === "number") {
       await updateOpportunityValue({ opportunityId, monetaryValue });
     }
+  }
+
+  // Update opportunity name if it's still the fallback and we now have a name
+  if (updatedOpportunityId && contact) {
+    await updateOpportunityNameIfNeeded({ opportunityId: updatedOpportunityId, contact });
   }
 
   if (note) {
