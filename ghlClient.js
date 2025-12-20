@@ -976,8 +976,10 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
   // 2) SMS / phone-based path (existing behavior)
   if (hasPhone && phone) {
     try {
-      // Infer type (SMS / FB / IG / WhatsApp / Email / etc.)
-      const type = await inferConversationMessageType(contactId);
+      // Check if contact prefers WhatsApp, otherwise use SMS
+      // Don't infer type here - inference is for DM conversations
+      const { isWhatsApp = false } = channelContext;
+      const type = isWhatsApp ? "WhatsApp" : "SMS";
 
       const payload = {
         contactId,

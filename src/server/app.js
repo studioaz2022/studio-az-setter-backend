@@ -73,8 +73,11 @@ function deriveChannelContext(payload, contact) {
     t.includes("messenger")
   );
   
-  // Detect WhatsApp
-  const isWhatsApp = tagsLower.some(t => t.includes("whatsapp")) || medium === "whatsapp";
+  // Detect WhatsApp - check tags, medium, OR custom field from form
+  const cf = contact?.customField || contact?.customFields || {};
+  const whatsappUser = cf.whatsapp_user || cf.whatsappUser || "";
+  const isWhatsAppFromField = whatsappUser.toLowerCase() === "yes";
+  const isWhatsApp = tagsLower.some(t => t.includes("whatsapp")) || medium === "whatsapp" || isWhatsAppFromField;
   
   // Detect SMS (has phone, not DM, not WhatsApp)
   const hasPhone = !!(contact?.phone || contact?.phoneNumber || payload?.phone);
