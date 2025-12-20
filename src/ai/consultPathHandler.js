@@ -1,11 +1,10 @@
 // consultPathHandler.js
 // Helpers to detect and route consultation path preferences (Message vs Video w/ translator)
 
-// consultPathHandler.js
-// Helpers to detect and route consultation path preferences (Message vs Video w/ translator)
-
 const { updateSystemFields, createTaskForContact } = require("../../ghlClient");
-const { syncOpportunityStageFromContact } = require("./opportunityManager");
+const { syncOpportunityStageFromContact, transitionToStage } = require("./opportunityManager");
+const { createDepositLinkForContact } = require("../payments/squareClient");
+const { DEPOSIT_CONFIG, OPPORTUNITY_STAGES } = require("../config/constants");
 
 function detectPathChoice(messageText) {
   if (!messageText) return null;
@@ -100,7 +99,7 @@ async function handlePathChoice({
 
     if (!applyOnly) {
       // Enhanced message for English leads: emphasize flexibility and artist joining after deposit
-      const responseBody =
+      const confirmationBody =
         "Perfect — we'll handle your consult right here in messages so you can share photos and notes at your own pace. Once the deposit's locked in, I'll add the artist to this thread so you can go back and forth directly.";
       try {
         await createTaskForContact(contactId, {
@@ -115,10 +114,56 @@ async function handlePathChoice({
 
       await sendConversationMessage({
         contactId,
-        body: responseBody,
+        body: confirmationBody,
         channelContext,
       });
       console.log("📝 [CONSULTATION_TYPE] Sent message-path confirmation directly");
+
+      // === Send deposit link after confirmation ===
+      try {
+        const deposit = await createDepositLinkForContact({
+          contactId,
+          amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+          description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+        });
+
+        const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
+        const depositMessage = 
+          `The $${amount} deposit locks in your spot and is fully refundable if you change your mind — it goes toward your tattoo total either way.\n\n` +
+          `Here's the link whenever you're ready: ${deposit?.url}`;
+
+        await sendConversationMessage({
+          contactId,
+          body: depositMessage,
+          channelContext,
+        });
+
+        // Update system fields to mark deposit link sent
+        await updateSystemFields(contactId, {
+          deposit_link_sent: true,
+          deposit_link_url: deposit?.url || null,
+        });
+
+        // Transition pipeline to DEPOSIT_PENDING
+        try {
+          await transitionToStage(contactId, OPPORTUNITY_STAGES.DEPOSIT_PENDING);
+          console.log("📊 [PIPELINE] Message consult + deposit link sent → DEPOSIT_PENDING");
+        } catch (pipeErr) {
+          console.error("❌ [PIPELINE] Failed to transition to DEPOSIT_PENDING:", pipeErr.message || pipeErr);
+        }
+
+        console.log("📝 [CONSULTATION_TYPE] Sent deposit link after message-path confirmation");
+      } catch (depositErr) {
+        console.error("❌ Failed to create/send deposit link for message consult:", depositErr.message || depositErr);
+        // Send fallback message without link
+        const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
+        const fallbackMessage = `Just need the $${amount} refundable deposit to get started — it goes toward your tattoo total. I'll send the payment link shortly.`;
+        await sendConversationMessage({
+          contactId,
+          body: fallbackMessage,
+          channelContext,
+        });
+      }
     } else {
       console.log("📝 [CONSULTATION_TYPE] applyOnly=true; skipping outbound message for message-path choice");
     }

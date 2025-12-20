@@ -92,10 +92,10 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
 
   if (!opportunityId) {
     const stageId = getStageId(stageKey) || getStageId("INTAKE");
-    const name =
-      contactRecord.firstName || contactRecord.first_name
-        ? `${contactRecord.firstName || contactRecord.first_name} Tattoo`
-        : "Tattoo Opportunity";
+    // Opportunity name is just first + last name
+    const firstName = contactRecord.firstName || contactRecord.first_name || "";
+    const lastName = contactRecord.lastName || contactRecord.last_name || "";
+    const name = `${firstName} ${lastName}`.trim() || "Tattoo Opportunity";
 
     const upserted = await upsertOpportunity({
       contactId,
@@ -208,10 +208,10 @@ async function transitionToStage(contactId, stageKey, options = {}) {
   let updatedOpportunityId = opportunityId;
 
   try {
-    const name =
-      contact?.firstName || contact?.first_name
-        ? `${contact.firstName || contact.first_name} Tattoo`
-        : "Tattoo Opportunity";
+    // Opportunity name is just first + last name
+    const firstName = contact?.firstName || contact?.first_name || "";
+    const lastName = contact?.lastName || contact?.last_name || "";
+    const name = `${firstName} ${lastName}`.trim() || "Tattoo Opportunity";
 
     const upserted = await upsertOpportunity({
       contactId,

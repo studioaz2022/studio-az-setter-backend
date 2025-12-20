@@ -1,789 +1,359 @@
-💬 GHL MESSAGE WEBHOOK HIT
-
-
-
-💬 ════════════════════════════════════════════════════════
-
-
-
-📦 Webhook Payload (non-empty fields): {
-
-
-
-  "contact_id": "Nc8DVLpAYkUMKpa8jSNs",
-
-
-
-  "first_name": "Maria",
-
-
-
-  "last_name": "Claflin",
-
-
-
-  "full_name": "Maria Claflin",
-
-
-
-  "tags": "dm consultation request",
-
-
-
-  "date_created": "2025-12-19T01:26:09.545Z",
-
-
-
+📝 GHL FORM WEBHOOK HIT
+📝 ════════════════════════════════════════════════════════
+📦 Form Payload (non-empty fields): {
+  "Tattoo Style": "Realism",
+  "Tattoo Title": "Lion and Roses",
+  "Language Preference": "English",
+  "First Tattoo": "Yes",
+  "Artist Inquired (Deseado)": "Joan",
+  "Whatsapp User?": "No",
+  "Tattoo Color Preference": "Black & Grey",
+  "Tattoo Placement": "Left inner forearm",
+  "How Soon Is Client Deciding?": "Soonest possible",
+  "Tattoo Summary": "A realistic, black and gray lion",
+  "contact_id": "cx8QkqBYM13LnXkOvnQl",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "email": "chavezctz@gmail.com",
+  "phone": "+18329390214",
+  "tags": "consultation request,english,source: web widget",
+  "country": "US",
+  "date_created": "2025-12-20T06:00:24.057Z",
+  "contact_source": "AI Tattoo Widget",
   "contact_type": "lead",
-
-
-
   "location": {
-
-
-
     "name": "Studio AZ Tattoo",
-
-
-
     "address": "333 Washington Ave N STE 100",
-
-
-
     "city": "Minneapolis",
-
-
-
     "state": "Minnesota",
-
-
-
     "country": "US",
-
-
-
     "postalCode": "55401",
-
-
-
     "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
-
-
-
     "id": "mUemx2jG4wly4kJWBkI4"
-
-
-
   },
-
-
-
-  "message": {
-
-
-
-    "type": 11,
-
-
-
-    "body": "Hi! How do I book a tattoo appointment?"
-
-
-
-  },
-
-
-
   "workflow": {
-
-
-
-    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
-
-
-
-    "name": "Testing Ai Bot"
-
-
-
+    "id": "f96f931a-ca9d-46fe-af2c-b0dab285bcc7",
+    "name": "Lead Fills Out \"React Widget\""
   },
-
-
-
-  "contact": {
-
-
-
-    "attributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    },
-
-
-
-    "lastAttributionSource": {
-
-
-
-      "photoUrl": null,
-
-
-
-      "sessionSource": "Social media",
-
-
-
-      "adId": null,
-
-
-
-      "productId": null,
-
-
-
-      "videoUrl": null,
-
-
-
-      "mediumId": "24364584283244494",
-
-
-
-      "utmContent": null,
-
-
-
-      "pSid": "24364584283244494",
-
-
-
-      "medium": "facebook",
-
-
-
-      "postId": null,
-
-
-
-      "flowId": null
-
-
-
-    }
-
-
-
-  },
-
-
-
   "customData": {
-
-
-
-    "contactId": "Nc8DVLpAYkUMKpa8jSNs",
-
-
-
-    "messageBody": "Hi! How do I book a tattoo appointment?"
-
-
-
+    "contactId": "cx8QkqBYM13LnXkOvnQl"
   }
-
-
-
 }
-
-
-
-📩 Incoming message text: Hi! How do I book a tattoo appointment?
-
-
-
-👤 Contact ID: Nc8DVLpAYkUMKpa8jSNs
-
-
-
-📋 Webhook custom fields extracted: {}
-
-
-
-👤 Contact: Maria Claflin
-
-
-
-📋 Contact custom fields (merged): {}
-
-
-
-📡 Channel context: {
-
-
-
-  isDm: true,
-
-
-
-  hasPhone: false,
-
-
-
-  isWhatsApp: false,
-
-
-
-  isSms: false,
-
-
-
-  channelType: 'facebook',
-
-
-
-  conversationId: null,
-
-
-
-  phone: null
-
-
-
+🔄 Updating existing contact: cx8QkqBYM13LnXkOvnQl
+👤 Contact: Leonel Chavez
+👤 Contact ID: cx8QkqBYM13LnXkOvnQl
+📩 Form message/notes: New form submission
+📋 Contact custom fields (non-empty): {
+  "etxasc6qlyxraku18kbz": "English",
+  "h3psn8tzsw1kyckhjn9d": "Joan",
+  "kxtfzydeskuys5lltksr": "Large",
+  "qqdydmy1fnldidlcmnbc": "No",
+  "ra4nk80wma8eqklcfxst": "Soonest possible",
+  "12b2o4ydlfo99fa4ycuk": "Realism",
+  "8jqgdvjraabsqgueqj3a": "Lion and Roses",
+  "fnydobmyqnxdxlljy5oe": "Yes",
+  "szyropmdmcitudhhb8dd": "Black & Grey",
+  "jd8yhvksbi4agqjqoeov": "Left inner forearm",
+  "xagtmfmbxtfchdo2oyf7": "A realistic, black and gray lion",
+  "tattoo_style": "Realism",
+  "tattoo_title": "Lion and Roses",
+  "language_preference": "English",
+  "first_tattoo": "Yes",
+  "whatsapp_user": "No",
+  "tattoo_color_preference": "Black & Grey",
+  "tattoo_placement": "Left inner forearm",
+  "how_soon_is_client_deciding": "Soonest possible",
+  "tattoo_summary": "A realistic, black and gray lion"
 }
-
-
-
-📊 [PIPELINE] New lead from facebook - syncing entry stage...
-
-
-
-📊 [PIPELINE] Direct channel (facebook) → starting at DISCOVERY
-
-
-
-✅ [PIPELINE] Entry stage set: DISCOVERY (contact: Nc8DVLpAYkUMKpa8jSNs)
-
-
-
+📊 [PIPELINE] New lead from Widget/Form - syncing entry stage to INTAKE...
+📊 [PIPELINE] Widget/form channel → starting at INTAKE
+✅ [PIPELINE] Entry stage set: INTAKE (contact: cx8QkqBYM13LnXkOvnQl)
 📜 Fetching conversation history...
-
-
-
-📜 Fetched 1 messages for contact Nc8DVLpAYkUMKpa8jSNs
-
-
-
+📜 Fetched 0 messages for contact cx8QkqBYM13LnXkOvnQl
 📜 Thread context: {
-
-
-
-  totalMessages: 1,
-
-
-
-  recentCount: 1,
-
-
-
+  totalMessages: 0,
+  recentCount: 0,
   hasSummary: false,
-
-
-
   hasImageContext: false,
-
-
-
-  wasHumanHandling: false,
-
-
-
-  isReturningClient: false
-
-
-
-}
-
-
-
-🧠 [AI CONTEXT] Processing message: {
-
-
-
-  messageText: 'Hi! How do I book a tattoo appointment?',
-
-
-
-  contactId: 'Nc8DVLpAYkUMKpa8jSNs',
-
-
-
-  contactName: 'Maria Claflin',
-
-
-
-  consultExplained: undefined,
-
-
-
-  threadStats: {
-
-
-
-    totalMessages: 1,
-
-
-
-    recentMessages: 1,
-
-
-
-    hasSummary: false,
-
-
-
-    hasImageContext: false,
-
-
-
-    wasHumanHandling: false
-
-
-
-  }
-
-
-
-}
-
-
-
-📊 [CANONICAL] State before routing: {
-
-
-
-  tattooSummary: null,
-
-
-
-  tattooPlacement: null,
-
-
-
-  tattooSize: null,
-
-
-
-  timeline: null,
-
-
-
-  consultationType: null,
-
-
-
-  depositPaid: false,
-
-
-
-  derivedPhase: 'intake'
-
-
-
-}
-
-
-
-🎯 [INTENTS] No specific intents detected for: Hi! How do I book a tattoo appointment?
-
-
-
-📜 [AI] Thread context included: {
-
-
-
-  totalMessages: 1,
-
-
-
-  recentCount: 1,
-
-
-
-  hasSummary: false,
-
-
-
-  hasImageContext: false,
-
-
-
   wasHumanHandling: false
-
-
-
 }
-
-
-
-🤖 Raw OpenAI opener response: {
-
-
-
-  "language": "en",
-
-
-
-  "bubbles": [
-
-
-
-    "What kind of piece are you thinking?",
-
-
-
-    "Where on your body were you thinking of getting it?"
-
-
-
-  ],
-
-
-
-  "internal_notes": "Starting intake phase, gathering basic tattoo idea and placement from new lead.",
-
-
-
-  "meta": {
-
-
-
-    "aiPhase": "intake",
-
-
-
-    "leadTemperature": "warm",
-
-
-
-    "wantsDepositLink": false,
-
-
-
-    "depositPushedThisTurn": false,
-
-
-
-    "mentionDecoyOffered": false,
-
-
-
-    "wantsAppointmentOffer": false,
-
-
-
-    "consultMode": "online"
-
-
-
-  },
-
-
-
-  "field_updates": {}
-
-
-
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'New form submission',
+  contactId: 'cx8QkqBYM13LnXkOvnQl',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined,
+  threadStats: {
+    totalMessages: 0,
+    recentMessages: 0,
+    hasSummary: false,
+    hasImageContext: false,
+    wasHumanHandling: false
+  }
 }
-
-
-
-⏱️ [TIMING] AI call took 2421ms
-
-
-
-🧭 [PHASE] derived_phase snapshot {
-
-
-
-  derived_phase: 'intake',
-
-
-
-  canonical: {
-
-
-
-    tattooSummary: null,
-
-
-
-    tattooPlacement: null,
-
-
-
-    tattooSize: null,
-
-
-
-    timeline: null,
-
-
-
-    consultationType: null,
-
-
-
-    consultationTypeLocked: false,
-
-
-
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'A realistic, black and gray lion',
+  tattooPlacement: 'Left inner forearm',
+  tattooSize: null,
+  timeline: 'Soonest possible',
+  consultationType: null,
+  depositPaid: false,
+  derivedPhase: 'consult_path'
+}
+🎯 [INTENTS] No specific intents detected for: New form submission
+✉️ sendConversationMessage context: { contactId: 'cx8QkqBYM13LnXkOvnQl', isDm: false, hasPhone: false }
+inferConversationMessageType: unrecognized lastMessageType=TYPE_NO_SHOW, defaulting to FB for DM
+❌ Error sending message via GHL (fallback): {
+  status: 400,
+  message: 'Contact has no Facebook id, skipping',
+  name: 'HttpException',
+  traceId: '655589ac-30e4-4d75-8aee-bd0aa066091a'
+}
+❌ Failed to send proactive consult options: Request failed with status code 400
+  currentStage: '(none)',
+  targetStage: 'CONSULT_MESSAGE',
+  context: {
+    aiPhase: 'consult_support',
     depositLinkSent: false,
-
-
-
     depositPaid: false,
-
-
-
+    consultType: 'message',
+    hasUpcomingTattoo: false,
+    tattooCompleted: false,
+    lost: false
+  }
+}
+📊 [PIPELINE] Transitioning opportunity DlkVUVQDWmTSp079m4sg: DISCOVERY → CONSULT_MESSAGE
+✅ [PIPELINE] Stage transition: (none) → CONSULT_MESSAGE (contact: cx8QkqBYM13LnXkOvnQl)
+🏗️ Pipeline stage synced after consult mode = message
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'consult_path',
+  canonical: {
+    tattooSummary: 'A realistic, black and gray lion',
+    tattooPlacement: 'Left inner forearm',
+    tattooSize: null,
+    timeline: 'Soonest possible',
+    consultationType: null,
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
     holdAppointmentId: null
-
-
-
   },
-
-
-
   intents: {
-
-
-
     reschedule_intent: false,
-
-
-
     cancel_intent: false,
-
-
-
     scheduling_intent: false,
-
-
-
     slot_selection_intent: false,
-
-
-
     deposit_intent: false,
-
-
-
-    consult_path_choice_intent: false,
-
-
-
+    consult_path_choice_intent: true,
     artist_guided_size_intent: false,
-
-
-
-    process_or_price_question_intent: false,
-
-
-
-    translator_affirm_intent: false
-
-
-
+    process_or_price_question_intent: false
   },
-
-
-
-  selected_handler: 'ai',
-
-
-
-  routing_reason: 'ai_fallback',
-
-
-
-  intent_flags: []
-
-
-
+  selected_handler: 'consult_path',
+  routing_reason: 'consult_path_choice_intent',
+  intent_flags: [ 'consult_path_choice_intent' ]
 }
-
-
-
-⏱️ [TIMING] Total handleInboundMessage took 2424ms
-
-
-
+⏱️ [TIMING] Total handleInboundMessage took 2587ms
 🤖 AI Response Summary: {
-
-
-
-  bubblesCount: 2,
-
-
-
-  phase: 'intake',
-
-
-
-  handler: 'ai',
-
-
-
-  reason: 'ai_fallback',
-
-
-
+  bubblesCount: 0,
+  phase: 'consult_path',
+  handler: 'consult_path',
+  reason: 'consult_path_choice_intent',
   fieldUpdatesKeys: []
-
-
-
 }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'Nc8DVLpAYkUMKpa8jSNs', isDm: true, hasPhone: false }
-
-
-
-🔍 No conversationId provided for DM, searching for DM conversation...
-
-
-
-🔍 No DM conversation found for contact
-
-
-
-🔍 No existing DM conversation found, will try to infer type from contact...
-
-
-
-🔍 No DM conversation found for contact
-
-
-
-inferConversationMessageType: no DM conversation found, checking contact tags...
-
-
-
-📨 Sending DM via GHL (creating new conversation): {
-
-
-
-  contactId: 'Nc8DVLpAYkUMKpa8jSNs',
-
-
-
-  locationId: 'mUemx2jG4wly4kJWBkI4',
-
-
-
-  message: 'What kind of piece are you thinking?',
-
-
-
-  type: 'FB'
-
-
-
+📤 Sent 0/0 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
+💬 ════════════════════════════════════════════════════════
+💬 ════════════════════════════════════════════════════════
+💬 GHL MESSAGE WEBHOOK HIT
+💬 ════════════════════════════════════════════════════════
+📦 Webhook Payload (non-empty fields): {
+  "Tattoo Style": "Realism",
+  "Tattoo Title": "Lion and Roses",
+  "Language Preference": "English",
+  "First Tattoo": "Yes",
+  "Artist Inquired (Deseado)": "Joan",
+  "Whatsapp User?": "No",
+  "Tattoo Color Preference": "Black & Grey",
+  "consultation_type": "message",
+  "Tattoo Placement": "Left inner forearm",
+  "translator_needed": "No",
+  "How Soon Is Client Deciding?": "Soonest possible",
+  "Tattoo Summary": "A realistic, black and gray lion",
+  "contact_id": "cx8QkqBYM13LnXkOvnQl",
+  "first_name": "Leonel",
+  "last_name": "Chavez",
+  "full_name": "Leonel Chavez",
+  "email": "chavezctz@gmail.com",
+  "phone": "+18329390214",
+  "tags": "consultation request,english,source: web widget",
+  "country": "US",
+  "date_created": "2025-12-20T06:00:24.057Z",
+  "contact_source": "AI Tattoo Widget",
+  "contact_type": "lead",
+  "location": {
+    "name": "Studio AZ Tattoo",
+    "address": "333 Washington Ave N STE 100",
+    "city": "Minneapolis",
+    "state": "Minnesota",
+    "country": "US",
+    "postalCode": "55401",
+    "fullAddress": "333 Washington Ave N STE 100, Minneapolis Minnesota 55401",
+    "id": "mUemx2jG4wly4kJWBkI4"
+  },
+  "message": {
+    "type": 2,
+    "body": "Thanks for the prompt response. I feel like I can message the artist directly."
+  },
+  "workflow": {
+    "id": "8cf237bb-6cb1-4240-8ca5-b797bba8b769",
+    "name": "Testing Ai Bot"
+  },
+  "customData": {
+    "contactId": "cx8QkqBYM13LnXkOvnQl",
+    "messageBody": "Thanks for the prompt response. I feel like I can message the artist directly."
+  }
 }
-
-
-
-📨 GHL DM message response (new conversation): { status: 201, contactId: 'Nc8DVLpAYkUMKpa8jSNs', type: 'FB' }
-
-
-
-✉️ sendConversationMessage context: { contactId: 'Nc8DVLpAYkUMKpa8jSNs', isDm: true, hasPhone: false }
-
-
-
-🔍 No conversationId provided for DM, searching for DM conversation...
-
-
-
-🔍 No DM conversation found for contact
-
-
-
-🔍 No existing DM conversation found, will try to infer type from contact...
-
-
-
-🔍 No DM conversation found for contact
-
-
-
-inferConversationMessageType: no DM conversation found, checking contact tags...
-
-
-
-📨 Sending DM via GHL (creating new conversation): {
-
-
-
-  contactId: 'Nc8DVLpAYkUMKpa8jSNs',
-
-
-
-  locationId: 'mUemx2jG4wly4kJWBkI4',
-
-
-
-  message: 'Where on your body were you thinking of getting it?',
-
-
-
-  type: 'FB'
-
-
-
+📩 Incoming message text: Thanks for the prompt response. I feel like I can message the artist directly.
+👤 Contact ID: cx8QkqBYM13LnXkOvnQl
+📋 Webhook custom fields extracted: {
+  "tattoo_style": "Realism",
+  "tattoo_title": "Lion and Roses",
+  "language_preference": "English",
+  "first_tattoo": "Yes",
+  "whatsapp_user": "No",
+  "tattoo_color_preference": "Black & Grey",
+  "consultation_type": "message",
+  "tattoo_placement": "Left inner forearm",
+  "translator_needed": "No",
+  "how_soon_is_client_deciding": "Soonest possible",
+  "tattoo_summary": "A realistic, black and gray lion"
 }
+👤 Contact: Leonel Chavez
+📋 Contact custom fields (merged): {
+  "etxasc6qlyxraku18kbz": "English",
+  "h3psn8tzsw1kyckhjn9d": "Joan",
+  "kxtfzydeskuys5lltksr": "Large",
+  "qqdydmy1fnldidlcmnbc": "No",
+  "ra4nk80wma8eqklcfxst": "Soonest possible",
+  "12b2o4ydlfo99fa4ycuk": "Realism",
+  "8jqgdvjraabsqgueqj3a": "Lion and Roses",
+  "fnydobmyqnxdxlljy5oe": "Yes",
+  "szyropmdmcitudhhb8dd": "Black & Grey",
+  "jd8yhvksbi4agqjqoeov": "Left inner forearm",
+  "xagtmfmbxtfchdo2oyf7": "A realistic, black and gray lion",
+  "gm2pvo90ynbdhekv5g64": "message",
+  "qvuq2wdv3drhbkhts6td": "No",
+  "tattoo_style": "Realism",
+  "tattoo_title": "Lion and Roses",
+  "language_preference": "English",
+  "first_tattoo": "Yes",
+  "whatsapp_user": "No",
+  "tattoo_color_preference": "Black & Grey",
+  "consultation_type": "message",
+  "tattoo_placement": "Left inner forearm",
+  "translator_needed": "No",
+  "how_soon_is_client_deciding": "Soonest possible",
+  "tattoo_summary": "A realistic, black and gray lion"
+}
+📡 Channel context: {
+  isDm: false,
+  hasPhone: true,
+  isWhatsApp: false,
+  isSms: true,
+  channelType: 'sms',
+  conversationId: null,
+  phone: '+18329390214'
+}
+📊 [PIPELINE] New lead from sms - syncing entry stage...
+📊 [PIPELINE] Direct channel (sms) → starting at DISCOVERY
+📜 Fetching conversation history...
+📜 Fetched 8 messages for contact cx8QkqBYM13LnXkOvnQl
+📜 Thread context: {
+  totalMessages: 8,
+  recentCount: 8,
+  hasSummary: false,
+  hasImageContext: false,
+  wasHumanHandling: true,
+  isReturningClient: false
+}
+🧠 [AI CONTEXT] Processing message: {
+  messageText: 'Thanks for the prompt response. I feel like I can message the artist directly.',
+  contactId: 'cx8QkqBYM13LnXkOvnQl',
+  contactName: 'Leonel Chavez',
+  consultExplained: undefined,
+  threadStats: {
+    totalMessages: 8,
+    recentMessages: 8,
+    hasSummary: false,
+    hasImageContext: false,
+    wasHumanHandling: true
+  }
+}
+📊 [CANONICAL] State before routing: {
+  tattooSummary: 'A realistic, black and gray lion',
+  tattooPlacement: 'Left inner forearm',
+  tattooSize: null,
+  timeline: 'Soonest possible',
+  consultationType: 'message',
+  depositPaid: false,
+  derivedPhase: 'discovery'
+}
+🎯 [INTENTS] Detected intents: [ 'consult_path_choice_intent' ] from message: Thanks for the prompt response. I feel like I can message the artist directly.
+📝 [CONSULTATION_TYPE] Setting consultation_type="message" for contact cx8QkqBYM13LnXkOvnQl (detected from: "Thanks for the prompt response. I feel like I can message the artist directly.")
+❌ Failed to create message consult task: Request failed with status code 422
+✉️ sendConversationMessage context: { contactId: 'cx8QkqBYM13LnXkOvnQl', isDm: false, hasPhone: false }
+📨 GHL conversations API response (fallback): { status: 201, contactId: 'cx8QkqBYM13LnXkOvnQl', type: 'SMS' }
+📝 [CONSULTATION_TYPE] Sent message-path confirmation directly
+🔄 [PIPELINE] Syncing opportunity stage for contact cx8QkqBYM13LnXkOvnQl: {
+  currentStage: '(none)',
+  targetStage: 'CONSULT_MESSAGE',
+  context: {
+    aiPhase: 'consult_support',
+    depositLinkSent: false,
+    depositPaid: false,
+    consultType: 'message',
+    hasUpcomingTattoo: false,
+    tattooCompleted: false,
+    lost: false
+  }
+}
+✅ [PIPELINE] Stage transition: (none) → CONSULT_MESSAGE (contact: cx8QkqBYM13LnXkOvnQl)
+🏗️ Pipeline stage synced after consult mode = message
+🧭 [PHASE] derived_phase snapshot {
+  derived_phase: 'discovery',
+  canonical: {
+    tattooSummary: 'A realistic, black and gray lion',
+    tattooPlacement: 'Left inner forearm',
+    tattooSize: null,
+    timeline: 'Soonest possible',
+    consultationType: 'message',
+    consultationTypeLocked: false,
+    depositLinkSent: false,
+    depositPaid: false,
+    holdAppointmentId: null
+  },
+  intents: {
+    reschedule_intent: false,
+    cancel_intent: false,
+    scheduling_intent: false,
+    slot_selection_intent: false,
+    deposit_intent: false,
+    consult_path_choice_intent: true,
+    artist_guided_size_intent: false,
+    process_or_price_question_intent: false
+  },
+  selected_handler: 'consult_path',
+  routing_reason: 'consult_path_choice_intent',
+  intent_flags: [ 'consult_path_choice_intent' ]
+}
+⏱️ [TIMING] Total handleInboundMessage took 2558ms
+🤖 AI Response Summary: {
+  bubblesCount: 0,
+  phase: 'discovery',
+  handler: 'consult_path',
+  reason: 'consult_path_choice_intent',
+  fieldUpdatesKeys: []
+}
+📤 Sent 0/0 bubbles to GHL conversation
+ℹ️ No field_updates from AI to persist this turn
+💬 ════════════════════════════════════════════════════════
