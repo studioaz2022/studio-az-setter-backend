@@ -34,6 +34,7 @@ async function handleInboundMessage({
   consultExplained,
   payloadCustomFields = {},
   conversationThread = null, // NEW: Formatted conversation history
+  channelContext = {}, // NEW: Channel context for message sending
 }) {
   const startTime = Date.now();
   
@@ -151,7 +152,7 @@ async function handleInboundMessage({
       await sendConversationMessage({
         contactId: consultContactId,
         body: consultOptionsMessage,
-        channelContext: {},
+        channelContext,
       });
       
       // Mark that we've explained the consult options

@@ -366,6 +366,7 @@ function createApp() {
         contactProfile: {},
         consultExplained: contact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
         conversationThread, // Pass thread context to AI
+        channelContext, // Pass channel context for message sending
       });
 
       // Log AI result summary
@@ -523,6 +524,10 @@ function createApp() {
           wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
         });
 
+        // Derive channel context for message sending (before handleInboundMessage so it can use it)
+        const channelContext = deriveChannelContext(payload, effectiveContact);
+        console.log("📡 Channel context:", channelContext);
+
         const result = await handleInboundMessage({
           contact: effectiveContact,
           aiPhase: null,
@@ -531,6 +536,7 @@ function createApp() {
           contactProfile: {},
           consultExplained: effectiveContact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
           conversationThread, // Pass thread context to AI
+          channelContext, // Pass channel context for message sending
         });
 
         // Log AI result summary
@@ -541,10 +547,6 @@ function createApp() {
           reason: result?.routing?.reason,
           fieldUpdatesKeys: Object.keys(result?.aiResult?.field_updates || {}),
         });
-
-        // Derive channel context for message sending
-        const channelContext = deriveChannelContext(payload, effectiveContact);
-        console.log("📡 Channel context:", channelContext);
 
         // Send the AI's bubbles to the user
         const bubbles = result?.aiResult?.bubbles || [];
