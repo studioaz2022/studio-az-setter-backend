@@ -863,10 +863,21 @@ function createApp() {
 
         console.log(`📅 Found ${siblingAppointments.length} sibling appointment(s) to sync`);
 
+        // Helper: Get translator user ID for a calendar
+        const getTranslatorUserIdForCalendar = (calId) => {
+          if (calId === TRANSLATOR_CALENDARS.LIONEL_ONLINE) return TRANSLATOR_USER_IDS.LIONEL;
+          if (calId === TRANSLATOR_CALENDARS.MARIA_ONLINE) return TRANSLATOR_USER_IDS.MARIA;
+          return null;
+        };
+
         // Process each sibling
         for (const sibling of siblingAppointments) {
           const siblingId = sibling.id;
           const siblingCalendarId = sibling.calendarId;
+          
+          // Get the assignedUserId - use existing one from sibling, or look up for translator calendars
+          const siblingAssignedUserId = sibling.assignedUserId || 
+            getTranslatorUserIdForCalendar(siblingCalendarId);
           
           if (isCancelled) {
             // === CANCEL SYNC ===
@@ -891,12 +902,14 @@ function createApp() {
             console.log(`📅 Rescheduling sibling appointment ${siblingId} to match...`);
             console.log(`   From: ${siblingStart} - ${siblingEnd}`);
             console.log(`   To:   ${startTime} - ${endTime}`);
+            console.log(`   AssignedUserId: ${siblingAssignedUserId || "(none)"}`);
             
             try {
               await rescheduleAppointment(siblingId, {
                 startTime,
                 endTime,
                 calendarId: siblingCalendarId,
+                assignedUserId: siblingAssignedUserId,
               });
               console.log(`✅ Sibling appointment ${siblingId} rescheduled`);
             } catch (err) {

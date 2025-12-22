@@ -198,7 +198,7 @@ async function updateAppointmentStatus(appointmentId, status, calendarId = null)
  * Reschedule an appointment (update start/end and optional status)
  * Note: GHL uses PUT (not PATCH) for updating appointments
  */
-async function rescheduleAppointment(appointmentId, { startTime, endTime, appointmentStatus = null, calendarId = null }) {
+async function rescheduleAppointment(appointmentId, { startTime, endTime, appointmentStatus = null, calendarId = null, assignedUserId = null }) {
   if (!appointmentId) {
     throw new Error("appointmentId is required for rescheduleAppointment");
   }
@@ -221,6 +221,11 @@ async function rescheduleAppointment(appointmentId, { startTime, endTime, appoin
   // Include calendarId if provided (required by some GHL clusters)
   if (calendarId) {
     payload.calendarId = calendarId;
+  }
+
+  // Include assignedUserId if provided (required by translator calendars)
+  if (assignedUserId) {
+    payload.assignedUserId = assignedUserId;
   }
 
   if (appointmentStatus) {
