@@ -869,40 +869,105 @@ function createApp() {
           return;
         }
 
+        // Extract pairing key from notes (format: PairingKey:XXXXXXXX)
+        const extractPairingKey = (notes) => {
+          if (!notes) return null;
+          const match = notes.match(/PairingKey:([A-F0-9]{8})/i);
+          return match ? match[0] : null; // Return full "PairingKey:XXXXXXXX"
+        };
+
+        // Get notes from the webhook payload
+        const triggerNotes = calendar.notes || payload.notes || "";
+        const triggerPairingKey = extractPairingKey(triggerNotes);
+        
+        console.log("🔑 Pairing key from webhook notes:", triggerPairingKey || "(none found)");
+
         // Debug: Log all appointments found
         console.log("📋 All appointments for contact:", allAppointments.map(apt => ({
           id: apt.id,
           calendarId: apt.calendarId,
           status: apt.appointmentStatus || apt.status,
           startTime: apt.startTime,
+          notes: apt.notes ? apt.notes.substring(0, 50) + "..." : "(no notes)",
+          pairingKey: extractPairingKey(apt.notes),
           isOnSiblingCalendar: siblingCalendarSet.has(apt.calendarId),
         })));
         console.log("🔍 Looking for siblings on calendars:", Array.from(siblingCalendarSet));
 
-        // Find sibling appointments (on the other calendar type, same contact)
-        const siblingAppointments = allAppointments.filter((apt) => {
-          // Must be on a sibling calendar
-          if (!siblingCalendarSet.has(apt.calendarId)) {
-            console.log(`   ❌ Apt ${apt.id} not on sibling calendar (${apt.calendarId})`);
-            return false;
+        // Find sibling appointment - first by pairing key, then by exact time match
+        let siblingAppointments = [];
+        
+        // === STRATEGY 1: Match by PairingKey ===
+        if (triggerPairingKey) {
+          siblingAppointments = allAppointments.filter((apt) => {
+            // Must be on a sibling calendar
+            if (!siblingCalendarSet.has(apt.calendarId)) return false;
+            // Must not be the same appointment
+            if (apt.id === appointmentId) return false;
+            // Must have matching pairing key
+            const aptPairingKey = extractPairingKey(apt.notes);
+            if (aptPairingKey !== triggerPairingKey) return false;
+            // Must not already be cancelled (for cancellation syncs)
+            const siblingStatus = String(apt.appointmentStatus || apt.status || "").toLowerCase();
+            if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) return false;
+            
+            console.log(`   ✅ Matched sibling ${apt.id} by PairingKey: ${aptPairingKey}`);
+            return true;
+          });
+          
+          if (siblingAppointments.length > 0) {
+            console.log(`🔑 Found ${siblingAppointments.length} sibling(s) by PairingKey match`);
           }
-          // Must not be the same appointment
-          if (apt.id === appointmentId) {
-            console.log(`   ❌ Apt ${apt.id} is the same appointment, skipping`);
-            return false;
+        }
+
+        // === STRATEGY 2: Fallback to exact start time match (only if no pairing key match) ===
+        if (siblingAppointments.length === 0 && rawStartTime) {
+          console.log("🔍 No PairingKey match, falling back to exact start time match...");
+          
+          // Normalize start time for comparison (strip timezone for comparison)
+          const normalizeTime = (t) => {
+            if (!t) return null;
+            // Remove any timezone suffix for comparison
+            return t.replace(/[-+]\d{2}:\d{2}$/, "").replace(/Z$/, "");
+          };
+          
+          const triggerStartNormalized = normalizeTime(rawStartTime);
+          
+          siblingAppointments = allAppointments.filter((apt) => {
+            // Must be on a sibling calendar
+            if (!siblingCalendarSet.has(apt.calendarId)) {
+              console.log(`   ❌ Apt ${apt.id} not on sibling calendar`);
+              return false;
+            }
+            // Must not be the same appointment
+            if (apt.id === appointmentId) {
+              console.log(`   ❌ Apt ${apt.id} is the same appointment`);
+              return false;
+            }
+            // Must have EXACT same start time
+            const aptStartNormalized = normalizeTime(apt.startTime);
+            if (aptStartNormalized !== triggerStartNormalized) {
+              console.log(`   ❌ Apt ${apt.id} start time mismatch: ${aptStartNormalized} vs ${triggerStartNormalized}`);
+              return false;
+            }
+            // Must not already be cancelled (for cancellation syncs)
+            const siblingStatus = String(apt.appointmentStatus || apt.status || "").toLowerCase();
+            if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) {
+              console.log(`   ❌ Apt ${apt.id} already cancelled`);
+              return false;
+            }
+            
+            console.log(`   ✅ Matched sibling ${apt.id} by exact start time: ${aptStartNormalized}`);
+            return true;
+          });
+          
+          if (siblingAppointments.length > 0) {
+            console.log(`⏰ Found ${siblingAppointments.length} sibling(s) by exact start time fallback`);
           }
-          // Must not already be cancelled (we don't want to re-cancel)
-          const siblingStatus = String(apt.appointmentStatus || apt.status || "").toLowerCase();
-          if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) {
-            console.log(`   ❌ Apt ${apt.id} already cancelled, skipping`);
-            return false;
-          }
-          console.log(`   ✅ Apt ${apt.id} is a valid sibling`);
-          return true;
-        });
+        }
 
         if (siblingAppointments.length === 0) {
-          console.log("ℹ️ No sibling appointment found to sync");
+          console.log("ℹ️ No sibling appointment found to sync (no PairingKey or exact time match)");
           return;
         }
 

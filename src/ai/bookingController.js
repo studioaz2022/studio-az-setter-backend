@@ -1,6 +1,7 @@
 // bookingController.js
 // Handles appointment booking orchestration
 
+const crypto = require("crypto");
 const { getContact, updateContact, updateSystemFields } = require("../../ghlClient");
 const {
   determineArtist,
@@ -31,6 +32,15 @@ const { boolField, normalizeCustomFields } = require("./opportunityManager");
 
 // Active artists for time-first slot generation
 const ACTIVE_ARTISTS = ["Joan", "Andrew"];
+
+/**
+ * Generate a unique pairing key for linking artist and translator appointments.
+ * Format: PairingKey:XXXXXXXX (8 hex chars)
+ */
+function generatePairingKey() {
+  const id = crypto.randomBytes(4).toString("hex").toUpperCase();
+  return `PairingKey:${id}`;
+}
 
 // Weekday name to index mapping
 const WEEKDAY_MAP = {
@@ -1187,10 +1197,19 @@ async function createConsultAppointment({
     const meetingLocationType = consultMode === "online" ? "custom" : null;
     const meetingLocationId = consultMode === "online" ? "custom_0" : null;
     const address = consultMode === "online" ? meetUrl || "Online consult" : null;
-    const description =
+    
+    // Generate pairing key for translator appointments
+    const pairingKey = translatorNeeded && translatorCalendarId ? generatePairingKey() : null;
+    
+    let description =
       consultMode === "online" && meetUrl
         ? `${baseDescription}\n\nGoogle Meet: ${meetUrl}\nPlease join a few minutes early.`
         : baseDescription;
+    
+    // Add pairing key to artist appointment notes for linking with translator appointment
+    if (pairingKey) {
+      description = `${description}\n\n${pairingKey}`;
+    }
 
     // If deposit already paid, create as CONFIRMED. Otherwise NEW (hold).
     const appointmentStatus = depositPaid ? APPOINTMENT_STATUS.CONFIRMED : APPOINTMENT_STATUS.NEW;
@@ -1244,9 +1263,14 @@ async function createConsultAppointment({
 
     if (translatorNeeded && translatorCalendarId) {
       const translatorTitle = `Translator for consult (${artist})`;
-      const translatorDescription = meetUrl
+      let translatorDescription = meetUrl
         ? `Translator: ${translatorName || "Translator"} for consult with ${artist}\n\nGoogle Meet: ${meetUrl}`
         : `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
+      
+      // Add pairing key to translator appointment notes for linking with artist appointment
+      if (pairingKey) {
+        translatorDescription = `${translatorDescription}\n\n${pairingKey}`;
+      }
 
       // Look up translator user ID if not provided
       const effectiveTranslatorUserId = translatorUserId || 
