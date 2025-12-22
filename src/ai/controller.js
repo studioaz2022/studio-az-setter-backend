@@ -97,6 +97,11 @@ async function handleInboundMessage({
     console.log("🎯 [INTENTS] No specific intents detected for:", latestMessageText);
   }
 
+  // Log objection detection separately for sales tracking
+  if (intents.objection_intent && intents.objection_type) {
+    console.log(`🚨 [OBJECTION] Detected objection type: "${intents.objection_type}" (category: ${intents.objection_data?.category || 'unknown'})`);
+  }
+
   // === Advance Widget leads from INTAKE to DISCOVERY on first AI response ===
   // When a lead comes from the React widget, they start at INTAKE.
   // Once they respond to our AI opener, we advance them to DISCOVERY.
@@ -314,6 +319,7 @@ async function handleInboundMessage({
         contactProfile: resolvedContactProfile,
         consultExplained: consultExplainedResolved,
         conversationThread, // Pass thread context to AI
+        detectedObjection: intents.objection_data || null, // Pass objection data if detected
       });
       console.log(`⏱️ [TIMING] AI call took ${Date.now() - aiStartTime}ms`);
 

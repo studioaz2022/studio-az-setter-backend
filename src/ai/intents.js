@@ -3,6 +3,7 @@
 
 const { isTimeSelection } = require("./bookingController");
 const { detectArtistGuidedSize } = require("./phaseContract");
+const { detectObjection } = require("../prompts/objectionLibrary");
 
 /**
  * Detects intent flags from a lead message.
@@ -20,6 +21,10 @@ function detectIntents(messageText, canonicalState = {}) {
     consult_path_choice_intent: false,
     artist_guided_size_intent: false,
     process_or_price_question_intent: false,
+    // Objection detection
+    objection_intent: false,
+    objection_type: null,
+    objection_data: null,
     // REMOVED: translator_affirm_intent - now auto-confirmed when video is selected
   };
 
@@ -28,6 +33,14 @@ function detectIntents(messageText, canonicalState = {}) {
   }
 
   const lower = String(messageText).toLowerCase();
+
+  // Objection detection (sales resistance, hesitation, concerns)
+  const objection = detectObjection(messageText);
+  if (objection) {
+    intents.objection_intent = true;
+    intents.objection_type = objection.id;
+    intents.objection_data = objection;
+  }
 
   // Reschedule intent
   if (

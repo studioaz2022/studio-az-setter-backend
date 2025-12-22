@@ -3,6 +3,7 @@ require("dotenv").config();
 const OpenAI = require("openai");
 const { masterPromptA, phasePromptsRaw } = require("../prompts/promptsIndex");
 const { buildCanonicalState } = require("./phaseContract");
+const { formatObjectionContext, GLOBAL_RULES } = require("../prompts/objectionLibrary");
 
 const openai = new OpenAI({
   apiKey: process.env.LLM_API_KEY,
@@ -86,6 +87,7 @@ function buildOpenerMessages({
   latestMessageText,
   contactProfile,
   conversationThread, // NEW: Formatted conversation history
+  detectedObjection, // NEW: Objection data from intent detection
 }) {
   // Normalize contact so we never blow up on missing fields
   const contactSafe = {
@@ -119,7 +121,7 @@ function buildOpenerMessages({
 
   const userPayload = {
     phase: "opener",              // human-readable phase label
-    ai_phase: aiPhase || "intake", // matches what we store in GHL system field
+    ai_phase: detectedObjection ? "objections" : (aiPhase || "intake"), // matches what we store in GHL system field
     lead_temperature: leadTemperature,
     language,
     contact: contactSafe,
@@ -130,6 +132,12 @@ function buildOpenerMessages({
     latest_message_text: latestMessageText || intake?.latestMessageText || null,
     conversation_context: conversationContext, // NEW: Full conversation history
     is_first_message: isFirstMessage, // Flag for personalization
+    objection_context: detectedObjection ? {
+      type: detectedObjection.id,
+      category: detectedObjection.category,
+      belief_to_fix: detectedObjection.belief_to_fix,
+      core_reframe: detectedObjection.core_reframe,
+    } : null,
     instructions: {
       goal:
         "Send the first outbound message as the tattoo studio front desk (AI Setter), to acknowledge their request and move them into a real conversation.",
@@ -204,6 +212,25 @@ ${conversationThread.returningClientContext.previousConversationSummary || '(no 
 - Generate an appropriate opener based on the intake information.
 `;
 
+  // Build objection handling context if an objection was detected
+  const objectionContextSection = detectedObjection ? `
+${formatObjectionContext(detectedObjection, language)}
+
+**OBJECTION HANDLING GLOBAL RULES:**
+- Structure: ${GLOBAL_RULES.structure}
+- Response format: ${GLOBAL_RULES.response_format}
+- Required ending: ${GLOBAL_RULES.required_ending}
+- Financing rule: ${GLOBAL_RULES.financing_rule}
+- Close rule: ${GLOBAL_RULES.close_rule}
+
+**CRITICAL - THIS MESSAGE IS AN OBJECTION:**
+The lead just raised an objection. Your #1 priority is to handle it using the framework above.
+Do NOT ignore the objection and continue with normal flow.
+Do NOT be defensive or apologetic.
+Do NOT skip the binary time choice at the end.
+Use the template as guidance but sound natural and conversational.
+` : '';
+
   const systemContent = `
 ${MASTER_PROMPT_V3}
 
@@ -214,6 +241,7 @@ You are currently in: PHASE = "${aiPhase || 'intake'}".
 Use the following Phase Prompts V3 content as reference for behavior, tone, and objectives:
 ${PHASE_PROMPTS_V3}
 ${threadContextSection}
+${objectionContextSection}
 
 **CRM STATE & MEMORY:**
 - contactProfile shows what information has been collected and stored in the CRM.
@@ -332,6 +360,7 @@ async function generateOpenerForContact({
   contactProfile,
   consultExplained,
   conversationThread, // NEW: Formatted conversation history
+  detectedObjection, // NEW: Objection data from intent detection
 }) {
   if (!MASTER_PROMPT_V3) {
     console.warn("⚠️ MASTER_PROMPT_V3 is empty. Check promptsIndex.js.");
@@ -370,6 +399,7 @@ async function generateOpenerForContact({
     latestMessageText,
     contactProfile: resolvedContactProfile,
     conversationThread, // Pass thread to message builder
+    detectedObjection, // Pass objection data if detected
   });
 
 
@@ -397,9 +427,17 @@ async function generateOpenerForContact({
 
   // Ensure meta exists with defaults
   const meta = parsed.meta || {};
-  if (!meta.aiPhase) meta.aiPhase = aiPhase || "intake";
+  if (!meta.aiPhase) meta.aiPhase = detectedObjection ? "objections" : (aiPhase || "intake");
   if (!meta.leadTemperature) meta.leadTemperature = leadTemperature || "warm";
   if (meta.wantsAppointmentOffer === undefined) meta.wantsAppointmentOffer = false;
+  
+  // Track objection handling for analytics
+  if (detectedObjection) {
+    meta.objectionType = detectedObjection.id;
+    meta.objectionCategory = detectedObjection.category;
+    meta.objectionHandled = true;
+    console.log(`🎯 [OBJECTION] Handled "${detectedObjection.id}" objection in response`);
+  }
   parsed.meta = meta;
 
   // Ensure boolean flags always exist as booleans
