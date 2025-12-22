@@ -866,12 +866,13 @@ function createApp() {
         // Process each sibling
         for (const sibling of siblingAppointments) {
           const siblingId = sibling.id;
+          const siblingCalendarId = sibling.calendarId;
           
           if (isCancelled) {
             // === CANCEL SYNC ===
             console.log(`🚫 Cancelling sibling appointment ${siblingId}...`);
             try {
-              await updateAppointmentStatus(siblingId, "cancelled");
+              await updateAppointmentStatus(siblingId, "cancelled", siblingCalendarId);
               console.log(`✅ Sibling appointment ${siblingId} cancelled`);
             } catch (err) {
               console.error(`❌ Failed to cancel sibling ${siblingId}:`, err.message || err);
@@ -895,6 +896,7 @@ function createApp() {
               await rescheduleAppointment(siblingId, {
                 startTime,
                 endTime,
+                calendarId: siblingCalendarId,
               });
               console.log(`✅ Sibling appointment ${siblingId} rescheduled`);
             } catch (err) {

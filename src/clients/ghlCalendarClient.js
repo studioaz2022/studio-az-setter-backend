@@ -154,7 +154,7 @@ async function listAppointmentsForContact(contactId) {
  * @param {string} status - New status: "new", "confirmed", "cancelled", etc.
  * @returns {Promise<Object>} Updated appointment object
  */
-async function updateAppointmentStatus(appointmentId, status) {
+async function updateAppointmentStatus(appointmentId, status, calendarId = null) {
   if (!appointmentId) {
     throw new Error("appointmentId is required for updateAppointmentStatus");
   }
@@ -168,10 +168,17 @@ async function updateAppointmentStatus(appointmentId, status) {
 
   const payload = {
     appointmentStatus: status,
+    toNotify: false,
   };
 
+  // Include calendarId if provided (required by some GHL clusters)
+  if (calendarId) {
+    payload.calendarId = calendarId;
+  }
+
   try {
-    const resp = await axios.patch(url, payload, {
+    // GHL uses PUT for appointment updates, not PATCH
+    const resp = await axios.put(url, payload, {
       headers: ghlHeaders(),
     });
 
@@ -189,8 +196,9 @@ async function updateAppointmentStatus(appointmentId, status) {
 
 /**
  * Reschedule an appointment (update start/end and optional status)
+ * Note: GHL uses PUT (not PATCH) for updating appointments
  */
-async function rescheduleAppointment(appointmentId, { startTime, endTime, appointmentStatus = null }) {
+async function rescheduleAppointment(appointmentId, { startTime, endTime, appointmentStatus = null, calendarId = null }) {
   if (!appointmentId) {
     throw new Error("appointmentId is required for rescheduleAppointment");
   }
@@ -207,14 +215,21 @@ async function rescheduleAppointment(appointmentId, { startTime, endTime, appoin
     endTime,
     ignoreFreeSlotValidation: true,
     overrideLocationConfig: true,
+    toNotify: false,
   };
+
+  // Include calendarId if provided (required by some GHL clusters)
+  if (calendarId) {
+    payload.calendarId = calendarId;
+  }
 
   if (appointmentStatus) {
     payload.appointmentStatus = appointmentStatus;
   }
 
   try {
-    const resp = await axios.patch(url, payload, {
+    // GHL uses PUT for appointment updates, not PATCH
+    const resp = await axios.put(url, payload, {
       headers: ghlHeaders(),
     });
     console.log("✅ Rescheduled appointment:", {
