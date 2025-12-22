@@ -1,7 +1,7 @@
 // consultPathHandler.js
 // Helpers to detect and route consultation path preferences (Message vs Video w/ translator)
 
-const { updateSystemFields, createTaskForContact } = require("../../ghlClient");
+const { updateSystemFields, createTaskForContact, addTranslatorAsFollower } = require("../../ghlClient");
 const { syncOpportunityStageFromContact, transitionToStage } = require("./opportunityManager");
 const { createDepositLinkForContact } = require("../payments/squareClient");
 const { DEPOSIT_CONFIG, OPPORTUNITY_STAGES } = require("../config/constants");
@@ -201,6 +201,15 @@ async function handlePathChoice({
       language_barrier_explained: true,
       translator_explained: true,
     });
+
+    // Add translator as follower to the contact for video call consultations
+    try {
+      await addTranslatorAsFollower(contactId);
+      console.log(`🌐 [TRANSLATOR] Added translator as follower for video consultation contact ${contactId}`);
+    } catch (followerErr) {
+      console.error("❌ [TRANSLATOR] Failed to add translator as follower:", followerErr.message || followerErr);
+      // Don't fail the flow - translator follower is nice-to-have, not critical
+    }
 
     // 🔁 Sync pipeline: appointment-based consult → CONSULT_APPOINTMENT stage
     try {

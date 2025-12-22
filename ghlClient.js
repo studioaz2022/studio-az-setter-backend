@@ -1061,6 +1061,131 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
 
 
+// ============================================================================
+// V2 API Functions for Contact Assignment and Followers
+// ============================================================================
+
+// Artist ID for message-based consultations (assigned after deposit paid)
+const MESSAGE_CONSULT_ARTIST_ID = "y0BeYjuRIlDwsDcOHOJo";
+
+// Translator ID for video call consultations (added as follower)
+const TRANSLATOR_FOLLOWER_ID = "sx6wyHhbFdRXh302Lunr";
+
+/**
+ * Assign an artist to a contact using GHL v2 API.
+ * Used specifically when lead chooses message-based consultation and deposit is paid.
+ * 
+ * @param {string} contactId - The contact ID to assign
+ * @param {string} assignedToId - The user ID to assign (defaults to MESSAGE_CONSULT_ARTIST_ID)
+ * @returns {Promise<object|null>} The API response or null on error
+ */
+async function assignContactToArtist(contactId, assignedToId = MESSAGE_CONSULT_ARTIST_ID) {
+  if (!contactId) {
+    console.warn("assignContactToArtist called without contactId");
+    return null;
+  }
+
+  if (!assignedToId) {
+    console.warn("assignContactToArtist called without assignedToId");
+    return null;
+  }
+
+  try {
+    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
+    const payload = {
+      assignedTo: assignedToId,
+    };
+
+    const resp = await axios.put(url, payload, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+
+    console.log("✅ Assigned artist to contact", {
+      contactId,
+      assignedTo: assignedToId,
+      status: resp.status,
+    });
+
+    return resp.data;
+  } catch (err) {
+    console.error(
+      "❌ Error assigning artist to contact:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
+/**
+ * Add followers to a contact using GHL v2 API.
+ * Used to add translator as follower for video call consultations.
+ * 
+ * @param {string} contactId - The contact ID
+ * @param {string|string[]} followerIds - Single follower ID or array of follower IDs
+ * @returns {Promise<object|null>} The API response or null on error
+ */
+async function addFollowersToContact(contactId, followerIds) {
+  if (!contactId) {
+    console.warn("addFollowersToContact called without contactId");
+    return null;
+  }
+
+  // Normalize to array
+  const followers = Array.isArray(followerIds) ? followerIds : [followerIds];
+  
+  if (followers.length === 0 || !followers[0]) {
+    console.warn("addFollowersToContact called without valid followerIds");
+    return null;
+  }
+
+  try {
+    const url = `https://services.leadconnectorhq.com/contacts/${contactId}/followers`;
+    const payload = {
+      followers: followers,
+    };
+
+    const resp = await axios.post(url, payload, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+    });
+
+    console.log("✅ Added followers to contact", {
+      contactId,
+      followers: followers,
+      status: resp.status,
+    });
+
+    return resp.data;
+  } catch (err) {
+    console.error(
+      "❌ Error adding followers to contact:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
+/**
+ * Add translator as follower to a contact.
+ * Convenience wrapper for adding the default translator follower.
+ * 
+ * @param {string} contactId - The contact ID
+ * @returns {Promise<object|null>} The API response or null on error
+ */
+async function addTranslatorAsFollower(contactId) {
+  console.log(`🌐 Adding translator as follower for contact ${contactId}`);
+  return addFollowersToContact(contactId, TRANSLATOR_FOLLOWER_ID);
+}
+
 module.exports = {
   getContact,
   updateContact,
@@ -1072,5 +1197,12 @@ module.exports = {
   updateContactAssignedUser,
   createTaskForContact,
   getConversationHistory,
+  // V2 API functions
+  assignContactToArtist,
+  addFollowersToContact,
+  addTranslatorAsFollower,
+  // Constants for external use
+  MESSAGE_CONSULT_ARTIST_ID,
+  TRANSLATOR_FOLLOWER_ID,
 };
 

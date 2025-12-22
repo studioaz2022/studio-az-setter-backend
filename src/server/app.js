@@ -14,6 +14,8 @@ const {
   getConversationHistory,
   upsertContactFromWidget,
   uploadFilesToTattooCustomField,
+  assignContactToArtist,
+  addTranslatorAsFollower,
 } = require("../../ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { getContactIdFromOrder } = require("../payments/squareClient");
@@ -636,23 +638,56 @@ function createApp() {
           deposit_paid: true,
         });
 
-        // Sync pipeline to QUALIFIED stage
+        // Fetch contact info for consultation type check and personalization
+        const contact = await getContact(contactId);
+        const cf = contact?.customField || contact?.customFields || {};
+        const firstName = contact?.firstName || contact?.first_name || "";
+        const consultationType = cf.consultation_type || cf.consultationType || "online";
+        const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true" || cf.translator_needed === "Yes";
+        const isMessageConsult = consultationType === "message";
+
+        // Sync pipeline to QUALIFIED stage first
         console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
         await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
         console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
 
+        // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
+        if (isMessageConsult) {
+          console.log(`📝 [MESSAGE CONSULT] Deposit paid for message consultation - assigning artist...`);
+          
+          // Assign the artist to the contact
+          try {
+            await assignContactToArtist(contactId);
+            console.log(`✅ [MESSAGE CONSULT] Artist assigned to contact ${contactId}`);
+          } catch (assignErr) {
+            console.error("❌ [MESSAGE CONSULT] Failed to assign artist:", assignErr.message || assignErr);
+          }
+          
+          // Transition to CONSULT_MESSAGE stage
+          try {
+            await transitionToStage(contactId, OPPORTUNITY_STAGES.CONSULT_MESSAGE);
+            console.log(`✅ [PIPELINE] Contact ${contactId} moved to CONSULT_MESSAGE stage`);
+          } catch (stageErr) {
+            console.error("❌ [PIPELINE] Failed to transition to CONSULT_MESSAGE:", stageErr.message || stageErr);
+          }
+        }
+
+        // === VIDEO CALL CONSULTATION: Add translator as follower if needed ===
+        if (!isMessageConsult && translatorNeeded) {
+          console.log(`🌐 [TRANSLATOR] Adding translator as follower for video consultation...`);
+          try {
+            await addTranslatorAsFollower(contactId);
+            console.log(`✅ [TRANSLATOR] Translator added as follower for contact ${contactId}`);
+          } catch (followerErr) {
+            console.error("❌ [TRANSLATOR] Failed to add translator as follower:", followerErr.message || followerErr);
+          }
+        }
+
         // === SEND DEPOSIT CONFIRMATION MESSAGE ===
         try {
-          // Fetch contact info for personalization and appointment details
-          const contact = await getContact(contactId);
-          const cf = contact?.customField || contact?.customFields || {};
-          const firstName = contact?.firstName || contact?.first_name || "";
-          
           // Get the pending/hold slot info
           const pendingSlotDisplay = cf.pending_slot_display || cf.pendingSlotDisplay || null;
           const pendingSlotStartTime = cf.pending_slot_start_time || cf.pendingSlotStartTime || null;
-          const consultationType = cf.consultation_type || cf.consultationType || "online";
-          const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true";
           
           // Format the appointment time if we have it
           let appointmentDisplay = pendingSlotDisplay;
@@ -664,14 +699,20 @@ function createApp() {
             }
           }
           
-          // Build confirmation message
+          // Build confirmation message based on consultation type
           let confirmationMessage = "";
-          if (appointmentDisplay) {
-            const consultTypeText = consultationType === "message" 
-              ? "message-based consult" 
-              : translatorNeeded 
-                ? "video consultation with translator" 
-                : "video consultation";
+          if (isMessageConsult) {
+            // Message-based consultation confirmation
+            confirmationMessage = firstName
+              ? `Got your deposit${firstName ? `, ${firstName}` : ""} — you're all set! 🎉\n\n` +
+                `The artist has been added to this conversation and will reach out shortly to discuss your tattoo idea.`
+              : `Got your deposit — you're all set! 🎉\n\n` +
+                `The artist has been added to this conversation and will reach out shortly to discuss your tattoo idea.`;
+          } else if (appointmentDisplay) {
+            // Video consultation with appointment time
+            const consultTypeText = translatorNeeded 
+              ? "video consultation with translator" 
+              : "video consultation";
             
             confirmationMessage = firstName 
               ? `Got your deposit${firstName ? `, ${firstName}` : ""} — your consultation is confirmed! 🎉\n\n` +
