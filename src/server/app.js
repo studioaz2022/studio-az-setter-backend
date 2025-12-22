@@ -869,15 +869,35 @@ function createApp() {
           return;
         }
 
+        // Debug: Log all appointments found
+        console.log("📋 All appointments for contact:", allAppointments.map(apt => ({
+          id: apt.id,
+          calendarId: apt.calendarId,
+          status: apt.appointmentStatus || apt.status,
+          startTime: apt.startTime,
+          isOnSiblingCalendar: siblingCalendarSet.has(apt.calendarId),
+        })));
+        console.log("🔍 Looking for siblings on calendars:", Array.from(siblingCalendarSet));
+
         // Find sibling appointments (on the other calendar type, same contact)
         const siblingAppointments = allAppointments.filter((apt) => {
           // Must be on a sibling calendar
-          if (!siblingCalendarSet.has(apt.calendarId)) return false;
+          if (!siblingCalendarSet.has(apt.calendarId)) {
+            console.log(`   ❌ Apt ${apt.id} not on sibling calendar (${apt.calendarId})`);
+            return false;
+          }
           // Must not be the same appointment
-          if (apt.id === appointmentId) return false;
-          // Must not already be cancelled (unless we're un-cancelling)
+          if (apt.id === appointmentId) {
+            console.log(`   ❌ Apt ${apt.id} is the same appointment, skipping`);
+            return false;
+          }
+          // Must not already be cancelled (we don't want to re-cancel)
           const siblingStatus = String(apt.appointmentStatus || apt.status || "").toLowerCase();
-          if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) return false;
+          if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) {
+            console.log(`   ❌ Apt ${apt.id} already cancelled, skipping`);
+            return false;
+          }
+          console.log(`   ✅ Apt ${apt.id} is a valid sibling`);
           return true;
         });
 
