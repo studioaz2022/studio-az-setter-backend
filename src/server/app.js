@@ -771,6 +771,25 @@ function createApp() {
   // When an appointment is cancelled or rescheduled on one calendar,
   // find and update the sibling appointment on the other calendar.
   // ═══════════════════════════════════════════════════════════════════════════
+  
+  // Helper: Ensure time string has timezone offset (America/Chicago)
+  // GHL sends times without timezone, but expects them back WITH timezone
+  const ensureTimezone = (timeStr) => {
+    if (!timeStr) return timeStr;
+    // If already has timezone info (Z or +/- offset), return as-is
+    if (/Z$/.test(timeStr) || /[+-]\d{2}:\d{2}$/.test(timeStr)) {
+      return timeStr;
+    }
+    // Add America/Chicago offset (CST = -06:00, CDT = -05:00)
+    // For simplicity, use -06:00 (CST) - could be enhanced to detect DST
+    const date = new Date(timeStr);
+    const month = date.getMonth(); // 0-11
+    // Rough DST check: March-November is CDT (-05:00), else CST (-06:00)
+    const isDST = month >= 2 && month <= 10; // March (2) to November (10)
+    const offset = isDST ? "-05:00" : "-06:00";
+    return `${timeStr}${offset}`;
+  };
+
   app.post("/ghl/appointment-webhook", async (req, res) => {
     // Acknowledge immediately so GHL doesn't retry
     res.status(200).json({ ok: true });
@@ -789,8 +808,12 @@ function createApp() {
         const contactId = payload.contact_id || payload.contactId || payload.contact?.id || null;
         const appointmentId = calendar.appointmentId || payload.appointmentId || null;
         const calendarId = calendar.id || calendar.calendarId || payload.calendarId || null;
-        const startTime = calendar.startTime || payload.startTime || null;
-        const endTime = calendar.endTime || payload.endTime || null;
+        
+        // Get times and ensure they have timezone info
+        const rawStartTime = calendar.startTime || payload.startTime || null;
+        const rawEndTime = calendar.endTime || payload.endTime || null;
+        const startTime = ensureTimezone(rawStartTime);
+        const endTime = ensureTimezone(rawEndTime);
 
         // Get appointment status (GHL sometimes misspells it as "appoinmentStatus")
         const rawStatus = String(
@@ -807,8 +830,10 @@ function createApp() {
           contactId,
           appointmentId,
           calendarId,
-          startTime,
-          endTime,
+          rawStartTime,
+          rawEndTime,
+          startTime, // with timezone
+          endTime,   // with timezone
           status: rawStatus,
           isCancelled,
         });
