@@ -28,8 +28,18 @@ const {
   syncPipelineOnEntry,
   transitionToStage,
 } = require("../ai/opportunityManager");
-const { OPPORTUNITY_STAGES } = require("../config/constants");
+const { 
+  OPPORTUNITY_STAGES, 
+  CALENDARS, 
+  TRANSLATOR_CALENDARS,
+  TRANSLATOR_USER_IDS,
+} = require("../config/constants");
 const { formatSlotDisplay } = require("../ai/bookingController");
+const {
+  listAppointmentsForContact,
+  updateAppointmentStatus,
+  rescheduleAppointment,
+} = require("../clients/ghlCalendarClient");
 
 // Helper: Filter object to only show non-empty fields (for cleaner logs)
 function filterNonEmpty(obj) {
@@ -754,6 +764,150 @@ function createApp() {
     }
 
     return res.status(200).json({ ok: true });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // APPOINTMENT SYNC WEBHOOK - Sync artist <-> translator appointments
+  // When an appointment is cancelled or rescheduled on one calendar,
+  // find and update the sibling appointment on the other calendar.
+  // ═══════════════════════════════════════════════════════════════════════════
+  app.post("/ghl/appointment-webhook", async (req, res) => {
+    // Acknowledge immediately so GHL doesn't retry
+    res.status(200).json({ ok: true });
+
+    // Process asynchronously
+    setImmediate(async () => {
+      try {
+        console.log("\n📅 ════════════════════════════════════════════════════════");
+        console.log("📅 GHL APPOINTMENT WEBHOOK HIT");
+        console.log("📅 ════════════════════════════════════════════════════════");
+
+        const payload = req.body || {};
+        const calendar = payload.calendar || {};
+
+        // Extract key fields from payload
+        const contactId = payload.contact_id || payload.contactId || payload.contact?.id || null;
+        const appointmentId = calendar.appointmentId || payload.appointmentId || null;
+        const calendarId = calendar.id || calendar.calendarId || payload.calendarId || null;
+        const startTime = calendar.startTime || payload.startTime || null;
+        const endTime = calendar.endTime || payload.endTime || null;
+
+        // Get appointment status (GHL sometimes misspells it as "appoinmentStatus")
+        const rawStatus = String(
+          calendar.appoinmentStatus || 
+          calendar.appointmentStatus || 
+          calendar.status || 
+          payload.appointmentStatus ||
+          ""
+        ).toLowerCase();
+
+        const isCancelled = ["cancelled", "canceled"].includes(rawStatus);
+
+        console.log("📦 Appointment webhook payload:", {
+          contactId,
+          appointmentId,
+          calendarId,
+          startTime,
+          endTime,
+          status: rawStatus,
+          isCancelled,
+        });
+
+        if (!contactId || !appointmentId || !calendarId) {
+          console.warn("⚠️ Missing required fields (contactId, appointmentId, or calendarId)");
+          return;
+        }
+
+        // Build calendar sets to determine if this is artist or translator
+        const artistCalendarSet = new Set(Object.values(CALENDARS).filter(Boolean));
+        const translatorCalendarSet = new Set(Object.values(TRANSLATOR_CALENDARS).filter(Boolean));
+
+        const isArtistCalendar = artistCalendarSet.has(calendarId);
+        const isTranslatorCalendar = translatorCalendarSet.has(calendarId);
+
+        if (!isArtistCalendar && !isTranslatorCalendar) {
+          console.log("ℹ️ Calendar not in artist or translator list, skipping sync");
+          return;
+        }
+
+        const actorType = isArtistCalendar ? "artist" : "translator";
+        const siblingCalendarSet = isArtistCalendar ? translatorCalendarSet : artistCalendarSet;
+
+        console.log(`🔍 Appointment is on ${actorType} calendar, looking for sibling on ${isArtistCalendar ? "translator" : "artist"} calendar...`);
+
+        // Fetch all appointments for this contact to find the sibling
+        let allAppointments = [];
+        try {
+          allAppointments = await listAppointmentsForContact(contactId);
+        } catch (err) {
+          console.error("❌ Failed to fetch appointments for contact:", err.message || err);
+          return;
+        }
+
+        // Find sibling appointments (on the other calendar type, same contact)
+        const siblingAppointments = allAppointments.filter((apt) => {
+          // Must be on a sibling calendar
+          if (!siblingCalendarSet.has(apt.calendarId)) return false;
+          // Must not be the same appointment
+          if (apt.id === appointmentId) return false;
+          // Must not already be cancelled (unless we're un-cancelling)
+          const siblingStatus = String(apt.appointmentStatus || apt.status || "").toLowerCase();
+          if (isCancelled && ["cancelled", "canceled"].includes(siblingStatus)) return false;
+          return true;
+        });
+
+        if (siblingAppointments.length === 0) {
+          console.log("ℹ️ No sibling appointment found to sync");
+          return;
+        }
+
+        console.log(`📅 Found ${siblingAppointments.length} sibling appointment(s) to sync`);
+
+        // Process each sibling
+        for (const sibling of siblingAppointments) {
+          const siblingId = sibling.id;
+          
+          if (isCancelled) {
+            // === CANCEL SYNC ===
+            console.log(`🚫 Cancelling sibling appointment ${siblingId}...`);
+            try {
+              await updateAppointmentStatus(siblingId, "cancelled");
+              console.log(`✅ Sibling appointment ${siblingId} cancelled`);
+            } catch (err) {
+              console.error(`❌ Failed to cancel sibling ${siblingId}:`, err.message || err);
+            }
+          } else if (startTime && endTime) {
+            // === RESCHEDULE SYNC ===
+            // Only reschedule if times are different
+            const siblingStart = sibling.startTime;
+            const siblingEnd = sibling.endTime;
+            
+            if (siblingStart === startTime && siblingEnd === endTime) {
+              console.log(`ℹ️ Sibling ${siblingId} already has the same time, skipping`);
+              continue;
+            }
+
+            console.log(`📅 Rescheduling sibling appointment ${siblingId} to match...`);
+            console.log(`   From: ${siblingStart} - ${siblingEnd}`);
+            console.log(`   To:   ${startTime} - ${endTime}`);
+            
+            try {
+              await rescheduleAppointment(siblingId, {
+                startTime,
+                endTime,
+              });
+              console.log(`✅ Sibling appointment ${siblingId} rescheduled`);
+            } catch (err) {
+              console.error(`❌ Failed to reschedule sibling ${siblingId}:`, err.message || err);
+            }
+          }
+        }
+
+        console.log("📅 ════════════════════════════════════════════════════════\n");
+      } catch (err) {
+        console.error("❌ Appointment webhook handler error:", err.message || err);
+      }
+    });
   });
 
   return app;
