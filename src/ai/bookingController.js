@@ -22,6 +22,7 @@ const { createGoogleMeet } = require("../clients/googleMeet");
 const {
   CALENDARS,
   TRANSLATOR_CALENDARS,
+  TRANSLATOR_USER_IDS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
 } = require("../config/constants");
@@ -465,16 +466,19 @@ function formatSlotDisplay(date) {
 }
 
 function getTranslatorCalendarsForMode(consultMode = "online") {
-  const isInPerson = consultMode === "in_person" || consultMode === "in-person";
-  return isInPerson
-    ? [
-        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_IN_PERSON },
-        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_IN_PERSON },
-      ]
-    : [
-        { name: "Lionel", calendarId: TRANSLATOR_CALENDARS.LIONEL_ONLINE },
-        { name: "Maria", calendarId: TRANSLATOR_CALENDARS.MARIA_ONLINE },
-      ];
+  // All translator consultations are online
+  return [
+    { 
+      name: "Lionel", 
+      calendarId: TRANSLATOR_CALENDARS.LIONEL_ONLINE,
+      userId: TRANSLATOR_USER_IDS.LIONEL,
+    },
+    { 
+      name: "Maria", 
+      calendarId: TRANSLATOR_CALENDARS.MARIA_ONLINE,
+      userId: TRANSLATOR_USER_IDS.MARIA,
+    },
+  ];
 }
 
 /**
@@ -847,6 +851,7 @@ function generateSlotsWithTranslator(options = {}) {
         ...slot,
         translator: t.name,
         translatorCalendarId: t.calendarId,
+        translatorUserId: t.userId,
       });
     }
   }
@@ -1079,6 +1084,7 @@ async function createConsultAppointment({
   translatorNeeded = false,
   translatorCalendarId = null,
   translatorName = null,
+  translatorUserId = null,
   sendHoldMessage = true,
 }) {
   try {
@@ -1242,6 +1248,11 @@ async function createConsultAppointment({
         ? `Translator: ${translatorName || "Translator"} for consult with ${artist}\n\nGoogle Meet: ${meetUrl}`
         : `Translator: ${translatorName || "Translator"} for consult with ${artist}`;
 
+      // Look up translator user ID if not provided
+      const effectiveTranslatorUserId = translatorUserId || 
+        (translatorName === "Lionel" ? TRANSLATOR_USER_IDS.LIONEL : null) ||
+        (translatorName === "Maria" ? TRANSLATOR_USER_IDS.MARIA : null);
+
       try {
         translatorAppointment = await createAppointment({
           calendarId: translatorCalendarId,
@@ -1251,6 +1262,7 @@ async function createConsultAppointment({
           title: translatorTitle,
           description: translatorDescription,
           appointmentStatus,
+          assignedUserId: effectiveTranslatorUserId,
           address,
           meetingLocationType,
           meetingLocationId,

@@ -135,12 +135,16 @@ const CALENDARS = {
   ANDREW_ONLINE: "2EJcAtrllnYOtuSx4Dua",
 };
 
-// Translator calendars (hardcoded)
+// Translator calendars (online only)
 const TRANSLATOR_CALENDARS = {
-  LIONEL_IN_PERSON: "qmjQJranj3zQqFqipCl4",
-  LIONEL_ONLINE: "wDyotwOVW0fhgwKJGJxc",
-  MARIA_IN_PERSON: "mmLWt370a94tbaNQIgNw",
+  LIONEL_ONLINE: "mmLWt370a94tbaNQIgNw",
   MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
+};
+
+// Translator user IDs (for GHL appointment assignment)
+const TRANSLATOR_USER_IDS = {
+  LIONEL: "1kFG5FWdUDhXLUX46snG",
+  MARIA: "uAWhIMemqUPJC1SqCyDR",
 };
 
 const OPPORTUNITY_STAGES = {
@@ -202,6 +206,7 @@ module.exports = {
   MESSAGE_DELAYS,
   CALENDARS,
   TRANSLATOR_CALENDARS,
+  TRANSLATOR_USER_IDS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
   ARTIST_ASSIGNED_USER_IDS,
