@@ -1101,6 +1101,7 @@ async function assignContactToArtist(contactId, assignedToId = MESSAGE_CONSULT_A
         Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
         "Content-Type": "application/json",
         Accept: "application/json",
+        Version: "2021-07-28", // Required for GHL v2 API
       },
     });
 
@@ -1154,6 +1155,7 @@ async function addFollowersToContact(contactId, followerIds) {
         Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
         "Content-Type": "application/json",
         Accept: "application/json",
+        Version: "2021-07-28", // Required for GHL v2 API
       },
     });
 

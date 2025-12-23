@@ -605,17 +605,26 @@ function createApp() {
 
   app.post("/square/webhook", async (req, res) => {
     const secret = process.env.SQUARE_WEBHOOK_SECRET;
-    const signature = req.get("x-square-signature") || "";
+    // FIX: Correct header name for Square HMAC-SHA256 signature
+    const signature = req.get("x-square-hmacsha256-signature") || "";
 
     if (!secret) {
       console.warn("⚠️ Missing SQUARE_WEBHOOK_SECRET");
       return res.status(401).send("missing secret");
     }
 
+    // FIX: Square signature = HMAC-SHA256(webhookUrl + requestBody, signatureKey)
     const raw = req.rawBody || Buffer.from("");
-    const expected = crypto.createHmac("sha256", secret).update(raw).digest("base64");
+    const notificationUrl = "https://studio-az-setter-backend.onrender.com/square/webhook";
+    const stringToSign = notificationUrl + raw.toString();
+    const expected = crypto.createHmac("sha256", secret).update(stringToSign).digest("base64");
 
     if (signature !== expected) {
+      console.error("❌ Square signature mismatch:", {
+        receivedSignature: signature ? signature.substring(0, 20) + "..." : "(empty)",
+        expectedSignature: expected.substring(0, 20) + "...",
+        notificationUrl,
+      });
       return res.status(401).send("invalid signature");
     }
 

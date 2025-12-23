@@ -445,9 +445,9 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
       displayText: formatSlotDisplay(new Date(slot.startTime)),
     }));
 
-    // Return up to 4 slots
-    const finalSlots = slotsWithDisplay.slice(0, 4);
-    console.log(`📅 [SLOTS] Returning ${finalSlots.length} real GHL slots`);
+    // Select varied slots across different days for better options
+    const finalSlots = selectVariedSlots(slotsWithDisplay, 4);
+    console.log(`📅 [SLOTS] Returning ${finalSlots.length} real GHL slots (varied across days)`);
     
     return finalSlots;
 
@@ -456,6 +456,60 @@ async function getAvailableSlots({ canonicalState = {}, context = {} } = {}) {
     console.warn("⚠️ Falling back to synthetic slots");
     return generateSuggestedSlots({ preferredTimeWindow, preferredDay, preferredWeek });
   }
+}
+
+/**
+ * Select varied slots across different days to give leads better options.
+ * Instead of just taking the first N slots (which may all be on the same day),
+ * this distributes slots across different days when possible.
+ * 
+ * @param {Array} slots - Array of slot objects with startTime
+ * @param {number} maxSlots - Maximum number of slots to return (default 4)
+ * @returns {Array} Varied slots spread across different days
+ */
+function selectVariedSlots(slots, maxSlots = 4) {
+  if (!slots || slots.length === 0) return [];
+  if (slots.length <= maxSlots) return slots;
+
+  // Group slots by day
+  const byDay = new Map();
+  for (const slot of slots) {
+    const dateKey = new Date(slot.startTime).toDateString();
+    if (!byDay.has(dateKey)) {
+      byDay.set(dateKey, []);
+    }
+    byDay.get(dateKey).push(slot);
+  }
+
+  const varied = [];
+  const dayArrays = Array.from(byDay.values());
+
+  // Round-robin: take one slot from each day until we have enough
+  let dayIndex = 0;
+  let slotIndexPerDay = new Map();
+  
+  while (varied.length < maxSlots) {
+    const currentDaySlots = dayArrays[dayIndex % dayArrays.length];
+    const currentSlotIndex = slotIndexPerDay.get(dayIndex % dayArrays.length) || 0;
+    
+    if (currentSlotIndex < currentDaySlots.length) {
+      varied.push(currentDaySlots[currentSlotIndex]);
+      slotIndexPerDay.set(dayIndex % dayArrays.length, currentSlotIndex + 1);
+    }
+    
+    dayIndex++;
+    
+    // Safety: break if we've cycled through all days and all slots
+    if (dayIndex >= dayArrays.length * Math.max(...dayArrays.map(d => d.length))) {
+      break;
+    }
+  }
+
+  // Sort by date/time so they appear in chronological order
+  varied.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+  console.log(`📅 [SLOTS] Varied selection: ${byDay.size} day(s) available, selected ${varied.length} slots`);
+  return varied.slice(0, maxSlots);
 }
 
 /**

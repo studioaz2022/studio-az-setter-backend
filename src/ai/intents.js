@@ -74,6 +74,12 @@ function detectIntents(messageText, canonicalState = {}) {
     /\bnext week\b/,
     /\btoday\b/,
     /\btomorrow\b/,
+    // Month-based scheduling requests (e.g., "Can we do January?", "January works better")
+    /\bcan we do (january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i,
+    /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\s*(works?|is better|instead|please)\b/i,
+    /\bdo you have (anything|slots?|times?|openings?) in (january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i,
+    /\bhow about (january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i,
+    /\blet'?s do (january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)\b/i,
   ];
   if (schedulingPatterns.some((re) => re.test(lower))) {
     intents.scheduling_intent = true;
