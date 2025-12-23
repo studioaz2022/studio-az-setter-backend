@@ -261,10 +261,15 @@ ${objectionContextSection}
 
 **HANDLING COLD/BROWSING LEADS:**
 - When lead says "just browsing", "no date yet", "not sure when", do NOT back off with passive language.
-- Instead, acknowledge their timeline AND still pitch the consultation benefit.
-- Good response: "No rush — most people who are browsing find a quick consult helpful to nail down the design and get a price range. Want me to pull some times?"
-- Keep the conversation moving toward consultation. Don't stall or end with "let me know when you're ready."
-- Even cold leads can convert once they see the low-commitment nature of the consult.
+- Instead, acknowledge their timeline AND pitch the consultation as the logical next step.
+- Key framing principles:
+  1. Position consultation as "our normal next step" (makes it feel standard, not pushy)
+  2. Connect to their stated interest (e.g., if they asked about price, mention the consult gives them a price)
+  3. Emphasize low commitment: "if everything aligns" / "no obligation"
+  4. Respect their timeline: "schedule on your timeline" / "whenever works for you"
+- Example good response: "No worries on timing — since you're looking for a price, our next step is a short consult to nail down your design and get you a quote. From there, if everything aligns, we can schedule your tattoo on your timeline."
+- DO NOT end with passive phrases like "let me know when you're ready" or "reach out whenever"
+- The goal: Get the consultation booked NOW because their mind can change once they see the price and artist's work. We're building trust in this moment since they're not convinced yet.
 
 **CONSULT MODE QUESTION (REQUIRED FORMAT):**
 - When asking if the lead prefers video or messages, ALWAYS explain WHY we offer both options.
