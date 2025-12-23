@@ -9,6 +9,7 @@ const { updateSystemFields, sendConversationMessage } = require("../../ghlClient
 const { SYSTEM_FIELDS, OPPORTUNITY_STAGES } = require("../config/constants");
 const { buildContactProfile, buildEffectiveContact } = require("./contextBuilder");
 const { advanceFromIntakeToDiscovery } = require("./opportunityManager");
+const { COMPACT_MODE, logRouting, activeIntents, compactCanonical } = require("../utils/logger");
 
 function applyFieldUpdatesToContact(contact, fieldUpdates = {}) {
   if (!contact) return contact;
@@ -38,20 +39,22 @@ async function handleInboundMessage({
 }) {
   const startTime = Date.now();
   
-  // Log the incoming context for debugging
-  console.log("🧠 [AI CONTEXT] Processing message:", {
-    messageText: latestMessageText,
-    contactId: contact?.id || contact?._id,
-    contactName: `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)",
-    consultExplained,
-    threadStats: conversationThread ? {
-      totalMessages: conversationThread.totalCount,
-      recentMessages: conversationThread.thread?.length || 0,
-      hasSummary: !!conversationThread.summary,
-      hasImageContext: !!conversationThread.imageContext,
-      wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
-    } : null,
-  });
+  // Log the incoming context for debugging (verbose mode only - compact handled in app.js)
+  if (!COMPACT_MODE) {
+    console.log("🧠 [AI CONTEXT] Processing message:", {
+      messageText: latestMessageText,
+      contactId: contact?.id || contact?._id,
+      contactName: `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)",
+      consultExplained,
+      threadStats: conversationThread ? {
+        totalMessages: conversationThread.totalCount,
+        recentMessages: conversationThread.thread?.length || 0,
+        hasSummary: !!conversationThread.summary,
+        hasImageContext: !!conversationThread.imageContext,
+        wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+      } : null,
+    });
+  }
 
   const effectiveContact = buildEffectiveContact(contact, payloadCustomFields);
 
@@ -78,28 +81,30 @@ async function handleInboundMessage({
     console.error("❌ [HOLD] evaluateHoldState error:", err.message || err);
   }
 
-  // Log canonical state BEFORE any AI call
-  console.log("📊 [CANONICAL] State before routing:", {
-    tattooSummary: canonicalBefore.tattooSummary,
-    tattooPlacement: canonicalBefore.tattooPlacement,
-    tattooSize: canonicalBefore.tattooSize,
-    timeline: canonicalBefore.timeline,
-    consultationType: canonicalBefore.consultationType,
-    depositPaid: canonicalBefore.depositPaid,
-    derivedPhase: derivedPhaseBefore,
-  });
+  // Log canonical state BEFORE any AI call (verbose mode only)
+  if (!COMPACT_MODE) {
+    console.log("📊 [CANONICAL] State before routing:", {
+      tattooSummary: canonicalBefore.tattooSummary,
+      tattooPlacement: canonicalBefore.tattooPlacement,
+      tattooSize: canonicalBefore.tattooSize,
+      timeline: canonicalBefore.timeline,
+      consultationType: canonicalBefore.consultationType,
+      depositPaid: canonicalBefore.depositPaid,
+      derivedPhase: derivedPhaseBefore,
+    });
 
-  // Log detected intents with the message that triggered them
-  const activeIntents = Object.keys(intents).filter((k) => intents[k] === true);
-  if (activeIntents.length > 0) {
-    console.log("🎯 [INTENTS] Detected intents:", activeIntents, "from message:", latestMessageText);
-  } else {
-    console.log("🎯 [INTENTS] No specific intents detected for:", latestMessageText);
-  }
+    // Log detected intents with the message that triggered them
+    const detectedIntents = Object.keys(intents).filter((k) => intents[k] === true);
+    if (detectedIntents.length > 0) {
+      console.log("🎯 [INTENTS] Detected intents:", detectedIntents, "from message:", latestMessageText);
+    } else {
+      console.log("🎯 [INTENTS] No specific intents detected for:", latestMessageText);
+    }
 
-  // Log objection detection separately for sales tracking
-  if (intents.objection_intent && intents.objection_type) {
-    console.log(`🚨 [OBJECTION] Detected objection type: "${intents.objection_type}" (category: ${intents.objection_data?.category || 'unknown'})`);
+    // Log objection detection separately for sales tracking
+    if (intents.objection_intent && intents.objection_type) {
+      console.log(`🚨 [OBJECTION] Detected objection type: "${intents.objection_type}" (category: ${intents.objection_data?.category || 'unknown'})`);
+    }
   }
 
   // === Advance Widget leads from INTAKE to DISCOVERY on first AI response ===
@@ -353,27 +358,41 @@ async function handleInboundMessage({
     }
   }
 
-  console.log("🧭 [PHASE] derived_phase snapshot", {
-    derived_phase: derivedPhaseAfter,
-    canonical: {
-      tattooSummary: canonicalAfter.tattooSummary,
-      tattooPlacement: canonicalAfter.tattooPlacement,
-      tattooSize: canonicalAfter.tattooSize,
-      timeline: canonicalAfter.timeline,
-      consultationType: canonicalAfter.consultationType,
-      consultationTypeLocked: canonicalAfter.consultationTypeLocked,
-      depositLinkSent: canonicalAfter.depositLinkSent,
-      depositPaid: canonicalAfter.depositPaid,
-      holdAppointmentId: canonicalAfter.holdAppointmentId,
-    },
-    intents,
-    selected_handler: selectedHandler,
-    routing_reason: routingReason,
-    intent_flags: Object.keys(intents || {}).filter((k) => intents[k] === true),
-  });
+  // ═══ COMPACT MODE: LOG ROUTING DECISION ═══
+  const totalTiming = Date.now() - startTime;
+  
+  if (COMPACT_MODE) {
+    logRouting({
+      phaseBefore: derivedPhaseBefore,
+      phaseAfter: derivedPhaseAfter,
+      intents,
+      canonical: canonicalAfter,
+      handler: selectedHandler,
+      reason: routingReason,
+    });
+  } else {
+    console.log("🧭 [PHASE] derived_phase snapshot", {
+      derived_phase: derivedPhaseAfter,
+      canonical: {
+        tattooSummary: canonicalAfter.tattooSummary,
+        tattooPlacement: canonicalAfter.tattooPlacement,
+        tattooSize: canonicalAfter.tattooSize,
+        timeline: canonicalAfter.timeline,
+        consultationType: canonicalAfter.consultationType,
+        consultationTypeLocked: canonicalAfter.consultationTypeLocked,
+        depositLinkSent: canonicalAfter.depositLinkSent,
+        depositPaid: canonicalAfter.depositPaid,
+        holdAppointmentId: canonicalAfter.holdAppointmentId,
+      },
+      intents,
+      selected_handler: selectedHandler,
+      routing_reason: routingReason,
+      intent_flags: Object.keys(intents || {}).filter((k) => intents[k] === true),
+    });
 
-  // Log total processing time
-  console.log(`⏱️ [TIMING] Total handleInboundMessage took ${Date.now() - startTime}ms`);
+    // Log total processing time
+    console.log(`⏱️ [TIMING] Total handleInboundMessage took ${totalTiming}ms`);
+  }
 
   return {
     aiResult: response,
@@ -381,6 +400,7 @@ async function handleInboundMessage({
     lead_temperature: response?.meta?.leadTemperature || leadTemperature || null,
     flags: {},
     routing: { intents, selected_handler: selectedHandler, reason: routingReason },
+    timing: totalTiming, // Include timing for compact logging
   };
 }
 

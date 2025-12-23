@@ -3,6 +3,7 @@
 // We skip the Node SDK and talk to the Square REST API directly.
 
 const axios = require("axios");
+const { COMPACT_MODE, logSquareEvent, shortId } = require("../utils/logger");
 
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
@@ -81,12 +82,14 @@ async function createDepositLinkForContact({
     },
   };
 
-  console.log("[Square] Creating payment link (HTTP) with body:", {
-    contactId,
-    amountCents,
-    currency,
-    env: isProd ? "production" : "sandbox",
-  });
+  if (!COMPACT_MODE) {
+    console.log("[Square] Creating payment link (HTTP) with body:", {
+      contactId,
+      amountCents,
+      currency,
+      env: isProd ? "production" : "sandbox",
+    });
+  }
 
   try {
     const url = `${SQUARE_BASE_URL}/v2/online-checkout/payment-links`;
@@ -110,11 +113,15 @@ async function createDepositLinkForContact({
       throw new Error("No payment link URL returned from Square");
     }
 
-    console.log("💳 Square payment link created (HTTP):", {
-      contactId,
-      paymentLinkId: paymentLink.id,
-      url: paymentLink.url,
-    });
+    if (COMPACT_MODE) {
+      console.log(`💳 SQUARE: link created contact=${shortId(contactId)} $${amountCents / 100}`);
+    } else {
+      console.log("💳 Square payment link created (HTTP):", {
+        contactId,
+        paymentLinkId: paymentLink.id,
+        url: paymentLink.url,
+      });
+    }
 
     return {
       url: paymentLink.url,
@@ -168,17 +175,15 @@ async function getContactIdFromOrder(orderId) {
       return null;
     }
 
-    console.log(
-      "[Square] Raw order from getContactIdFromOrder:",
-      JSON.stringify(order, null, 2)
-    );
-
     const contactId = order.reference_id || null;
+    const amount = order.total_money?.amount || 0;
 
-    console.log("[Square] Resolved order → contact mapping:", {
-      orderId,
-      contactId,
-    });
+    if (COMPACT_MODE) {
+      console.log(`💳 SQUARE: order=${shortId(orderId)} → contact=${shortId(contactId)} $${amount / 100}`);
+    } else {
+      console.log("[Square] Raw order from getContactIdFromOrder:", JSON.stringify(order, null, 2));
+      console.log("[Square] Resolved order → contact mapping:", { orderId, contactId });
+    }
 
     return contactId;
   } catch (err) {

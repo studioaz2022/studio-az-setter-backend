@@ -3,7 +3,7 @@ require("dotenv").config();
 // ghlClient.js
 const axios = require("axios");
 const FormData = require("form-data");
-const { cleanLogObject } = require("./src/utils/logger");
+const { cleanLogObject, COMPACT_MODE, shortId } = require("./src/utils/logger");
 const { SYSTEM_FIELDS } = require("./src/config/constants");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
@@ -511,20 +511,20 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
     if (typeFilter === "DM") {
       const dmConv = convs.find(isDmConversation);
       if (dmConv) {
-        console.log(`🔍 Found DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
+        if (!COMPACT_MODE) console.log(`🔍 Found DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
         return dmConv;
       }
-      console.log("🔍 No DM conversation found for contact");
+      if (!COMPACT_MODE) console.log("🔍 No DM conversation found for contact");
       return null;
     }
     
     if (typeFilter === "SMS") {
       const smsConv = convs.find(isSmsConversation);
       if (smsConv) {
-        console.log(`🔍 Found SMS conversation: ${smsConv.id}`);
+        if (!COMPACT_MODE) console.log(`🔍 Found SMS conversation: ${smsConv.id}`);
         return smsConv;
       }
-      console.log("🔍 No SMS conversation found for contact");
+      if (!COMPACT_MODE) console.log("🔍 No SMS conversation found for contact");
       return null;
     }
 
@@ -532,11 +532,11 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
     if (preferDm) {
       const dmConv = convs.find(isDmConversation);
       if (dmConv) {
-        console.log(`🔍 Preferring DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
+        if (!COMPACT_MODE) console.log(`🔍 Preferring DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
         return dmConv;
       }
       // Fall back to most recent if no DM found
-      console.log("🔍 No DM conversation found, falling back to most recent");
+      if (!COMPACT_MODE) console.log("🔍 No DM conversation found, falling back to most recent");
     }
 
     // Return the most recent conversation (they're sorted newest-first)
@@ -597,7 +597,7 @@ async function getConversationHistory(contactId, {
     });
 
     const messages = resp.data?.messages || [];
-    console.log(`📜 Fetched ${messages.length} messages for contact ${contactId}`);
+    if (!COMPACT_MODE) console.log(`📜 Fetched ${messages.length} messages for contact ${contactId}`);
     return messages;
   } catch (err) {
     console.error(
@@ -639,11 +639,11 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
       const hasFacebookTag = tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger"));
       
       if (hasInstagramId || hasInstagramTag) {
-        console.log("inferConversationMessageType: found Instagram from contact, returning IG");
+        if (!COMPACT_MODE) console.log("inferConversationMessageType: found Instagram from contact, returning IG");
         return "IG";
       }
       if (hasFacebookId || hasFacebookTag) {
-        console.log("inferConversationMessageType: found Facebook from contact, returning FB");
+        if (!COMPACT_MODE) console.log("inferConversationMessageType: found Facebook from contact, returning FB");
         return "FB";
       }
     } catch (err) {
@@ -658,7 +658,7 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
   if (!conversation) {
     // If preferDm and no DM conversation found, still check contact for social IDs
     if (preferDm) {
-      console.warn("inferConversationMessageType: no DM conversation found, checking contact tags...");
+      if (!COMPACT_MODE) console.warn("inferConversationMessageType: no DM conversation found, checking contact tags...");
       try {
         const contact = await getContact(contactId);
         const tags = contact?.tags || [];
@@ -674,7 +674,7 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
         console.warn("Error checking contact tags:", err.message);
       }
     }
-    console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
+    if (!COMPACT_MODE) console.warn("inferConversationMessageType: no conversations found, defaulting to SMS");
     return "SMS";
   }
 
@@ -715,9 +715,7 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
   const lastType = conversation.lastMessageType || conversation.type || "";
 
   if (!lastType || typeof lastType !== "string") {
-    console.warn(
-      "inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS"
-    );
+    if (!COMPACT_MODE) console.warn("inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS");
     return "SMS";
   }
 
@@ -747,9 +745,7 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
   }
 
   // Fallback - prefer FB over IG for DM contexts (more common, and less likely to fail)
-  console.warn(
-    `inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to FB for DM`
-  );
+  if (!COMPACT_MODE) console.warn(`inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to FB`);
   return "FB";
 }
 
@@ -770,12 +766,14 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     phone = null,
   } = channelContext;
 
-  console.log("✉️ sendConversationMessage context:", cleanLogObject({
-    contactId,
-    isDm,
-    hasPhone,
-    conversationId,
-  }));
+  if (!COMPACT_MODE) {
+    console.log("✉️ sendConversationMessage context:", cleanLogObject({
+      contactId,
+      isDm,
+      hasPhone,
+      conversationId,
+    }));
+  }
 
   // 1) DM reply path (no phone required)
   if (isDm) {
@@ -785,7 +783,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
     let foundConversation = null;
     if (!finalConversationId) {
-      console.log("🔍 No conversationId provided for DM, searching for DM conversation...");
+      if (!COMPACT_MODE) console.log("🔍 No conversationId provided for DM, searching for DM conversation...");
       
       // Specifically search for a DM conversation (FB/IG), not SMS
       foundConversation = await findConversationForContact(contactId, { typeFilter: "DM" });
@@ -803,9 +801,9 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           // Fall back to inference function if conversation type is unclear (prefer DM since isDm=true)
           dmType = await inferConversationMessageType(contactId, { preferDm: true });
         }
-        console.log(`✅ Found DM conversation ${finalConversationId} with type ${dmType}`);
+        if (!COMPACT_MODE) console.log(`✅ Found DM conversation ${finalConversationId} with type ${dmType}`);
       } else {
-        console.log("🔍 No existing DM conversation found, will try to infer type from contact...");
+        if (!COMPACT_MODE) console.log("🔍 No existing DM conversation found, will try to infer type from contact...");
       }
     } else {
       // If conversationId was provided, still infer the type (prefer DM since isDm=true)
@@ -890,7 +888,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         }
       } else {
         // We found the conversation from GHL - trust that GHL knows the type
-        console.log(`✅ Using conversation type ${dmType} from GHL conversation - skipping ID validation`);
+        if (!COMPACT_MODE) console.log(`✅ Using conversation type ${dmType} from GHL conversation - skipping ID validation`);
       }
 
       try {
@@ -901,7 +899,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           type: dmType, // Use inferred type (IG or FB)
         };
 
-        console.log("📨 Sending DM reply via GHL:", payload);
+        if (!COMPACT_MODE) console.log("📨 Sending DM reply via GHL:", payload);
 
         const url = "https://services.leadconnectorhq.com/conversations/messages";
         const resp = await axios.post(url, payload, {
@@ -913,11 +911,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           },
         });
 
-        console.log("📨 GHL DM reply response:", {
-          status: resp.status,
-          contactId,
-          conversationId: finalConversationId,
-        });
+        if (!COMPACT_MODE) console.log("📨 GHL DM reply response:", { status: resp.status, contactId, conversationId: finalConversationId });
 
         return resp.data;
       } catch (err) {
@@ -942,7 +936,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
             type: inferredType,
           };
 
-          console.log("📨 Sending DM via GHL (creating new conversation):", payload);
+          if (!COMPACT_MODE) console.log("📨 Sending DM via GHL (creating new conversation):", payload);
 
           const url = "https://services.leadconnectorhq.com/conversations/messages";
           const resp = await axios.post(url, payload, {
@@ -954,17 +948,11 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
             },
           });
 
-          console.log("📨 GHL DM message response (new conversation):", {
-            status: resp.status,
-            contactId,
-            type: inferredType,
-          });
+          if (!COMPACT_MODE) console.log("📨 GHL DM message response (new conversation):", { status: resp.status, contactId, type: inferredType });
 
           return resp.data;
         } else {
-          console.warn(
-            `⚠️ Cannot send DM: inferred type is ${inferredType}, not IG/FB. Contact may need to initiate conversation first.`
-          );
+          console.warn(`⚠️ Cannot send DM: inferred type is ${inferredType}, not IG/FB`);
         }
       } catch (err) {
         console.error("❌ Error sending DM via GHL (new conversation):", err.response?.data || err.message);
@@ -999,11 +987,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         },
       });
 
-      console.log("📨 GHL conversations API response:", {
-        status: resp.status,
-        contactId,
-        type,
-      });
+      if (!COMPACT_MODE) console.log("📨 GHL conversations API response:", { status: resp.status, contactId, type });
 
       return resp.data;
     } catch (err) {
@@ -1034,7 +1018,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           },
         });
 
-        console.log("📨 GHL conversations API response (fallback):", {
+        if (!COMPACT_MODE) console.log("📨 GHL conversations API response (fallback):", {
           status: resp.status,
           contactId,
           type,

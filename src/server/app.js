@@ -40,6 +40,13 @@ const {
   updateAppointmentStatus,
   rescheduleAppointment,
 } = require("../clients/ghlCalendarClient");
+const {
+  COMPACT_MODE,
+  logIncomingMessage,
+  logAIResponse,
+  logSendResult,
+  compactThread,
+} = require("../utils/logger");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -344,9 +351,12 @@ function createApp() {
 
   app.post("/ghl/message-webhook", async (req, res) => {
     try {
-      console.log("\n💬 ════════════════════════════════════════════════════════");
-      console.log("💬 GHL MESSAGE WEBHOOK HIT");
-      console.log("💬 ════════════════════════════════════════════════════════");
+      // ═══ VERBOSE MODE HEADER ═══
+      if (!COMPACT_MODE) {
+        console.log("\n💬 ════════════════════════════════════════════════════════");
+        console.log("💬 GHL MESSAGE WEBHOOK HIT");
+        console.log("💬 ════════════════════════════════════════════════════════");
+      }
 
       const payload = req.body || {};
       const contactId =
@@ -369,13 +379,13 @@ function createApp() {
         payload.body?.message ||
         "";
 
-      // Log non-empty payload fields
-      const nonEmptyPayload = filterNonEmpty(payload);
-      console.log("📦 Webhook Payload (non-empty fields):", JSON.stringify(nonEmptyPayload, null, 2));
-
-      // Log the incoming message prominently
-      console.log("📩 Incoming message text:", messageText || "(empty)");
-      console.log("👤 Contact ID:", contactId);
+      // ═══ VERBOSE PAYLOAD LOGGING ═══
+      if (!COMPACT_MODE) {
+        const nonEmptyPayload = filterNonEmpty(payload);
+        console.log("📦 Webhook Payload (non-empty fields):", JSON.stringify(nonEmptyPayload, null, 2));
+        console.log("📩 Incoming message text:", messageText || "(empty)");
+        console.log("👤 Contact ID:", contactId);
+      }
 
       if (!contactId) {
         console.warn("⚠️ /ghl/message-webhook missing contactId");
@@ -388,7 +398,7 @@ function createApp() {
       
       // If batchData is null, another request will handle this batch
       if (!batchData) {
-        console.log(`⏭️ [DEBOUNCE] Skipping - batch will be processed by another request`);
+        if (!COMPACT_MODE) console.log(`⏭️ [DEBOUNCE] Skipping - batch will be processed by another request`);
         return res.status(200).json({ ok: true, debounced: true });
       }
       
@@ -396,33 +406,37 @@ function createApp() {
       const combinedMessageText = batchData.combinedText;
       const latestPayload = batchData.latestPayload;
       
-      console.log(`📦 [DEBOUNCE] Processing ${batchData.messages.length} batched message(s):`);
-      batchData.messages.forEach((msg, idx) => {
-        console.log(`   ${idx + 1}. ${msg || "(empty/image)"}`);
-      });
+      if (!COMPACT_MODE) {
+        console.log(`📦 [DEBOUNCE] Processing ${batchData.messages.length} batched message(s):`);
+        batchData.messages.forEach((msg, idx) => {
+          console.log(`   ${idx + 1}. ${msg || "(empty/image)"}`);
+        });
+      }
 
       const contactRaw = await getContact(contactId);
       
       // Extract custom fields from webhook payload (use latest payload for most current data)
       const webhookCustomFields = extractCustomFieldsFromPayload(latestPayload);
-      console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
       
       // Merge webhook custom fields into contact (webhook payload has correct format)
       const contact = buildEffectiveContact(contactRaw, webhookCustomFields);
+      const contactName = `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)";
       
-      // Log contact info
-      console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
-      console.log("📋 Contact custom fields (merged):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
-
       // Derive channel context for message sending and pipeline sync (use latest payload)
       const channelContext = deriveChannelContext(latestPayload, contact);
-      console.log("📡 Channel context:", channelContext);
+      
+      if (!COMPACT_MODE) {
+        console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
+        console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
+        console.log("📋 Contact custom fields (merged):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
+        console.log("📡 Channel context:", channelContext);
+      }
 
       // Sync pipeline on entry - SMS/DM/WhatsApp start at DISCOVERY
       const cf = contact?.customField || contact?.customFields || {};
       const hasOpportunity = !!cf.opportunity_id;
       if (!hasOpportunity && channelContext.channelType !== "unknown") {
-        console.log(`📊 [PIPELINE] New lead from ${channelContext.channelType} - syncing entry stage...`);
+        if (!COMPACT_MODE) console.log(`📊 [PIPELINE] New lead from ${channelContext.channelType} - syncing entry stage...`);
         await syncPipelineOnEntry(contactId, {
           channelType: channelContext.channelType,
           isFirstMessage: true,
@@ -431,7 +445,7 @@ function createApp() {
       }
 
       // Fetch conversation history for context
-      console.log("📜 Fetching conversation history...");
+      if (!COMPACT_MODE) console.log("📜 Fetching conversation history...");
       const rawMessages = await getConversationHistory(contactId, {
         limit: 100, // Fetch last 100 messages
         sortOrder: "desc", // Newest first
@@ -452,14 +466,26 @@ function createApp() {
         },
       });
       
-      console.log("📜 Thread context:", {
-        totalMessages: conversationThread.totalCount,
-        recentCount: conversationThread.thread?.length || 0,
-        hasSummary: !!conversationThread.summary,
-        hasImageContext: !!conversationThread.imageContext,
-        wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
-        isReturningClient: !!cf.returning_client,
-      });
+      // ═══ COMPACT MODE: LOG INCOMING MESSAGE ═══
+      if (COMPACT_MODE) {
+        logIncomingMessage({
+          contactId,
+          contactName,
+          channel: channelContext.channelType,
+          message: combinedMessageText,
+          customFields: webhookCustomFields,
+          threadContext: conversationThread,
+        });
+      } else {
+        console.log("📜 Thread context:", {
+          totalMessages: conversationThread.totalCount,
+          recentCount: conversationThread.thread?.length || 0,
+          hasSummary: !!conversationThread.summary,
+          hasImageContext: !!conversationThread.imageContext,
+          wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
+          isReturningClient: !!cf.returning_client,
+        });
+      }
 
       const result = await handleInboundMessage({
         contact,
@@ -472,17 +498,30 @@ function createApp() {
         channelContext, // Pass channel context for message sending
       });
 
-      // Log AI result summary
-      console.log("🤖 AI Response Summary:", {
-        bubblesCount: result?.aiResult?.bubbles?.length || 0,
-        phase: result?.ai_phase,
-        handler: result?.routing?.selected_handler,
-        reason: result?.routing?.reason,
-        fieldUpdatesKeys: Object.keys(result?.aiResult?.field_updates || {}),
-      });
+      // ═══ COMPACT MODE: LOG AI RESPONSE ═══
+      const bubbles = result?.aiResult?.bubbles || [];
+      const fieldUpdates = result?.aiResult?.field_updates || {};
+      
+      if (COMPACT_MODE) {
+        logAIResponse({
+          bubbles,
+          meta: result?.aiResult?.meta,
+          fieldUpdates,
+          timing: result?.timing,
+          handler: result?.routing?.selected_handler,
+          reason: result?.routing?.reason,
+        });
+      } else {
+        console.log("🤖 AI Response Summary:", {
+          bubblesCount: bubbles.length,
+          phase: result?.ai_phase,
+          handler: result?.routing?.selected_handler,
+          reason: result?.routing?.reason,
+          fieldUpdatesKeys: Object.keys(fieldUpdates),
+        });
+      }
 
       // Send the AI's bubbles to the user
-      const bubbles = result?.aiResult?.bubbles || [];
       let sentCount = 0;
       for (const bubble of bubbles) {
         if (bubble && bubble.trim()) {
@@ -498,22 +537,32 @@ function createApp() {
           }
         }
       }
-      console.log(`📤 Sent ${sentCount}/${bubbles.length} bubbles to GHL conversation`);
+      
+      // ═══ COMPACT MODE: LOG SEND RESULT ═══
+      if (COMPACT_MODE) {
+        logSendResult({
+          sent: sentCount,
+          total: bubbles.length,
+          channel: channelContext.channelType,
+          contactId,
+        });
+      } else {
+        console.log(`📤 Sent ${sentCount}/${bubbles.length} bubbles to GHL conversation`);
+      }
 
       // Persist the field updates from AI
-      const fieldUpdates = result?.aiResult?.field_updates || {};
       if (Object.keys(fieldUpdates).length > 0 && contactId) {
         try {
           await updateTattooFields(contactId, fieldUpdates);
-          console.log("✅ Persisted field_updates:", Object.keys(fieldUpdates));
+          if (!COMPACT_MODE) console.log("✅ Persisted field_updates:", Object.keys(fieldUpdates));
         } catch (err) {
           console.error("❌ Failed to persist field_updates:", err.message || err);
         }
       } else {
-        console.log("ℹ️ No field_updates from AI to persist this turn");
+        if (!COMPACT_MODE) console.log("ℹ️ No field_updates from AI to persist this turn");
       }
 
-      console.log("💬 ════════════════════════════════════════════════════════\n");
+      if (!COMPACT_MODE) console.log("💬 ════════════════════════════════════════════════════════\n");
       return res.status(200).json({ ok: true });
     } catch (err) {
       console.error("❌ /ghl/message-webhook error:", err.message || err);
@@ -728,9 +777,11 @@ function createApp() {
     }
 
     try {
-      console.log("\n💳 ════════════════════════════════════════════════════════");
-      console.log("💳 SQUARE PAYMENT WEBHOOK HIT");
-      console.log("💳 ════════════════════════════════════════════════════════");
+      if (!COMPACT_MODE) {
+        console.log("\n💳 ════════════════════════════════════════════════════════");
+        console.log("💳 SQUARE PAYMENT WEBHOOK HIT");
+        console.log("💳 ════════════════════════════════════════════════════════");
+      }
 
       const payment = payload?.data?.object?.payment || {};
       const orderId = payment.order_id || payment.orderId || null;
@@ -741,7 +792,12 @@ function createApp() {
       }
 
       if (contactId) {
-        console.log(`💳 Deposit paid for contact: ${contactId}`);
+        const amount = payment.amount_money?.amount || payment.total_money?.amount || 0;
+        if (COMPACT_MODE) {
+          console.log(`\n💳 SQUARE DEPOSIT PAID: contact=${contactId.slice(0, 8)}… $${amount / 100}`);
+        } else {
+          console.log(`💳 Deposit paid for contact: ${contactId}`);
+        }
         
         // Update deposit_paid field
         await updateSystemFields(contactId, {
@@ -757,18 +813,18 @@ function createApp() {
         const isMessageConsult = consultationType === "message";
 
         // Sync pipeline to QUALIFIED stage first
-        console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
+        if (!COMPACT_MODE) console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
         await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
-        console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
+        if (!COMPACT_MODE) console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
 
         // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
         if (isMessageConsult) {
-          console.log(`📝 [MESSAGE CONSULT] Deposit paid for message consultation - assigning artist...`);
+          if (!COMPACT_MODE) console.log(`📝 [MESSAGE CONSULT] Deposit paid for message consultation - assigning artist...`);
           
           // Assign the artist to the contact
           try {
             await assignContactToArtist(contactId);
-            console.log(`✅ [MESSAGE CONSULT] Artist assigned to contact ${contactId}`);
+            if (!COMPACT_MODE) console.log(`✅ [MESSAGE CONSULT] Artist assigned to contact ${contactId}`);
           } catch (assignErr) {
             console.error("❌ [MESSAGE CONSULT] Failed to assign artist:", assignErr.message || assignErr);
           }
@@ -776,7 +832,11 @@ function createApp() {
           // Transition to CONSULT_MESSAGE stage
           try {
             await transitionToStage(contactId, OPPORTUNITY_STAGES.CONSULT_MESSAGE);
-            console.log(`✅ [PIPELINE] Contact ${contactId} moved to CONSULT_MESSAGE stage`);
+            if (COMPACT_MODE) {
+              console.log(`   → CONSULT_MESSAGE stage | artist assigned`);
+            } else {
+              console.log(`✅ [PIPELINE] Contact ${contactId} moved to CONSULT_MESSAGE stage`);
+            }
           } catch (stageErr) {
             console.error("❌ [PIPELINE] Failed to transition to CONSULT_MESSAGE:", stageErr.message || stageErr);
           }
@@ -784,10 +844,14 @@ function createApp() {
 
         // === VIDEO CALL CONSULTATION: Add translator as follower if needed ===
         if (!isMessageConsult && translatorNeeded) {
-          console.log(`🌐 [TRANSLATOR] Adding translator as follower for video consultation...`);
+          if (!COMPACT_MODE) console.log(`🌐 [TRANSLATOR] Adding translator as follower for video consultation...`);
           try {
             await addTranslatorAsFollower(contactId);
-            console.log(`✅ [TRANSLATOR] Translator added as follower for contact ${contactId}`);
+            if (COMPACT_MODE) {
+              console.log(`   → translator added as follower`);
+            } else {
+              console.log(`✅ [TRANSLATOR] Translator added as follower for contact ${contactId}`);
+            }
           } catch (followerErr) {
             console.error("❌ [TRANSLATOR] Failed to add translator as follower:", followerErr.message || followerErr);
           }
@@ -848,7 +912,11 @@ function createApp() {
             body: confirmationMessage,
             channelContext: {},
           });
-          console.log(`✅ [DEPOSIT] Sent confirmation message to contact ${contactId}`);
+          if (COMPACT_MODE) {
+            console.log(`   → confirmation sent ✓`);
+          } else {
+            console.log(`✅ [DEPOSIT] Sent confirmation message to contact ${contactId}`);
+          }
           
         } catch (msgErr) {
           console.error("❌ [DEPOSIT] Failed to send confirmation message:", msgErr.message || msgErr);
@@ -858,7 +926,7 @@ function createApp() {
         console.warn("⚠️ /square/webhook could not resolve contactId from payment");
       }
 
-      console.log("💳 ════════════════════════════════════════════════════════\n");
+      if (!COMPACT_MODE) console.log("💳 ════════════════════════════════════════════════════════\n");
     } catch (err) {
       console.error("❌ /square/webhook processing error:", err.message || err);
     }
