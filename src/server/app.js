@@ -41,6 +41,78 @@ const {
   rescheduleAppointment,
 } = require("../clients/ghlCalendarClient");
 
+// ═══════════════════════════════════════════════════════════════════════════
+// MESSAGE DEBOUNCING SYSTEM
+// Wait for 15 seconds of "quiet" before processing messages to batch
+// multiple rapid messages together (e.g., photo + text sent in quick succession)
+// ═══════════════════════════════════════════════════════════════════════════
+
+const MESSAGE_DEBOUNCE_MS = 15000; // 15 seconds
+
+// Store pending message batches by contactId
+// Format: { contactId: { messages: [], payloads: [], timer: TimeoutId, receivedAt: Date } }
+const pendingMessageBatches = new Map();
+
+/**
+ * Add a message to the pending batch for a contact.
+ * Starts or resets the debounce timer.
+ * Returns a Promise that resolves when the batch is ready to process.
+ */
+function addToBatch(contactId, messageText, payload) {
+  return new Promise((resolve) => {
+    let batch = pendingMessageBatches.get(contactId);
+    
+    if (batch) {
+      // Batch exists - clear old timer and add to existing batch
+      clearTimeout(batch.timer);
+      batch.messages.push(messageText);
+      batch.payloads.push(payload);
+      console.log(`⏳ [DEBOUNCE] Added message to batch for ${contactId} (${batch.messages.length} total). Resetting 15s timer.`);
+    } else {
+      // New batch
+      batch = {
+        messages: [messageText],
+        payloads: [payload],
+        timer: null,
+        receivedAt: new Date(),
+        resolvers: [],
+      };
+      pendingMessageBatches.set(contactId, batch);
+      console.log(`⏳ [DEBOUNCE] Started new batch for ${contactId}. Waiting 15s for more messages...`);
+    }
+    
+    // Add this request's resolver to be called when batch is processed
+    batch.resolvers.push(resolve);
+    
+    // Set new timer
+    batch.timer = setTimeout(() => {
+      const finalBatch = pendingMessageBatches.get(contactId);
+      if (finalBatch) {
+        pendingMessageBatches.delete(contactId);
+        const elapsedSeconds = ((new Date() - finalBatch.receivedAt) / 1000).toFixed(1);
+        console.log(`✅ [DEBOUNCE] Processing batch for ${contactId}: ${finalBatch.messages.length} message(s) after ${elapsedSeconds}s`);
+        
+        // Resolve all waiting requests with the batch data
+        const batchData = {
+          messages: finalBatch.messages,
+          payloads: finalBatch.payloads,
+          combinedText: finalBatch.messages.filter(m => m && m.trim()).join("\n\n"),
+          latestPayload: finalBatch.payloads[finalBatch.payloads.length - 1],
+        };
+        
+        // Resolve only the first one to actually process, others get null
+        finalBatch.resolvers.forEach((resolver, idx) => {
+          if (idx === 0) {
+            resolver(batchData);
+          } else {
+            resolver(null); // Signal these requests to skip processing
+          }
+        });
+      }
+    }, MESSAGE_DEBOUNCE_MS);
+  });
+}
+
 // Helper: Filter object to only show non-empty fields (for cleaner logs)
 function filterNonEmpty(obj) {
   if (!obj || typeof obj !== "object") return obj;
@@ -310,10 +382,29 @@ function createApp() {
         return res.status(200).json({ ok: false, error: "missing contactId" });
       }
 
+      // ═══ MESSAGE DEBOUNCING ═══
+      // Wait for 15 seconds of "quiet" to batch multiple rapid messages
+      const batchData = await addToBatch(contactId, messageText, payload);
+      
+      // If batchData is null, another request will handle this batch
+      if (!batchData) {
+        console.log(`⏭️ [DEBOUNCE] Skipping - batch will be processed by another request`);
+        return res.status(200).json({ ok: true, debounced: true });
+      }
+      
+      // Use the combined message text from all batched messages
+      const combinedMessageText = batchData.combinedText;
+      const latestPayload = batchData.latestPayload;
+      
+      console.log(`📦 [DEBOUNCE] Processing ${batchData.messages.length} batched message(s):`);
+      batchData.messages.forEach((msg, idx) => {
+        console.log(`   ${idx + 1}. ${msg || "(empty/image)"}`);
+      });
+
       const contactRaw = await getContact(contactId);
       
-      // Extract custom fields from webhook payload (more reliable than getContact array format)
-      const webhookCustomFields = extractCustomFieldsFromPayload(payload);
+      // Extract custom fields from webhook payload (use latest payload for most current data)
+      const webhookCustomFields = extractCustomFieldsFromPayload(latestPayload);
       console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
       
       // Merge webhook custom fields into contact (webhook payload has correct format)
@@ -323,8 +414,8 @@ function createApp() {
       console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
       console.log("📋 Contact custom fields (merged):", JSON.stringify(getNonEmptyCustomFields(contact), null, 2));
 
-      // Derive channel context for message sending and pipeline sync
-      const channelContext = deriveChannelContext(payload, contact);
+      // Derive channel context for message sending and pipeline sync (use latest payload)
+      const channelContext = deriveChannelContext(latestPayload, contact);
       console.log("📡 Channel context:", channelContext);
 
       // Sync pipeline on entry - SMS/DM/WhatsApp start at DISCOVERY
@@ -374,7 +465,7 @@ function createApp() {
         contact,
         aiPhase: null,
         leadTemperature: null,
-        latestMessageText: messageText,
+        latestMessageText: combinedMessageText, // Use combined text from all batched messages
         contactProfile: {},
         consultExplained: contact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
         conversationThread, // Pass thread context to AI
