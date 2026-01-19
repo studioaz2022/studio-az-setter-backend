@@ -148,10 +148,20 @@ const surveyFlow = {
       text_es: "¿Aproximadamente qué tamaño?",
       type: 'multiple-choice-images',
       options: [
-        { text: 'Fine Line', value: 'Fine Line', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd1772bc3efb5.png', next: 'q_contact_name' },
-        { text: 'Small', value: 'Small', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a13582685546.png', next: 'q_contact_name' },
-        { text: 'Medium', value: 'Medium', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd11ee6c3efbb.png', next: 'q_contact_name' },
-        { text: 'Large', value: 'Large', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a10352685545.png', next: 'q_contact_name' }
+        { text: 'Fine Line', value: 'Fine Line', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd1772bc3efb5.png', next: 'q_consultation_preference' },
+        { text: 'Small', value: 'Small', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a13582685546.png', next: 'q_consultation_preference' },
+        { text: 'Medium', value: 'Medium', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd11ee6c3efbb.png', next: 'q_medium_coverage' },
+        { text: 'Large', value: 'Large', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a10352685545.png', next: 'q_consultation_preference' }
+      ]
+    },
+    'q_medium_coverage': {
+      stepIndex: 3,
+      text_en: "How much detail/coverage?",
+      text_es: "¿Cuánto detalle/cobertura?",
+      type: 'multiple-choice-images',
+      options: [
+        { text: 'Low Coverage', value: 'Medium, Low Coverage', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83ec31a15708685547.png', next: 'q_consultation_preference' },
+        { text: 'High Coverage', value: 'Medium, High Coverage', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd119e0c3efb7.png', next: 'q_consultation_preference' }
       ]
     },
     'q_tatuaje_tamano': { 
@@ -162,12 +172,29 @@ const surveyFlow = {
       options: [
         { text: 'Línea Fina', value: 'Línea Fina', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f8384a9d673035a168c.png', next: 'q_contact_name' },
         { text: 'Pequeño', value: 'Pequeño', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83d91bd126d1c3efb6.png', next: 'q_contact_name' },
-        { text: 'Mediano', value: 'Mediano', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f836279e9e1ebc7f341.png', next: 'q_contact_name' },
+        { text: 'Mediano', value: 'Mediano', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f836279e9e1ebc7f341.png', next: 'q_mediano_cobertura' },
         { text: 'Grande', value: 'Grande', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f83924f1ee7862cd7bc.png', next: 'q_contact_name' }
       ]
     },
-    'q_contact_name': {
+    'q_mediano_cobertura': {
       stepIndex: 3,
+      text_en: "How much detail/coverage?",
+      text_es: "¿Cuánto detalle/cobertura?",
+      type: 'multiple-choice-images',
+      options: [
+        { text: 'Cobertura Baja', value: 'Mediano, Cobertura Baja', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f8384a9d65d415a1693.png', next: 'q_contact_name' },
+        { text: 'Alta Cobertura', value: 'Mediano, Alta Cobertura', imageUrl: 'https://storage.googleapis.com/msgsndr/mUemx2jG4wly4kJWBkI4/media/68f76f836279e945d8c7f31b.png', next: 'q_contact_name' }
+      ]
+    },
+    'q_consultation_preference': {
+      stepIndex: 4,
+      text_en: "Consultation Method",
+      type: 'consultation-info',
+      artistName: technicianName,
+      next: 'q_contact_name'
+    },
+    'q_contact_name': {
+      stepIndex: 5,
       type: 'input_group',
       title_en: "Let's get introduced.",
       title_es: "Vamos a presentarnos.",
@@ -178,7 +205,7 @@ const surveyFlow = {
       next: 'q_contact_details'
     },
     'q_contact_details': {
-      stepIndex: 3,
+      stepIndex: 5,
       type: 'input_group',
       title_en: "How can we reach you?",
       title_es: "¿Cómo podemos contactarte?",
@@ -190,7 +217,7 @@ const surveyFlow = {
       next: 'trigger_create_contact'
     },
     'q_tattoo_concept': {
-      stepIndex: 4,
+      stepIndex: 6,
       type: 'input_group',
       title_en: "Tell us about your idea.",
       title_es: "Cuéntanos sobre tu idea.",
@@ -204,7 +231,7 @@ const surveyFlow = {
     
     // --- CHANGED: NATIVE UPLOAD STEP (Replacing GHL iframe) ---
     'step_upload_images': {
-       stepIndex: 5,
+       stepIndex: 7,
        type: 'native_upload_step', // NEW TYPE
        title_en: 'Reference Photos',
        title_es: 'Fotos de Referencia',
@@ -212,7 +239,7 @@ const surveyFlow = {
     },
 
     'q_style_desc': {
-      stepIndex: 6,
+      stepIndex: 8,
       type: 'input_group',
       title_en: "Describe your photo(s)",
       title_es: "Describe tu(s) foto(s)",
@@ -245,10 +272,35 @@ const surveyFlow = {
             showIf: 'has_reference_photos' 
         },
       ],
-      next: 'q_first_tattoo'
+      next: 'submit_primary'
+    },
+    
+    // --- PRIMARY SUBMISSION CONFIRMATION ---
+    'primary_confirmation': {
+      stepIndex: 9,
+      type: 'primary_confirmation',
+      title_en: "Request Submitted!",
+      title_es: "¡Solicitud Enviada!",
+      next: 'q_budget_range'
+    },
+    
+    // --- OPTIONAL/SECONDARY QUESTIONS ---
+    'q_budget_range': {
+      stepIndex: 10,
+      text_en: "What's your budget range for this tattoo?",
+      text_es: "¿Cuál es tu rango de presupuesto para este tatuaje?",
+      type: 'multiple-choice',
+      options: [
+        { text: 'Under $300', text_es: 'Menos de $300', value: 'Under $300', value_es: 'Menos de $300', next: 'q_first_tattoo' },
+        { text: '$300 to $600', text_es: '$300 a $600', value: '$300 to $600', value_es: '$300 a $600', next: 'q_first_tattoo' },
+        { text: '$600 to $1,000', text_es: '$600 a $1,000', value: '$600 to $1,000', value_es: '$600 a $1,000', next: 'q_first_tattoo' },
+        { text: '$1,000 to $1,500', text_es: '$1,000 a $1,500', value: '$1,000 to $1,500', value_es: '$1,000 a $1,500', next: 'q_first_tattoo' },
+        { text: '$1,500+', text_es: '$1,500+', value: '$1,500+', value_es: '$1,500+', next: 'q_first_tattoo' },
+        { text: 'Prefer not to say', text_es: 'Prefiero no decir', value: 'Not specified', value_es: 'No especificado', next: 'q_first_tattoo' }
+      ]
     },
     'q_first_tattoo': {
-      stepIndex: 7,
+      stepIndex: 10,
       text_en: "Is this your first tattoo?",
       text_es: "¿Es este tu primer tatuaje?",
       type: 'multiple-choice',
@@ -258,19 +310,19 @@ const surveyFlow = {
       ]
     },
     'q_concerns': {
-      stepIndex: 7,
+      stepIndex: 10,
       type: 'input_group',
-      title_en: "Almost done...",
-      title_es: "Casi terminamos...",
+      title_en: "Any final thoughts?",
+      title_es: "¿Algún pensamiento final?",
       fields: [
-        { id: 'tattoo_concerns', label_en: 'Any concerns? (Optional)', label_es: '¿Alguna inquietud? (Opcional)', type: 'textarea', placeholder_en: 'Sensitive skin, scars, cover-up, pain tolerance...', placeholder_es: 'Piel sensible, cicatrices, coberturas, tolerancia al dolor...', required: false },
+        { id: 'tattoo_concerns', label_en: 'Any concerns or special requests? (Optional)', label_es: '¿Alguna inquietud o solicitud especial? (Opcional)', type: 'textarea', rows: 3, placeholder_en: 'Sensitive skin, scars, cover-up, pain tolerance...', placeholder_es: 'Piel sensible, cicatrices, coberturas, tolerancia al dolor...', required: false },
       ],
-      next: 'submit_final' 
+      next: 'submit_secondary' 
     }
   }
 };
 
-const TOTAL_STEPS = 8; 
+const TOTAL_STEPS = 9; // Primary questions only (secondary questions don't count toward progress) 
 
 // Formats a string to (XXX) XXX-XXXX
 const formatPhoneNumber = (value) => {
@@ -478,7 +530,7 @@ function App() {
 
   const currentData = surveyFlow.questions[currentQ];
   const progress = currentData 
-    ? ((currentData.stepIndex || 0) / TOTAL_STEPS) * 100 
+    ? (Math.min(((currentData.stepIndex || 0) / TOTAL_STEPS) * 100, 100)) 
     : (isFinished ? 100 : 0);
 
   const triggerTransition = (nextQ) => {
@@ -495,14 +547,26 @@ function App() {
     
     let updatedAnswers = { ...answers };
     updatedAnswers[currentQ] = value;
+    
+    // Clear medium coverage answer if selecting a non-Medium size
+    if (currentQ === 'q_tattoo_size' && value !== 'Medium') {
+        delete updatedAnswers.q_medium_coverage;
+    }
+    if (currentQ === 'q_tatuaje_tamano' && value !== 'Mediano') {
+        delete updatedAnswers.q_mediano_cobertura;
+    }
+    
     setAnswers(updatedAnswers);
 
     if (nextQ === 'trigger_create_contact') {
          submitPartialLead({ ...updatedAnswers, [currentQ]: value });
          triggerTransition('q_tattoo_concept');
     } 
-    else if (nextQ === 'submit_final') {
-        submitFinalLead({ ...updatedAnswers, [currentQ]: value });
+    else if (nextQ === 'submit_primary') {
+        submitFinalLead({ ...updatedAnswers, [currentQ]: value }, true); // true = primary submission
+    }
+    else if (nextQ === 'submit_secondary') {
+        submitSecondaryAnswers({ ...updatedAnswers, [currentQ]: value });
     } 
     else {
         triggerTransition(nextQ);
@@ -530,8 +594,11 @@ function App() {
           submitPartialLead(finalAnswers);
           triggerTransition('q_tattoo_concept');
       } 
-      else if (nextQ === 'submit_final') {
-          submitFinalLead(finalAnswers);
+      else if (nextQ === 'submit_primary') {
+          submitFinalLead(finalAnswers, true); // true = primary submission
+      }
+      else if (nextQ === 'submit_secondary') {
+          submitSecondaryAnswers(finalAnswers);
       }
       else {
           triggerTransition(nextQ);
@@ -567,13 +634,13 @@ function App() {
   };
 
 
-  const submitFinalLead = async (currentData) => {
+  const submitFinalLead = async (currentData, isPrimary = false) => {
         setIsSubmitting(true);
         try {
             const isMultipart = uploadedFiles.length > 0;
 
             console.log(
-            "Submitting Final Lead...",
+            isPrimary ? "Submitting Primary Lead..." : "Submitting Final Lead...",
             isMultipart ? "With Files" : "No Files"
             );
 
@@ -595,7 +662,14 @@ function App() {
             }
 
             setIsSubmitting(false);
-            setIsFinished(true);
+            
+            if (isPrimary) {
+                // Show confirmation and transition to secondary questions
+                triggerTransition('primary_confirmation');
+            } else {
+                // All done - show final success
+                setIsFinished(true);
+            }
         } catch (e) {
             console.error(e);
             alert("Error submitting form.");
@@ -603,9 +677,46 @@ function App() {
         }
     };
 
+  const submitSecondaryAnswers = async (currentData) => {
+        setIsSubmitting(true);
+        try {
+            // Submit secondary answers (budget, first tattoo, concerns)
+            await fetch(`${API_BASE}/lead/update`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    email: currentData.email,
+                    customFields: {
+                        budget_range: currentData.q_budget_range,
+                        first_tattoo: currentData.q_first_tattoo,
+                        tattoo_concerns: currentData.tattoo_concerns
+                    }
+                }),
+            });
+
+            console.log("Secondary answers submitted");
+            setIsSubmitting(false);
+            setIsFinished(true);
+        } catch (e) {
+            console.error(e);
+            // Don't alert - these are optional, just finish anyway
+            setIsSubmitting(false);
+            setIsFinished(true);
+        }
+    };
+
 
   const buildPayloadJSON = (data) => {
       const lang = data.q_language || 'English';
+      
+      // Determine final tattoo size - if medium coverage was selected, use that combined value
+      let finalTattooSize = data.q_tattoo_size || data.q_tatuaje_tamano || '';
+      if (data.q_medium_coverage) {
+          finalTattooSize = data.q_medium_coverage;
+      } else if (data.q_mediano_cobertura) {
+          finalTattooSize = data.q_mediano_cobertura;
+      }
+      
       return {
         firstName: data.firstName,
         lastName: data.lastName,
@@ -614,18 +725,20 @@ function App() {
         tags: ["Consultation Request", lang, "Source: Web Widget"],
         customFields: {
             language_preference: lang,
+            consultation_preference: data.consultation_preference || '',
             inquired_technician: technicianName || '',
             whatsapp_user: data.whatsapp ? "Yes" : "No",
             tattoo_title: data.tattoo_title,
             tattoo_summary: data.tattoo_summary,
             tattoo_placement: data.tattoo_placement,
             tattoo_style: data.tattoo_style,
-            tattoo_size: data.q_tattoo_size || data.q_tatuaje_tamano,
+            tattoo_size: finalTattooSize,
             tattoo_color_preference: data.q_color_pref || data.tattoo_color_preference,
             how_soon_is_client_deciding: data.q_timeline_en || data.q_timeline_es,
-            first_tattoo: data.q_first_tattoo,
-            tattoo_concerns: data.tattoo_concerns,
-            tattoo_photo_description: data.tattoo_photo_description
+            budget_range: data.q_budget_range || '',
+            first_tattoo: data.q_first_tattoo || '',
+            tattoo_concerns: data.tattoo_concerns || '',
+            tattoo_photo_description: data.tattoo_photo_description || ''
         },
         utm: utmParameters
       };
@@ -636,20 +749,20 @@ function App() {
         const lang = answers.q_language || 'English';
         const isSpanish = lang === 'Spanish';
         return (
-            <div className="text-center h-full flex flex-col justify-center items-center">
-                <div className="mx-auto h-20 w-20 bg-green-100 rounded-full flex items-center justify-center mb-6">
-                    <svg className="h-10 w-10 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
+            <div className="text-center h-full flex flex-col justify-center items-center px-6">
+                <div className="mx-auto h-24 w-24 bg-green-100 rounded-full flex items-center justify-center mb-6 animate-bounce">
+                    <svg className="h-12 w-12 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path></svg>
                 </div>
                 <h2 className="text-3xl font-bold text-gray-800 mb-4">
-                    {isSpanish ? "¡Solicitud Recibida!" : "Request Received!"}
+                    {isSpanish ? "¡Todo Listo!" : "All Set!"}
                 </h2>
-                <p className="text-gray-600 px-8">
+                <p className="text-gray-600 text-base leading-relaxed">
                     {isSpanish 
-                     ? "Gracias por compartir tu idea. Revisaremos tus detalles y nos pondremos en contacto contigo pronto." 
-                     : "Thanks for sharing your idea. We will review your details and get in touch with you shortly."}
+                     ? "Gracias por compartir tu idea con nosotros. Revisaremos todos los detalles y nos pondremos en contacto contigo pronto para programar tu consulta." 
+                     : "Thanks for sharing your idea with us. We'll review all the details and get in touch with you soon to schedule your consultation."}
                 </p>
-                <button onClick={() => window.location.reload()} className="mt-8 text-gray-400 text-sm underline">
-                    Close / Start Over
+                <button onClick={() => window.location.reload()} className="mt-8 text-gray-400 text-sm hover:text-gray-600 underline transition-colors">
+                    {isSpanish ? "Cerrar / Comenzar de Nuevo" : "Close / Start Over"}
                 </button>
             </div>
         );
@@ -666,6 +779,219 @@ function App() {
 
     const lang = answers.q_language || 'English';
     const isSpanish = lang === 'Spanish';
+
+    // --- RENDER PRIMARY CONFIRMATION SCREEN ---
+    if (currentData.type === 'primary_confirmation') {
+        return (
+            <div className="w-full h-full flex flex-col justify-center items-center text-center px-4">
+                <div className="mb-6 relative">
+                    <div className="mx-auto h-20 w-20 bg-blue-100 rounded-full flex items-center justify-center">
+                        <svg className="h-10 w-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
+                        </svg>
+                    </div>
+                    <div className="absolute -top-1 -right-1 h-8 w-8 bg-green-500 rounded-full flex items-center justify-center animate-ping opacity-75">
+                    </div>
+                    <div className="absolute -top-1 -right-1 h-8 w-8 bg-green-500 rounded-full flex items-center justify-center">
+                        <svg className="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 20 20">
+                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path>
+                        </svg>
+                    </div>
+                </div>
+                
+                <h2 className="text-2xl font-bold text-gray-800 mb-3">
+                    {isSpanish ? "¡Solicitud Enviada!" : "Request Submitted!"}
+                </h2>
+                
+                <p className="text-gray-600 text-base mb-6 leading-relaxed">
+                    {isSpanish 
+                        ? "Gracias por compartir tu idea de tatuaje. Hemos recibido toda la información importante." 
+                        : "Thanks for sharing your tattoo idea. We've received all the important information."}
+                </p>
+
+                <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-5 mb-6">
+                    <p className="text-sm text-gray-700 leading-relaxed">
+                        <span className="font-semibold text-blue-600">
+                            {isSpanish ? "Opcional:" : "Optional:"}
+                        </span>
+                        {" "}
+                        {isSpanish 
+                            ? "¿Tienes 30 segundos más? Responde algunas preguntas rápidas para ayudarnos a preparar mejor tu consulta." 
+                            : "Have 30 more seconds? Answer a few quick questions to help us better prepare for your consultation."}
+                    </p>
+                </div>
+
+                <div className="w-full space-y-3">
+                    <button
+                        onClick={() => triggerTransition(currentData.next)}
+                        className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all"
+                    >
+                        {isSpanish ? "Continuar (30 seg)" : "Continue (30 sec)"}
+                    </button>
+                    
+                    <button
+                        onClick={() => setIsFinished(true)}
+                        className="w-full bg-white border-2 border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition-all"
+                    >
+                        {isSpanish ? "Saltar y Terminar" : "Skip & Finish"}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // --- RENDER CONSULTATION PREFERENCE SCREEN ---
+    if (currentData.type === 'consultation-info') {
+        const artistName = technicianName || 'your artist';
+        // Prioritize medium_coverage if it exists, otherwise use tattoo_size
+        const tattooSize = answers.q_medium_coverage || answers.q_tattoo_size || '';
+        
+        // Check if it's Large or any Medium coverage option
+        const isLargeOrMedium = tattooSize === 'Large' || 
+                                 tattooSize === 'Medium, High Coverage' || 
+                                 tattooSize === 'Medium, Low Coverage';
+        
+        // For Small and Fine Line - Show message-based only with confirm button
+        if (!isLargeOrMedium) {
+            return (
+                <div className="w-full h-full flex flex-col">
+                    <div className="flex-grow flex flex-col justify-center">
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
+                            <div className="flex items-start mb-4">
+                                <div className="bg-blue-100 rounded-full p-2 mr-3">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                </div>
+                                <div className="flex-1">
+                                    <h3 className="font-bold text-gray-800 text-lg mb-2">Quick note about {artistName}</h3>
+                                    <p className="text-gray-700 text-sm leading-relaxed mb-3">
+                                        {artistName}'s primary language is Spanish. For smaller pieces like yours, we've found that message-based consultations work perfectly!
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div className="ml-11">
+                                <div className="bg-white rounded-lg p-4 border border-blue-100">
+                                    <div className="flex items-center mb-1">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 mr-2">
+                                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                        </svg>
+                                        <span className="font-semibold text-gray-800 text-sm">Message-Based Consultation</span>
+                                    </div>
+                                    <p className="text-gray-600 text-xs ml-7">
+                                        Discuss everything via text/WhatsApp. {artistName} will translate and respond thoughtfully to finalize your design.
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <p className="text-gray-700 text-sm mt-4 ml-11 font-medium">
+                                Sound good? Let's continue!
+                            </p>
+                        </div>
+                    </div>
+
+                    <div>
+                        <button
+                            onClick={() => {
+                                setAnswers(prev => ({ ...prev, consultation_preference: 'Message-Based Consultation' }));
+                                triggerTransition(currentData.next);
+                            }}
+                            className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all"
+                        >
+                            Continue
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        
+        // For Large and all Medium options - Show both options
+        return (
+            <div className="w-full h-full flex flex-col">
+                <div className="flex-grow flex flex-col justify-center">
+                    <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
+                        <div className="flex items-start mb-4">
+                            <div className="bg-blue-100 rounded-full p-2 mr-3">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
+                                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                </svg>
+                            </div>
+                            <div className="flex-1">
+                                <h3 className="font-bold text-gray-800 text-lg mb-2">Great! Quick heads up about {artistName}</h3>
+                                <p className="text-gray-700 text-sm leading-relaxed mb-3">
+                                    {artistName}'s primary language is Spanish. We work with English-speaking clients all the time and have found great success with two consultation approaches:
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <div className="space-y-3 ml-11">
+                            <div className="bg-white rounded-lg p-4 border border-blue-100">
+                                <div className="flex items-center mb-1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 mr-2">
+                                        <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
+                                        <polyline points="17 2 12 7 7 2"></polyline>
+                                    </svg>
+                                    <span className="font-semibold text-gray-800 text-sm">Video Call with Coordinator</span>
+                                </div>
+                                <p className="text-gray-600 text-xs ml-7">
+                                    A coordinator will capture your tattoo idea and relay everything to {artistName}, who reviews it before your session so they can focus fully on your design.
+                                </p>
+                            </div>
+                            
+                            <div className="bg-white rounded-lg p-4 border border-blue-100">
+                                <div className="flex items-center mb-1">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 mr-2">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                    <span className="font-semibold text-gray-800 text-sm">Message-Based Consultation</span>
+                                </div>
+                                <p className="text-gray-600 text-xs ml-7">
+                                    Discuss everything via text/WhatsApp. {artistName} will translate and respond thoughtfully.
+                                </p>
+                            </div>
+                        </div>
+                        
+                        <p className="text-gray-700 text-sm mt-4 ml-11 font-medium">
+                            Both methods work great! Which sounds better to you?
+                        </p>
+                    </div>
+                </div>
+
+                <div className="space-y-3">
+                    <button
+                        onClick={() => {
+                            setAnswers(prev => ({ ...prev, consultation_preference: 'Video Call with Coordinator' }));
+                            triggerTransition(currentData.next);
+                        }}
+                        className="w-full text-left bg-white border-2 border-gray-200 rounded-xl p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-400 transition-all shadow-sm"
+                    >
+                        <div className="flex items-center justify-between">
+                            <span>Video Call with Coordinator</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </div>
+                    </button>
+                    
+                    <button
+                        onClick={() => {
+                            setAnswers(prev => ({ ...prev, consultation_preference: 'Message-Based Consultation' }));
+                            triggerTransition(currentData.next);
+                        }}
+                        className="w-full text-left bg-white border-2 border-gray-200 rounded-xl p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-400 transition-all shadow-sm"
+                    >
+                        <div className="flex items-center justify-between">
+                            <span>Message-Based Consultation</span>
+                            <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                <polyline points="9 18 15 12 9 6"></polyline>
+                            </svg>
+                        </div>
+                    </button>
+                </div>
+            </div>
+        );
+    }
 
     // --- RENDER NATIVE UPLOAD ---
     if (currentData.type === 'native_upload_step') {
@@ -718,6 +1044,11 @@ function App() {
     if (currentData.type === 'multiple-choice-images') {
         const headline = isSpanish ? (currentData.text_es || currentData.text_en) : currentData.text_en;
         const isLanguagePage = currentQ === 'q_language';
+        const isCoveragePage = currentQ === 'q_medium_coverage' || currentQ === 'q_mediano_cobertura';
+        const isSimpleImagePage = isLanguagePage || 
+                                   currentQ === 'q_tattoo_size' || 
+                                   currentQ === 'q_tatuaje_tamano' || 
+                                   isCoveragePage;
 
         return (
             <div className="w-full">
@@ -728,7 +1059,7 @@ function App() {
                             key={i}
                             onClick={() => handleNext(opt.next, opt.value)}
                             className={
-                                (isLanguagePage || currentQ === 'q_tattoo_size' || currentQ === 'q_tatuaje_tamano') 
+                                isSimpleImagePage
                                 ? "bg-transparent border-none shadow-none rounded-xl transition-all overflow-hidden group text-left transform hover:-translate-y-1"
                                 : "bg-white rounded-xl shadow-sm border border-gray-200 hover:border-blue-500 hover:shadow-md transition-all overflow-hidden group text-left transform hover:-translate-y-1"
                             }
@@ -741,7 +1072,7 @@ function App() {
                                     onError={(e) => { e.target.onerror = null; e.target.src='https://placehold.co/400x400/CCCCCC/FFFFFF?text=Image'; }}
                                 />
                             </div>
-                            {!(isLanguagePage || currentQ === 'q_tattoo_size' || currentQ === 'q_tatuaje_tamano') && (
+                            {!isSimpleImagePage && (
                                 <div className="p-3">
                                     <span className="text-sm font-medium text-gray-800">{opt.text}</span>
                                 </div>
@@ -758,22 +1089,27 @@ function App() {
         <div className="w-full flex flex-col items-center">
              <h2 className="text-xl md:text-2xl font-bold text-gray-800 mb-6 text-center px-4">{headline}</h2>
              <div className="w-full space-y-3">
-                {currentData.options.map((opt, i) => (
-                    <button
-                        key={i}
-                        onClick={() => handleNext(opt.next, opt.value)}
-                        className="w-full text-left bg-white border border-gray-200 rounded-lg p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm"
-                    >
-                        {isSpanish ? (opt.text_es || opt.text) : opt.text} 
-                    </button>
-                ))}
+                {currentData.options.map((opt, i) => {
+                    const displayText = isSpanish ? (opt.text_es || opt.text) : opt.text;
+                    const valueToSubmit = isSpanish ? (opt.value_es || opt.value) : opt.value;
+                    
+                    return (
+                        <button
+                            key={i}
+                            onClick={() => handleNext(opt.next, valueToSubmit)}
+                            className="w-full text-left bg-white border border-gray-200 rounded-lg p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-300 hover:text-blue-700 transition-all shadow-sm"
+                        >
+                            {displayText} 
+                        </button>
+                    );
+                })}
              </div>
         </div>
     );
   };
 
   return (
-    <div className="flex items-center justify-center min-h-screen bg-gray-100 px-4 py-6">
+    <div className="flex items-center justify-center min-h-screen bg-white px-4 py-6">
        <style>{`
         @keyframes slide-in-right { 0% { transform: translateX(100%); opacity: 0; } 100% { transform: translateX(0); opacity: 1; } }
         @keyframes slide-out-left { 0% { transform: translateX(0); opacity: 1; } 100% { transform: translateX(-100%); opacity: 0; } }
@@ -799,7 +1135,7 @@ function App() {
                 {renderScreen()}
             </div>
         </div>
-        {!isFinished && !isSubmitting && history.length > 0 && (
+        {!isFinished && !isSubmitting && history.length > 0 && currentData.type !== 'primary_confirmation' && (
             <div className="p-4 border-t border-gray-100 bg-white z-10">
                 <button onClick={handleBack} className="flex items-center text-gray-400 hover:text-gray-700 transition-colors text-sm font-semibold">
                     <BackArrowIcon />
