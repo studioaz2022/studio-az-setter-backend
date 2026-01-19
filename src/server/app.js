@@ -211,9 +211,9 @@ function createApp() {
       const allowedOrigins = [
         'https://tattooshopminneapolis.com',
         'https://app.onthebusinesscrm.com', // GHL custom domain
-        'https://studiothreepierce.com',
         'http://localhost:3000',
         'http://localhost:8080',
+        'http://localhost:8888',
         'http://127.0.0.1:5500', // Common local dev server port
       ];
       

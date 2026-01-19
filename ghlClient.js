@@ -20,23 +20,28 @@ const ghl = axios.create({
 });
 
 // 🔹 Map widget custom field keys -> actual GHL custom field IDs
-// TODO: replace EACH "CF_xxx_FILL_ME" with the real ID from Settings → Custom Fields
+// These are the actual GHL field IDs from the contact API
 const CUSTOM_FIELD_MAP = {
-  language_preference: "language_preference",
-  inquired_technician: "inquired_technician",
-  whatsapp_user: "whatsapp_user",
-  tattoo_title: "tattoo_title",
-  tattoo_summary: "tattoo_summary",
-  tattoo_placement: "tattoo_placement",
-  tattoo_style: "tattoo_style",
+  language_preference: "ETxasC6QlyxRaKU18kbz",
+  inquired_technician: "H3PSN8tZSw1kYckHJN9D",
+  whatsapp_user: "FnYDobmYqnXDxlLJY5oe",
+  tattoo_title: "8JqgdVJraABsqgUeqJ3a", // "Lower forearm vine warp. Fillers for patch half"
+  tattoo_summary: "xAGtMfmbxtfCHdo2oyf7", // "Realistic vine with "
+  tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
+  tattoo_style: "12b2O4ydlfO99FA4yCuk",
   // Canonical CRM key (was size_of_tattoo historically)
-  tattoo_size: "tattoo_size",
-  tattoo_color_preference: "tattoo_color_preference",
-  how_soon_is_client_deciding: "how_soon_is_client_deciding",
-  first_tattoo: "first_tattoo",
-  tattoo_concerns: "tattoo_concerns",
-  tattoo_photo_description: "tattoo_photo_description",
+  tattoo_size: "KXtfZYdeSKUyS5llTKsr",
+  tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
+  how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
+  first_tattoo: "QqDydmY1fnldidlcMnBC",
+  tattoo_concerns: "tattoo_concerns", // TODO: Get actual ID if this field exists
+  tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
 };
+
+// 🔹 Reverse mapping: GHL field ID -> friendly name (for reading from GHL)
+const GHL_FIELD_ID_TO_NAME = Object.fromEntries(
+  Object.entries(CUSTOM_FIELD_MAP).map(([name, id]) => [id.toLowerCase(), name])
+);
 
 // 🔹 System fields for AI Setter state tracking
 const SYSTEM_FIELD_MAP = Object.values(SYSTEM_FIELDS || {}).reduce((acc, fieldId) => {

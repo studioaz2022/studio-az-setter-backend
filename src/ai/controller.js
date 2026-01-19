@@ -143,16 +143,45 @@ async function handleInboundMessage({
     const isSpanish = String(languagePreference).toLowerCase().includes("span") || 
                       String(languagePreference).toLowerCase() === "es";
     
+    // Build acknowledgment of tattoo details if available
+    const firstName = effectiveContact?.firstName || effectiveContact?.first_name || "";
+    const tattooTitle = canonicalBefore.tattooTitle;
+    const tattooPlacement = canonicalBefore.tattooPlacement;
+    const tattooSummary = canonicalBefore.tattooSummary;
+    
+    let acknowledgment = "";
+    // Use tattooSummary (one-sentence description) for acknowledgment, fall back to tattooTitle
+    const tattooDesc = (tattooSummary || tattooTitle || "").trim();
+    if (tattooDesc && tattooPlacement) {
+      // If we have both description and placement, format nicely
+      if (firstName) {
+        acknowledgment = `Hey ${firstName} — ${tattooDesc} on ${tattooPlacement} sounds solid.\n\n`;
+      } else {
+        acknowledgment = `${tattooDesc} on ${tattooPlacement} sounds solid.\n\n`;
+      }
+    } else if (tattooDesc) {
+      // Just description, no placement
+      if (firstName) {
+        acknowledgment = `Hey ${firstName} — ${tattooDesc} sounds solid.\n\n`;
+      } else {
+        acknowledgment = `${tattooDesc} sounds solid.\n\n`;
+      }
+    } else if (firstName) {
+      acknowledgment = `Hey ${firstName} — `;
+    }
+    
     let consultOptionsMessage = "";
     
     if (isSpanish) {
       // Spanish-speaking leads get simple choice
       consultOptionsMessage = 
+        acknowledgment +
         "El siguiente paso es una consulta rápida de 15-20 minutos con el artista para entender completamente tu diseño.\n\n" +
         "¿Prefieres una videollamada o hacerlo por mensajes?";
     } else {
       // English leads get the full explanation with translator context
       consultOptionsMessage = 
+        acknowledgment +
         "Since our artist's native language is Spanish, our clients either do a video call with a translator or message the artist directly about their idea.\n\n" +
         "Both options have worked great — which do you prefer?";
     }

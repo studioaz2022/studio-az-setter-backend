@@ -272,15 +272,15 @@ const surveyFlow = {
             showIf: 'has_reference_photos' 
         },
       ],
-      next: 'submit_primary'
+      next: 'primary_confirmation'
     },
     
     // --- PRIMARY SUBMISSION CONFIRMATION ---
     'primary_confirmation': {
       stepIndex: 9,
       type: 'primary_confirmation',
-      title_en: "Request Submitted!",
-      title_es: "¡Solicitud Enviada!",
+      title_en: "Ready to Submit!",
+      title_es: "¡Listo para Enviar!",
       next: 'q_budget_range'
     },
     
@@ -782,58 +782,63 @@ function App() {
 
     // --- RENDER PRIMARY CONFIRMATION SCREEN ---
     if (currentData.type === 'primary_confirmation') {
+        const handlePrimarySubmitAndContinue = async () => {
+            // Submit primary lead with photos
+            await submitFinalLead(answers, true);
+            // Then transition to secondary questions
+            triggerTransition(currentData.next);
+        };
+        
+        const handlePrimarySubmitAndFinish = async () => {
+            // Submit primary lead with photos
+            await submitFinalLead(answers, false);
+        };
+        
         return (
             <div className="w-full h-full flex flex-col justify-center items-center text-center px-4">
                 <div className="mb-6 relative">
                     <div className="mx-auto h-20 w-20 bg-blue-100 rounded-full flex items-center justify-center">
                         <svg className="h-10 w-10 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M5 13l4 4L19 7"></path>
-                        </svg>
-                    </div>
-                    <div className="absolute -top-1 -right-1 h-8 w-8 bg-green-500 rounded-full flex items-center justify-center animate-ping opacity-75">
-                    </div>
-                    <div className="absolute -top-1 -right-1 h-8 w-8 bg-green-500 rounded-full flex items-center justify-center">
-                        <svg className="h-4 w-4 text-white" fill="currentColor" viewBox="0 0 20 20">
-                            <path fillRule="evenodd" d="M16.707 5.293a1 1 0 010 1.414l-8 8a1 1 0 01-1.414 0l-4-4a1 1 0 011.414-1.414L8 12.586l7.293-7.293a1 1 0 011.414 0z" clipRule="evenodd"></path>
+                            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
                         </svg>
                     </div>
                 </div>
                 
                 <h2 className="text-2xl font-bold text-gray-800 mb-3">
-                    {isSpanish ? "¡Solicitud Enviada!" : "Request Submitted!"}
+                    {isSpanish ? "¡Casi Terminamos!" : "Almost Done!"}
                 </h2>
                 
                 <p className="text-gray-600 text-base mb-6 leading-relaxed">
                     {isSpanish 
-                        ? "Gracias por compartir tu idea de tatuaje. Hemos recibido toda la información importante." 
-                        : "Thanks for sharing your tattoo idea. We've received all the important information."}
+                        ? "Gracias por compartir tu idea de tatuaje con nosotros." 
+                        : "Thanks for sharing your tattoo idea with us."}
                 </p>
 
                 <div className="w-full bg-blue-50 border border-blue-200 rounded-xl p-5 mb-6">
                     <p className="text-sm text-gray-700 leading-relaxed">
                         <span className="font-semibold text-blue-600">
-                            {isSpanish ? "Opcional:" : "Optional:"}
+                            {isSpanish ? "Ayúdanos más:" : "Help us prepare:"}
                         </span>
                         {" "}
                         {isSpanish 
-                            ? "¿Tienes 30 segundos más? Responde algunas preguntas rápidas para ayudarnos a preparar mejor tu consulta." 
-                            : "Have 30 more seconds? Answer a few quick questions to help us better prepare for your consultation."}
+                            ? "¿Tienes 30 segundos más? Unas preguntas rápidas nos ayudan a preparar mejor tu consulta (¡incluye presupuesto!)." 
+                            : "Have 30 more seconds? A few quick questions help us better prepare your consultation (including budget!)."}
                     </p>
                 </div>
 
                 <div className="w-full space-y-3">
                     <button
-                        onClick={() => triggerTransition(currentData.next)}
+                        onClick={handlePrimarySubmitAndContinue}
                         className="w-full bg-blue-600 text-white font-bold py-3.5 rounded-xl shadow-lg hover:bg-blue-700 transform active:scale-95 transition-all"
                     >
                         {isSpanish ? "Continuar (30 seg)" : "Continue (30 sec)"}
                     </button>
                     
                     <button
-                        onClick={() => setIsFinished(true)}
+                        onClick={handlePrimarySubmitAndFinish}
                         className="w-full bg-white border-2 border-gray-200 text-gray-700 font-medium py-3 rounded-xl hover:bg-gray-50 transition-all"
                     >
-                        {isSpanish ? "Saltar y Terminar" : "Skip & Finish"}
+                        {isSpanish ? "Terminar Ahora" : "Finish Now"}
                     </button>
                 </div>
             </div>

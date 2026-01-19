@@ -1,5 +1,39 @@
 const { SYSTEM_FIELDS, TATTOO_FIELDS } = require("../config/constants");
 
+// Import reverse mapping from ghlClient (will be set after ghlClient loads)
+let GHL_FIELD_ID_TO_NAME = {};
+
+// Lazy load the reverse mapping to avoid circular dependencies
+function getGhlFieldIdMapping() {
+  if (Object.keys(GHL_FIELD_ID_TO_NAME).length === 0) {
+    try {
+      // Try to get it from ghlClient - it exports CUSTOM_FIELD_MAP which we can reverse
+      const ghlClient = require("../../ghlClient");
+      // The reverse mapping is created in ghlClient, but we'll create it here to avoid circular deps
+      // Actually, let's just create it inline based on known mappings
+      const knownMappings = {
+        "etxasc6qlyxraku18kbz": "language_preference",
+        "h3psn8tzsw1kyckhjn9d": "inquired_technician",
+        "fnydobmyqnxdxlljy5oe": "whatsapp_user",
+        "8jqgdvjraabsqgueqj3a": "tattoo_title", // "Lower forearm vine warp. Fillers for patch half"
+        "xagtmfmbxtfchdo2oyf7": "tattoo_summary", // "Realistic vine with "
+        "jd8yhvksbi4agqjqoeov": "tattoo_placement",
+        "12b2o4ydlfo99fa4ycuk": "tattoo_style",
+        "kxtfzydeskuys5lltksr": "tattoo_size",
+        "szyropmdmcitudhhb8dd": "tattoo_color_preference",
+        "ra4nk80wma8eqklcfxst": "how_soon_is_client_deciding",
+        "qqdydmy1fnldidlcmnbc": "first_tattoo",
+        "ptrjy8tbbjlnrwqepdnp": "tattoo_photo_description",
+      };
+      GHL_FIELD_ID_TO_NAME = knownMappings;
+    } catch (err) {
+      // If ghlClient isn't available, use empty mapping
+      console.warn("Could not load GHL field ID mapping:", err.message);
+    }
+  }
+  return GHL_FIELD_ID_TO_NAME;
+}
+
 /**
  * Normalize display name to snake_case key.
  * "Tattoo Placement" -> "tattoo_placement"
@@ -29,6 +63,7 @@ function normalizeCustomFields(cfRaw) {
 
   // Check if it's an array
   if (Array.isArray(cfRaw)) {
+    const idMapping = getGhlFieldIdMapping();
     for (const entry of cfRaw) {
       if (!entry) continue;
       const key =
@@ -38,8 +73,16 @@ function normalizeCustomFields(cfRaw) {
         entry.customFieldId ||
         entry.id;
       if (key && entry.value !== undefined) {
-        const snakeKey = normalizeDisplayName(String(key));
-        normalized[snakeKey || key] = entry.value;
+        const keyLower = String(key).toLowerCase();
+        // First try to map GHL field ID to friendly name
+        const friendlyName = idMapping[keyLower];
+        if (friendlyName) {
+          normalized[friendlyName] = entry.value;
+        } else {
+          // Fall back to normalizing display name
+          const snakeKey = normalizeDisplayName(String(key));
+          normalized[snakeKey || key] = entry.value;
+        }
       }
     }
     return normalized;
@@ -50,6 +93,7 @@ function normalizeCustomFields(cfRaw) {
   const isArrayLike = keys.length > 0 && keys.every((k) => /^\d+$/.test(k));
 
   if (isArrayLike) {
+    const idMapping = getGhlFieldIdMapping();
     for (const key of keys) {
       const entry = cfRaw[key];
       if (!entry || typeof entry !== "object") continue;
@@ -60,25 +104,42 @@ function normalizeCustomFields(cfRaw) {
         entry.customFieldId ||
         entry.id;
       if (fieldKey && entry.value !== undefined) {
-        const snakeKey = normalizeDisplayName(String(fieldKey));
-        normalized[snakeKey || fieldKey] = entry.value;
+        const fieldKeyLower = String(fieldKey).toLowerCase();
+        // First try to map GHL field ID to friendly name
+        const friendlyName = idMapping[fieldKeyLower];
+        if (friendlyName) {
+          normalized[friendlyName] = entry.value;
+        } else {
+          // Fall back to normalizing display name
+          const snakeKey = normalizeDisplayName(String(fieldKey));
+          normalized[snakeKey || fieldKey] = entry.value;
+        }
       }
     }
     return normalized;
   }
 
   // It's a regular object - normalize display name keys to snake_case
+  const idMapping = getGhlFieldIdMapping();
   for (const [key, value] of Object.entries(cfRaw)) {
     if (value === undefined || value === null || value === "") continue;
 
     // Skip nested objects (like location, contact, etc.)
     if (typeof value === "object" && !Array.isArray(value)) continue;
 
-    const snakeKey = normalizeDisplayName(key);
-    if (snakeKey) {
-      normalized[snakeKey] = value;
+    const keyLower = String(key).toLowerCase();
+    // First try to map GHL field ID to friendly name
+    const friendlyName = idMapping[keyLower];
+    if (friendlyName) {
+      normalized[friendlyName] = value;
     } else {
-      normalized[key] = value;
+      // Fall back to normalizing display name
+      const snakeKey = normalizeDisplayName(key);
+      if (snakeKey) {
+        normalized[snakeKey] = value;
+      } else {
+        normalized[key] = value;
+      }
     }
   }
 
