@@ -206,6 +206,8 @@ function createApp() {
   app.use(cors({
     origin: [
       'https://tattooshopminneapolis.com',
+      'https://app.onthebusinesscrm.com', // GHL custom domain
+      'https://studiothreepierce.com',
       'http://localhost:3000',
       'http://localhost:8080',
       'http://127.0.0.1:5500', // Common local dev server port
@@ -345,6 +347,43 @@ function createApp() {
       return res.status(200).json({ ok: true, contactId });
     } catch (err) {
       console.error("❌ /lead/final error:", err.message || err);
+      return res.status(500).json({ ok: false, error: err.message });
+    }
+  });
+
+  app.post("/lead/update", async (req, res) => {
+    try {
+      console.log("\n📝 ════════════════════════════════════════════════════════");
+      console.log("📝 LEAD UPDATE (SECONDARY QUESTIONS)");
+      console.log("📝 ════════════════════════════════════════════════════════");
+
+      const { email, customFields } = req.body || {};
+      console.log("📦 Update payload:", JSON.stringify(filterNonEmpty(req.body), null, 2));
+
+      if (!email) {
+        return res.status(400).json({ ok: false, error: "Email required" });
+      }
+
+      // Look up contact by email
+      const contactId = await lookupContactIdByEmailOrPhone(email, null);
+      
+      if (!contactId) {
+        console.error("❌ Contact not found for email:", email);
+        return res.status(404).json({ ok: false, error: "Contact not found" });
+      }
+
+      console.log(`👤 Found contact: ${contactId}`);
+
+      // Update the custom fields
+      if (customFields && Object.keys(customFields).length > 0) {
+        await updateTattooFields(contactId, customFields);
+        console.log("✅ Updated custom fields:", Object.keys(customFields));
+      }
+
+      console.log("📝 ════════════════════════════════════════════════════════\n");
+      return res.status(200).json({ ok: true, contactId });
+    } catch (err) {
+      console.error("❌ /lead/update error:", err.message || err);
       return res.status(500).json({ ok: false, error: err.message });
     }
   });
