@@ -204,14 +204,25 @@ function createApp() {
 
   // CORS configuration - allow requests from frontend domain
   app.use(cors({
-    origin: [
-      'https://tattooshopminneapolis.com',
-      'https://app.onthebusinesscrm.com', // GHL custom domain
-      'https://studiothreepierce.com',
-      'http://localhost:3000',
-      'http://localhost:8080',
-      'http://127.0.0.1:5500', // Common local dev server port
-    ],
+    origin: function (origin, callback) {
+      // Allow requests with no origin (like GHL embeds, mobile apps, iframes with sandbox)
+      if (!origin) return callback(null, true);
+      
+      const allowedOrigins = [
+        'https://tattooshopminneapolis.com',
+        'https://app.onthebusinesscrm.com', // GHL custom domain
+        'https://studiothreepierce.com',
+        'http://localhost:3000',
+        'http://localhost:8080',
+        'http://127.0.0.1:5500', // Common local dev server port
+      ];
+      
+      if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization'],
