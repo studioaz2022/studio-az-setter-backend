@@ -853,13 +853,12 @@ function App() {
         // Prioritize medium_coverage if it exists, otherwise use tattoo_size
         const tattooSize = answers.q_medium_coverage || answers.q_tattoo_size || '';
         
-        // Check if it's Large or any Medium coverage option
-        const isLargeOrMedium = tattooSize === 'Large' || 
-                                 tattooSize === 'Medium, High Coverage' || 
-                                 tattooSize === 'Medium, Low Coverage';
+        const isMedium = tattooSize === 'Medium, High Coverage' || tattooSize === 'Medium, Low Coverage';
+        const isLarge = tattooSize === 'Large';
+        const isSmallOrFineLine = !isMedium && !isLarge; // Small or Fine Line
         
-        // For Small and Fine Line - Show message-based only with confirm button
-        if (!isLargeOrMedium) {
+        // For Small and Fine Line - Message-Based Consultation only
+        if (isSmallOrFineLine) {
             return (
                 <div className="w-full h-full flex flex-col">
                     <div className="flex-grow flex flex-col justify-center">
@@ -913,7 +912,95 @@ function App() {
             );
         }
         
-        // For Large and all Medium options - Show both options
+        // For Medium tattoos - Video Call with Coordinator only
+        if (isMedium) {
+            return (
+                <div className="w-full h-full flex flex-col">
+                    <div className="flex-grow flex flex-col justify-center">
+                        <div className="bg-blue-50 border border-blue-200 rounded-xl p-6 mb-6">
+                            <div className="flex items-start mb-4">
+                                <div className="bg-blue-100 rounded-full p-2 mr-3">
+                                    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600">
+                                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                    </svg>
+                                </div>
+                                <div className="flex-1">
+                                    <h3 className="font-bold text-gray-800 text-lg mb-2">Great! Quick heads up about {artistName}</h3>
+                                    <p className="text-gray-700 text-sm leading-relaxed mb-3">
+                                        {artistName}'s primary language is Spanish. We work with English-speaking clients all the time and have found great success with two consultation approaches:
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <div className="space-y-3 ml-11">
+                                <div className="bg-white rounded-lg p-4 border border-blue-100">
+                                    <div className="flex items-center mb-1">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 mr-2">
+                                            <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
+                                            <polyline points="17 2 12 7 7 2"></polyline>
+                                        </svg>
+                                        <span className="font-semibold text-gray-800 text-sm">Video Call with Coordinator</span>
+                                    </div>
+                                    <p className="text-gray-600 text-xs ml-7">
+                                        A coordinator will capture your tattoo idea and relay everything to {artistName}, who reviews it before your session so they can focus fully on your design.
+                                    </p>
+                                </div>
+                                
+                                <div className="bg-white rounded-lg p-4 border border-blue-100">
+                                    <div className="flex items-center mb-1">
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-blue-600 mr-2">
+                                            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                                        </svg>
+                                        <span className="font-semibold text-gray-800 text-sm">Message-Based Consultation</span>
+                                    </div>
+                                    <p className="text-gray-600 text-xs ml-7">
+                                        Discuss everything via text/WhatsApp. {artistName} will translate and respond thoughtfully.
+                                    </p>
+                                </div>
+                            </div>
+                            
+                            <p className="text-gray-700 text-sm mt-4 ml-11 font-medium">
+                                Both methods work great! Which sounds better to you?
+                            </p>
+                        </div>
+                    </div>
+
+                    <div className="space-y-3">
+                        <button
+                            onClick={() => {
+                                setAnswers(prev => ({ ...prev, consultation_preference: 'Video Call with Coordinator' }));
+                                triggerTransition(currentData.next);
+                            }}
+                            className="w-full text-left bg-white border-2 border-gray-200 rounded-xl p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-400 transition-all shadow-sm"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span>Video Call with Coordinator</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                    <polyline points="9 18 15 12 9 6"></polyline>
+                                </svg>
+                            </div>
+                        </button>
+                        
+                        <button
+                            onClick={() => {
+                                setAnswers(prev => ({ ...prev, consultation_preference: 'Message-Based Consultation' }));
+                                triggerTransition(currentData.next);
+                            }}
+                            className="w-full text-left bg-white border-2 border-gray-200 rounded-xl p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-400 transition-all shadow-sm"
+                        >
+                            <div className="flex items-center justify-between">
+                                <span>Message-Based Consultation</span>
+                                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
+                                    <polyline points="9 18 15 12 9 6"></polyline>
+                                </svg>
+                            </div>
+                        </button>
+                    </div>
+                </div>
+            );
+        }
+        
+        // For Large tattoos - Show Video Call with Translator and Message-Based options
         return (
             <div className="w-full h-full flex flex-col">
                 <div className="flex-grow flex flex-col justify-center">
@@ -925,9 +1012,9 @@ function App() {
                                 </svg>
                             </div>
                             <div className="flex-1">
-                                <h3 className="font-bold text-gray-800 text-lg mb-2">Great! Quick heads up about {artistName}</h3>
+                                <h3 className="font-bold text-gray-800 text-lg mb-2">Perfect! Quick heads up about {artistName}</h3>
                                 <p className="text-gray-700 text-sm leading-relaxed mb-3">
-                                    {artistName}'s primary language is Spanish. We work with English-speaking clients all the time and have found great success with two consultation approaches:
+                                    {artistName}'s primary language is Spanish. For larger pieces like yours, we work with English-speaking clients all the time and have found great success with two consultation approaches:
                                 </p>
                             </div>
                         </div>
@@ -939,10 +1026,10 @@ function App() {
                                         <rect x="2" y="7" width="20" height="15" rx="2" ry="2"></rect>
                                         <polyline points="17 2 12 7 7 2"></polyline>
                                     </svg>
-                                    <span className="font-semibold text-gray-800 text-sm">Video Call with Coordinator</span>
+                                    <span className="font-semibold text-gray-800 text-sm">Video Call with Translator</span>
                                 </div>
                                 <p className="text-gray-600 text-xs ml-7">
-                                    A coordinator will capture your tattoo idea and relay everything to {artistName}, who reviews it before your session so they can focus fully on your design.
+                                    Meet directly with {artistName} via video call, with someone from our team joining live to translate between English and Spanish so you can discuss every detail together.
                                 </p>
                             </div>
                             
@@ -954,7 +1041,7 @@ function App() {
                                     <span className="font-semibold text-gray-800 text-sm">Message-Based Consultation</span>
                                 </div>
                                 <p className="text-gray-600 text-xs ml-7">
-                                    Discuss everything via text/WhatsApp. {artistName} will translate and respond thoughtfully.
+                                    Discuss everything via text/WhatsApp. {artistName} will translate and respond thoughtfully to plan your large piece.
                                 </p>
                             </div>
                         </div>
@@ -968,13 +1055,13 @@ function App() {
                 <div className="space-y-3">
                     <button
                         onClick={() => {
-                            setAnswers(prev => ({ ...prev, consultation_preference: 'Video Call with Coordinator' }));
+                            setAnswers(prev => ({ ...prev, consultation_preference: 'Video Call with Translator' }));
                             triggerTransition(currentData.next);
                         }}
                         className="w-full text-left bg-white border-2 border-gray-200 rounded-xl p-4 text-gray-800 font-medium hover:bg-blue-50 hover:border-blue-400 transition-all shadow-sm"
                     >
                         <div className="flex items-center justify-between">
-                            <span>Video Call with Coordinator</span>
+                            <span>Video Call with Translator</span>
                             <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-gray-400">
                                 <polyline points="9 18 15 12 9 6"></polyline>
                             </svg>
