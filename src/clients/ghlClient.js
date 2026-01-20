@@ -3,8 +3,8 @@ require("dotenv").config();
 // ghlClient.js
 const axios = require("axios");
 const FormData = require("form-data");
-const { cleanLogObject, COMPACT_MODE, shortId } = require("./src/utils/logger");
-const { SYSTEM_FIELDS } = require("./src/config/constants");
+const { cleanLogObject, COMPACT_MODE, shortId } = require("../utils/logger");
+const { SYSTEM_FIELDS } = require("../config/constants");
 
 const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
