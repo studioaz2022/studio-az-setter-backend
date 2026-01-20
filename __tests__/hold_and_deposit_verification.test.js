@@ -50,7 +50,7 @@ const { detectIntents } = require("../src/ai/intents");
 const { buildDeterministicResponse } = require("../src/ai/deterministicResponses");
 const { createConsultAppointment } = require("../src/ai/bookingController");
 const { createDepositLinkForContact } = require("../src/payments/squareClient");
-const { updateSystemFields } = require("../ghlClient");
+const { updateSystemFields } = require("../src/clients/ghlClient");
 const { createAppointment } = require("../src/clients/ghlCalendarClient");
 
 describe("Hold and Deposit Link Verification", () => {

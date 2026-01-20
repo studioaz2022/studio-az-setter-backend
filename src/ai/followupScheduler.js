@@ -1,7 +1,7 @@
 // followupScheduler.js
 // Automated follow-up cadence system for leads
 
-const { getContact, updateSystemFields, sendConversationMessage } = require("../../ghlClient");
+const { getContact, updateSystemFields, sendConversationMessage } = require("../clients/ghlClient");
 const { generateOpenerForContact } = require("./aiClient");
 const { LEAD_TEMPERATURES, SYSTEM_FIELDS, AI_PHASES, CALENDARS, HOLD_CONFIG, APPOINTMENT_STATUS } = require("../config/constants");
 const { buildCanonicalState, derivePhaseFromFields, computeLastSeenDiff } = require("./phaseContract");

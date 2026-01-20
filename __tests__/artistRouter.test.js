@@ -13,7 +13,7 @@ jest.mock("../src/clients/ghlOpportunityClient", () => ({
 }));
 
 const { searchOpportunities } = require("../src/clients/ghlOpportunityClient");
-const { getContact } = require("../ghlClient");
+const { getContact } = require("../src/clients/ghlClient");
 
 describe("refreshArtistWorkloads", () => {
   const stageIdFor = (stageKey) => PIPELINE_STAGE_CONFIG[stageKey].id;

@@ -112,7 +112,7 @@ jest.mock("../src/ai/aiClient", () => ({
 
 const { handleInboundMessage } = require("../src/ai/controller");
 const { buildCanonicalState } = require("../src/ai/phaseContract");
-const { sendConversationMessage } = require("../ghlClient");
+const { sendConversationMessage } = require("../src/clients/ghlClient");
 
 // Mock state storage
 const mockFieldUpdates = {};

@@ -1,7 +1,7 @@
 require("dotenv").config();
 
 // Mock sendConversationMessage BEFORE importing controller (which imports it)
-const ghlClient = require("./src/clients/ghlClient");
+const ghlClient = require("../src/clients/ghlClient");
 const sentMessages = [];
 const originalSendMessage = ghlClient.sendConversationMessage;
 ghlClient.sendConversationMessage = async function(params) {
@@ -17,11 +17,11 @@ ghlClient.sendConversationMessage = async function(params) {
 };
 
 // Now import controller (it will use the mocked function)
-const { getContact, getConversationHistory } = require("./src/clients/ghlClient");
-const { handleInboundMessage } = require("./src/ai/controller");
-const { extractCustomFieldsFromPayload, buildEffectiveContact, formatThreadForLLM, normalizeCustomFields } = require("./src/ai/contextBuilder");
-const { buildCanonicalState } = require("./src/ai/phaseContract");
-const { TATTOO_FIELDS } = require("./src/config/constants");
+const { getContact, getConversationHistory } = require("../src/clients/ghlClient");
+const { handleInboundMessage } = require("../src/ai/controller");
+const { extractCustomFieldsFromPayload, buildEffectiveContact, formatThreadForLLM, normalizeCustomFields } = require("../src/ai/contextBuilder");
+const { buildCanonicalState } = require("../src/ai/phaseContract");
+const { TATTOO_FIELDS } = require("../src/config/constants");
 
 async function simulateAIResponse(contactId, messageText = "New form submission") {
   console.log("\n🤖 ════════════════════════════════════════════════════════");

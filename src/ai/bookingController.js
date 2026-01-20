@@ -2,7 +2,7 @@
 // Handles appointment booking orchestration
 
 const crypto = require("crypto");
-const { getContact, updateContact, updateSystemFields } = require("../../ghlClient");
+const { getContact, updateContact, updateSystemFields } = require("../clients/ghlClient");
 const {
   determineArtist,
   getCalendarIdForArtist,
@@ -27,7 +27,7 @@ const {
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
 } = require("../config/constants");
-const { sendConversationMessage } = require("../../ghlClient");
+const { sendConversationMessage } = require("../clients/ghlClient");
 const { boolField, normalizeCustomFields } = require("./opportunityManager");
 
 // Active artists for time-first slot generation

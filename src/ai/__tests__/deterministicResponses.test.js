@@ -26,7 +26,7 @@ jest.mock("../../clients/ghlCalendarClient", () => ({
 }));
 
 const { buildDeterministicResponse } = require("../deterministicResponses");
-const { updateSystemFields } = require("../../../ghlClient");
+const { updateSystemFields } = require("../../clients/ghlClient");
 const {
   generateSuggestedSlots,
   getAvailableSlots,

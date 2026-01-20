@@ -6,11 +6,11 @@
 // Lead message → Intent Detection → Objection Context Injection → LLM Call → Response
 
 require("dotenv").config();
-const { generateOpenerForContact } = require("./src/ai/aiClient");
-const { detectIntents } = require("./src/ai/intents");
-const { buildCanonicalState } = require("./src/ai/phaseContract");
-const { buildContactProfile } = require("./src/ai/contextBuilder");
-const { detectObjection, getObjectionIds } = require("./src/prompts/objectionLibrary");
+const { generateOpenerForContact } = require("../src/ai/aiClient");
+const { detectIntents } = require("../src/ai/intents");
+const { buildCanonicalState } = require("../src/ai/phaseContract");
+const { buildContactProfile } = require("../src/ai/contextBuilder");
+const { detectObjection, getObjectionIds } = require("../src/prompts/objectionLibrary");
 
 // Simulate a contact with some basic info
 const mockContact = {

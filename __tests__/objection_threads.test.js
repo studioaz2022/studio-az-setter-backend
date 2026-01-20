@@ -3,11 +3,11 @@
 // Run with: node objection_threads_test.js
 
 require("dotenv").config();
-const { generateOpenerForContact } = require("./src/ai/aiClient");
-const { detectIntents } = require("./src/ai/intents");
-const { buildCanonicalState } = require("./src/ai/phaseContract");
-const { buildContactProfile } = require("./src/ai/contextBuilder");
-const { detectObjection } = require("./src/prompts/objectionLibrary");
+const { generateOpenerForContact } = require("../src/ai/aiClient");
+const { detectIntents } = require("../src/ai/intents");
+const { buildCanonicalState } = require("../src/ai/phaseContract");
+const { buildContactProfile } = require("../src/ai/contextBuilder");
+const { detectObjection } = require("../src/prompts/objectionLibrary");
 
 // Extended conversation scenarios with objections
 const conversationScenarios = [

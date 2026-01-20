@@ -1,7 +1,7 @@
 // consultPathHandler.js
 // Helpers to detect and route consultation path preferences (Message vs Video w/ translator)
 
-const { updateSystemFields, createTaskForContact, addTranslatorAsFollower } = require("../../ghlClient");
+const { updateSystemFields, createTaskForContact, addTranslatorAsFollower } = require("../clients/ghlClient");
 const { syncOpportunityStageFromContact, transitionToStage } = require("./opportunityManager");
 const { createDepositLinkForContact } = require("../payments/squareClient");
 const { DEPOSIT_CONFIG, OPPORTUNITY_STAGES } = require("../config/constants");

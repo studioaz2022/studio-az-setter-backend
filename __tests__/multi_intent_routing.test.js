@@ -64,7 +64,7 @@ const { detectIntents } = require("../src/ai/intents");
 const { handlePathChoice } = require("../src/ai/consultPathHandler");
 const { shouldHardSkipAI } = require("../src/ai/hardSkip");
 const { buildDeterministicResponse } = require("../src/ai/deterministicResponses");
-const { updateSystemFields } = require("../ghlClient");
+const { updateSystemFields } = require("../src/clients/ghlClient");
 
 describe("Multi-intent routing: 'Video call this week—what times?'", () => {
   test("updates consult choice and returns slots", async () => {

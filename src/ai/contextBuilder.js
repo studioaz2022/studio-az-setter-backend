@@ -8,7 +8,7 @@ function getGhlFieldIdMapping() {
   if (Object.keys(GHL_FIELD_ID_TO_NAME).length === 0) {
     try {
       // Try to get it from ghlClient - it exports CUSTOM_FIELD_MAP which we can reverse
-      const ghlClient = require("../../ghlClient");
+      const ghlClient = require("../clients/ghlClient");
       // The reverse mapping is created in ghlClient, but we'll create it here to avoid circular deps
       // Actually, let's just create it inline based on known mappings
       const knownMappings = {

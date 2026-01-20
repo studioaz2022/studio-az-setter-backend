@@ -1,9 +1,9 @@
 // routing_demo.js
 // Demonstrates routing decision logic for 5 example messages
 
-const { detectIntents } = require("./src/ai/intents");
-const { detectPathChoice } = require("./src/ai/consultPathHandler");
-const { isTimeSelection } = require("./src/ai/bookingController");
+const { detectIntents } = require("../src/ai/intents");
+const { detectPathChoice } = require("../src/ai/consultPathHandler");
+const { isTimeSelection } = require("../src/ai/bookingController");
 
 // Mock AI meta flags (what the AI would return)
 const mockAIMeta = {

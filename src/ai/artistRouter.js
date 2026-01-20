@@ -6,7 +6,7 @@ const {
   updateSystemFields,
   updateTattooFields,
   updateContactAssignedUser,
-} = require("../../ghlClient");
+} = require("../clients/ghlClient");
 const {
   SYSTEM_FIELDS,
   TATTOO_FIELDS,

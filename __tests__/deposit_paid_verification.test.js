@@ -50,7 +50,7 @@ jest.mock("../src/ai/bookingController", () => ({
 const { detectIntents } = require("../src/ai/intents");
 const { buildDeterministicResponse } = require("../src/ai/deterministicResponses");
 const { createDepositLinkForContact } = require("../src/payments/squareClient");
-const { updateSystemFields } = require("../ghlClient");
+const { updateSystemFields } = require("../src/clients/ghlClient");
 
 describe("Deposit Paid Verification: 'send link' after payment", () => {
   beforeEach(() => {

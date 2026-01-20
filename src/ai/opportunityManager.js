@@ -1,4 +1,4 @@
-const { getContact, updateSystemFields, getConversationHistory } = require("../../ghlClient");
+const { getContact, updateSystemFields, getConversationHistory } = require("../clients/ghlClient");
 const {
   upsertOpportunity,
   updateOpportunityStage,
@@ -196,7 +196,7 @@ async function transitionToStage(contactId, stageKey, options = {}) {
       setTimeout(async () => {
         try {
           const { generateComprehensiveConversationSummary: genSummary, appendToConversationHistory: appendSummary } = require("./contextBuilder");
-          const { getConversationHistory: getHistory } = require("../../ghlClient");
+          const { getConversationHistory: getHistory } = require("../clients/ghlClient");
           
           const cf = contact?.customField || contact?.customFields || {};
           

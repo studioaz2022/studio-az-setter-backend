@@ -2,9 +2,9 @@
 // Activity-based hold lifecycle management (warning + release) per addendum.
 
 const { updateAppointmentStatus } = require("../clients/ghlCalendarClient");
-const { updateSystemFields } = require("../../ghlClient");
+const { updateSystemFields } = require("../clients/ghlClient");
 const { APPOINTMENT_STATUS } = require("../config/constants");
-const { sendConversationMessage } = require("../../ghlClient");
+const { sendConversationMessage } = require("../clients/ghlClient");
 
 function buildChannelContext(contact = {}) {
   const hasPhone = !!(contact.phone || contact.phoneNumber);

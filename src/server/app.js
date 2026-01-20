@@ -16,7 +16,7 @@ const {
   uploadFilesToTattooCustomField,
   assignContactToArtist,
   addTranslatorAsFollower,
-} = require("../../ghlClient");
+} = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { getContactIdFromOrder } = require("../payments/squareClient");
 const {

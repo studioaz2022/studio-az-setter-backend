@@ -11,7 +11,7 @@ jest.mock("../src/clients/ghlCalendarClient", () => ({
 }));
 
 const { evaluateHoldState } = require("../src/ai/holdLifecycle");
-const { updateSystemFields, sendConversationMessage } = require("../ghlClient");
+const { updateSystemFields, sendConversationMessage } = require("../src/clients/ghlClient");
 const { updateAppointmentStatus } = require("../src/clients/ghlCalendarClient");
 
 describe("Hold Lifecycle Verification: Warning + Release", () => {

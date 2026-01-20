@@ -24,7 +24,7 @@ const {
   createContact,
   updateContact,
   lookupContactIdByEmailOrPhone,
-} = require("../ghlClient");
+} = require("../src/clients/ghlClient");
 const { getContactIdFromOrder } = require("../src/payments/squareClient");
 const { createApp } = require("../src/server/app");
 

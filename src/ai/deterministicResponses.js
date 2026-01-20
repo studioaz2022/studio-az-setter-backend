@@ -10,7 +10,7 @@ const {
   parseTimeSelection,
   createConsultAppointment,
 } = require("./bookingController");
-const { updateSystemFields, sendConversationMessage, getContact } = require("../../ghlClient");
+const { updateSystemFields, sendConversationMessage, getContact } = require("../clients/ghlClient");
 const { createDepositLinkForContact } = require("../payments/squareClient");
 const { DEPOSIT_CONFIG, OPPORTUNITY_STAGES } = require("../config/constants");
 const { updateAppointmentStatus } = require("../clients/ghlCalendarClient");
