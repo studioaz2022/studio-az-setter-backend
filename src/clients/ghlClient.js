@@ -10,6 +10,11 @@ const GHL_API_KEY = process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 
+// AI message marker: double-space appended to AI-sent messages
+// iOS app uses this to detect and display "AI Response ✓" indicator
+// Using double-space instead of zero-width space to avoid UCS-2 encoding (which doubles SMS costs)
+const AI_MESSAGE_MARKER = "  ";
+
 // Axios client for GHL v1 API
 const ghl = axios.create({
   baseURL: "https://rest.gohighlevel.com", // v1 base
@@ -255,21 +260,40 @@ async function updateContact(contactId, body) {
 }
 
 /**
- * Create a task on a contact
+ * Create a task on a contact using GHL v2 API
  * @param {string} contactId
  * @param {object} task
  */
 async function createTaskForContact(contactId, task = {}) {
   if (!contactId) throw new Error("contactId is required to create a task");
+  
+  // Set dueDate to tomorrow if not provided (v2 API requires it)
+  let dueDate = task.dueDate || null;
+  if (!dueDate) {
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    dueDate = tomorrow.toISOString();
+  }
+  
   const payload = {
     title: task.title || "Consultation follow-up",
-    description: task.description || "",
-    dueDate: task.dueDate || null,
-    status: task.status || "open",
+    body: task.description || task.body || "",
+    dueDate: dueDate,
+    completed: task.completed !== undefined ? task.completed : false, // v2 uses boolean "completed" instead of "status"
     assignedTo: task.assignedTo || null,
   };
 
-  const res = await ghl.post(`/v1/contacts/${contactId}/tasks`, payload);
+  // Use v2 API endpoint
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}/tasks`;
+  const res = await axios.post(url, payload, {
+    headers: {
+      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Version: "2021-07-28", // Required for v2 API
+    },
+  });
+  
   return res.data;
 }
 
@@ -764,6 +788,10 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     return null;
   }
 
+  // Append AI marker (zero-width space) to all AI-sent messages
+  // iOS app detects this to show "AI Response ✓" indicator
+  const markedBody = body + AI_MESSAGE_MARKER;
+
   const {
     isDm = false,
     hasPhone = false,
@@ -900,7 +928,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         const payload = {
           conversationId: finalConversationId,
           contactId,
-          message: body,
+          message: markedBody,
           type: dmType, // Use inferred type (IG or FB)
         };
 
@@ -937,7 +965,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           const payload = {
             contactId,
             locationId: GHL_LOCATION_ID,
-            message: body,
+            message: markedBody,
             type: inferredType,
           };
 
@@ -977,7 +1005,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
       const payload = {
         contactId,
         locationId: GHL_LOCATION_ID,
-        message: body,
+        message: markedBody,
         type, // e.g. "SMS", "FB", "IG", ...
       };
 
@@ -1003,12 +1031,27 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     // Fallback: try to infer type and send anyway (existing behavior for backward compatibility)
     if (!isDm) {
       try {
-        const type = await inferConversationMessageType(contactId);
+        let type = await inferConversationMessageType(contactId);
+
+        // SAFETY CHECK: If inferred type is WhatsApp, verify contact actually has WhatsApp enabled
+        // This prevents sending WhatsApp messages to contacts who don't have it,
+        // which can happen if a previous message was incorrectly sent via WhatsApp
+        if (type === "WhatsApp") {
+          const contact = await getContact(contactId);
+          const cf = contact?.customField || contact?.customFields || {};
+          const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
+          const hasWhatsAppEnabled = whatsappUser.toLowerCase() === "yes";
+
+          if (!hasWhatsAppEnabled) {
+            console.warn(`⚠️ [CHANNEL] Inferred WhatsApp but contact ${contactId} doesn't have WhatsApp enabled - falling back to SMS`);
+            type = "SMS";
+          }
+        }
 
         const payload = {
           contactId,
           locationId: GHL_LOCATION_ID,
-          message: body,
+          message: markedBody,
           type,
         };
 

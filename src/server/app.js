@@ -930,6 +930,19 @@ function createApp() {
 
         // === SEND DEPOSIT CONFIRMATION MESSAGE ===
         try {
+          // Build channel context from contact for message sending
+          const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
+          const hasWhatsAppEnabled = whatsappUser.toLowerCase() === "yes";
+          const depositChannelContext = {
+            isDm: false,
+            hasPhone: !!(contact?.phone || contact?.phoneNumber),
+            isWhatsApp: hasWhatsAppEnabled,
+            isSms: !hasWhatsAppEnabled && !!(contact?.phone || contact?.phoneNumber),
+            channelType: hasWhatsAppEnabled ? "whatsapp" : "sms",
+            conversationId: null,
+            phone: contact?.phone || contact?.phoneNumber || null,
+          };
+
           // Get the pending/hold slot info
           const pendingSlotDisplay = cf.pending_slot_display || cf.pendingSlotDisplay || null;
           const pendingSlotStartTime = cf.pending_slot_start_time || cf.pendingSlotStartTime || null;
@@ -981,7 +994,7 @@ function createApp() {
           await sendConversationMessage({
             contactId,
             body: confirmationMessage,
-            channelContext: {},
+            channelContext: depositChannelContext,
           });
           if (COMPACT_MODE) {
             console.log(`   → confirmation sent ✓`);

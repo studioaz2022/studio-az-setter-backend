@@ -231,7 +231,7 @@ async function handleInboundMessage({
       await handlePathChoice({
         contactId: effectiveContact.id || effectiveContact._id,
         messageText: latestMessageText,
-        channelContext: {},
+        channelContext,
         sendConversationMessage: null,
         existingConsultType: canonicalBefore.consultationType,
         consultationTypeLocked: canonicalBefore.consultationTypeLocked,
@@ -257,7 +257,7 @@ async function handleInboundMessage({
       const consultResult = await handlePathChoice({
         contactId: effectiveContact.id || effectiveContact._id,
         messageText: latestMessageText,
-        channelContext: {},
+        channelContext,
         sendConversationMessage,
         existingConsultType: canonicalBefore.consultationType,
         consultationTypeLocked: canonicalBefore.consultationTypeLocked,
@@ -272,7 +272,7 @@ async function handleInboundMessage({
         await sendConversationMessage({
           contactId: effectiveContact.id || effectiveContact._id,
           body: "Perfect — let me pull up some times for you.",
-          channelContext: {},
+          channelContext,
         });
         
         // Trigger scheduling flow by setting scheduling intent
@@ -281,7 +281,7 @@ async function handleInboundMessage({
           derivedPhase: derivedPhaseBefore,
           canonicalState: { ...canonicalBefore, translatorConfirmed: true },
           contact: effectiveContact,
-          channelContext: {},
+          channelContext,
           messageText: latestMessageText,
           changedFields: {},
         });
@@ -329,7 +329,7 @@ async function handleInboundMessage({
         derivedPhase: derivedPhaseBefore,
         canonicalState: canonicalBefore,
         contact: effectiveContact,
-        channelContext: {},
+        channelContext,
         messageText: latestMessageText,
         changedFields: changedFieldsBefore,
       });
