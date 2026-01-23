@@ -10,10 +10,11 @@ const {
 } = require("../clients/ghlOpportunityClient");
 const { PIPELINE_STAGE_ORDER, PIPELINE_STAGE_CONFIG, getStageId } = require("../config/pipelineConfig");
 const { AI_PHASES, OPPORTUNITY_STAGES, SYSTEM_FIELDS } = require("../config/constants");
-const { 
-  generateComprehensiveConversationSummary, 
-  appendToConversationHistory 
+const {
+  generateComprehensiveConversationSummary,
+  appendToConversationHistory
 } = require("./contextBuilder");
+const { notifyPhaseChanged } = require("../clients/appEventClient");
 
 const STAGE_RANK = PIPELINE_STAGE_ORDER.reduce((acc, key, idx) => {
   acc[key] = idx;
@@ -185,6 +186,18 @@ async function transitionToStage(contactId, stageKey, options = {}) {
   // Only log actual transitions (not when staying the same)
   if (currentStage !== stageKey) {
     console.log(`📊 [PIPELINE] Transitioning opportunity ${opportunityId}: ${currentStage || "(none)"} → ${stageKey}`);
+
+    // === NOTIFY iOS APP: Phase/stage changed ===
+    const cf = contact?.customField || contact?.customFields || {};
+    const leadTemperature = cf.lead_temperature || null;
+    notifyPhaseChanged(contactId, {
+      previousPhase: currentStage || null,
+      newPhase: stageKey,
+      leadTemperature,
+    }).catch(err => {
+      // Don't fail the transition if notification fails
+      console.warn(`⚠️ [APP EVENT] Failed to notify phase change:`, err.message || err);
+    });
   }
 
   // Handle tattoo completion - archive conversation when moving to COMPLETED

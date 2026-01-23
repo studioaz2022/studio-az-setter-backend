@@ -47,6 +47,10 @@ const {
   logSendResult,
   compactThread,
 } = require("../utils/logger");
+const {
+  notifyDepositPaid,
+  notifyLeadQualified,
+} = require("../clients/appEventClient");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -866,6 +870,23 @@ function createApp() {
         if (!COMPACT_MODE) console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
         await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
         if (!COMPACT_MODE) console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
+
+        // === NOTIFY iOS APP: Deposit paid event ===
+        const paymentId = payment.id || payment.payment_id || null;
+        const assignedArtist = cf.assigned_artist || cf.inquired_technician || null;
+        await notifyDepositPaid(contactId, {
+          amount,
+          paymentId,
+          artistId: assignedArtist,
+          consultationType,
+        });
+
+        // === NOTIFY iOS APP: Lead qualified event ===
+        await notifyLeadQualified(contactId, {
+          assignedArtist,
+          consultationType,
+          tattooSummary: cf.tattoo_summary || null,
+        });
 
         // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
         if (isMessageConsult) {
