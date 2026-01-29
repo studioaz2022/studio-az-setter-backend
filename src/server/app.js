@@ -1509,6 +1509,73 @@ function createApp() {
     }
   });
 
+  // PUT /api/contacts/:contactId/quote - Update contact's quote_to_client custom field
+  app.put("/api/contacts/:contactId/quote", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { quoteAmount, locationId } = req.body;
+
+      if (!contactId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Contact ID is required'
+        });
+      }
+
+      if (quoteAmount === undefined || quoteAmount === null) {
+        return res.status(400).json({
+          success: false,
+          message: 'Quote amount is required'
+        });
+      }
+
+      console.log(`[API] Updating quote for contact ${contactId} to $${quoteAmount}`);
+
+      // Update GHL contact with quote_to_client custom field
+      const { updateContact } = require('../clients/ghlClient');
+
+      // The quote_to_client field key - GHL will match by key name
+      const customField = {
+        'quote_to_client': quoteAmount
+      };
+
+      const updateResult = await updateContact(contactId, { customField });
+
+      // Also update client_financials table if it exists
+      if (supabase) {
+        const { error: upsertError } = await supabase
+          .from('client_financials')
+          .upsert({
+            contact_id: contactId,
+            quote_amount: quoteAmount,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'contact_id'
+          });
+
+        if (upsertError) {
+          console.warn('[API] Warning: Could not update client_financials:', upsertError.message);
+        }
+      }
+
+      console.log(`[API] Quote updated successfully for contact ${contactId}`);
+
+      res.json({
+        success: true,
+        contactId,
+        quoteAmount,
+        message: 'Quote updated successfully'
+      });
+
+    } catch (error) {
+      console.error('[API] Error updating contact quote:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to update quote'
+      });
+    }
+  });
+
   return app;
 }
 
