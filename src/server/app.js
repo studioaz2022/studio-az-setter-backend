@@ -873,14 +873,27 @@ function createApp() {
 
         // === FINANCIAL TRACKING: Record deposit payment ===
         try {
-          const alreadyProcessed = await isPaymentAlreadyProcessed(payment.id);
+          let alreadyProcessed = false;
+          let canCheckDuplicates = true;
+          
+          // Try to check for duplicates
+          try {
+            alreadyProcessed = await isPaymentAlreadyProcessed(payment.id);
+          } catch (checkErr) {
+            console.error('[Financial] Cannot check for duplicates due to database error:', checkErr.message);
+            console.warn('[Financial] Proceeding with payment recording despite duplicate check failure');
+            canCheckDuplicates = false;
+            // Don't throw - we'll proceed with recording and log the duplicate check failure
+          }
+          
           if (alreadyProcessed) {
             console.log(`[Financial] Payment ${payment.id} already processed, skipping`);
           } else {
             const assignedArtist = cf.assigned_artist || cf.inquired_technician || 'unknown';
             await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
             if (!COMPACT_MODE) {
-              console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
+              const checkStatus = canCheckDuplicates ? 'duplicate-checked' : 'duplicate-check-failed';
+              console.log(`[Financial] Successfully recorded payment for contact ${contactId} (${checkStatus})`);
             }
           }
         } catch (financialErr) {
