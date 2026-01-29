@@ -1576,6 +1576,82 @@ function createApp() {
     }
   });
 
+  // PUT /api/contacts/:contactId/post-consultation - Save complete post-consultation checklist
+  app.put("/api/contacts/:contactId/post-consultation", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { quoteAmount, paymentType, sessionEstimate, locationId } = req.body;
+
+      if (!contactId) {
+        return res.status(400).json({
+          success: false,
+          message: 'Contact ID is required'
+        });
+      }
+
+      if (quoteAmount === undefined || quoteAmount === null) {
+        return res.status(400).json({
+          success: false,
+          message: 'Quote amount is required'
+        });
+      }
+
+      console.log(`[API] Saving post-consultation checklist for contact ${contactId}`);
+      console.log(`   Quote: $${quoteAmount}`);
+      console.log(`   Payment Type: ${paymentType}`);
+      console.log(`   Session Estimate: ${sessionEstimate}`);
+
+      // Update GHL contact with all custom fields
+      const { updateContact } = require('../clients/ghlClient');
+
+      // Custom fields to update
+      const customField = {
+        'quote_to_client': quoteAmount,
+        'payment_type': paymentType,
+        'session_estimate': sessionEstimate
+      };
+
+      const updateResult = await updateContact(contactId, { customField });
+
+      // Also update client_financials table if it exists
+      if (supabase) {
+        const { error: upsertError } = await supabase
+          .from('client_financials')
+          .upsert({
+            contact_id: contactId,
+            quote_amount: quoteAmount,
+            payment_type: paymentType,
+            session_estimate: sessionEstimate,
+            updated_at: new Date().toISOString()
+          }, {
+            onConflict: 'contact_id'
+          });
+
+        if (upsertError) {
+          console.warn('[API] Warning: Could not update client_financials:', upsertError.message);
+        }
+      }
+
+      console.log(`[API] Post-consultation checklist saved successfully for contact ${contactId}`);
+
+      res.json({
+        success: true,
+        contactId,
+        quoteAmount,
+        paymentType,
+        sessionEstimate,
+        message: 'Post-consultation checklist saved successfully'
+      });
+
+    } catch (error) {
+      console.error('[API] Error saving post-consultation checklist:', error);
+      res.status(500).json({
+        success: false,
+        message: error.message || 'Failed to save checklist'
+      });
+    }
+  });
+
   return app;
 }
 
