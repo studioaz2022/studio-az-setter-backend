@@ -51,6 +51,10 @@ const {
   notifyDepositPaid,
   notifyLeadQualified,
 } = require("../clients/appEventClient");
+const {
+  isPaymentAlreadyProcessed,
+  handleSquarePaymentFinancials,
+} = require("../clients/financialTracking");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -862,9 +866,27 @@ function createApp() {
         const contact = await getContact(contactId);
         const cf = contact?.customField || contact?.customFields || {};
         const firstName = contact?.firstName || contact?.first_name || "";
+        const contactName = `${firstName} ${contact?.lastName || contact?.last_name || ""}`.trim() || "Unknown";
         const consultationType = cf.consultation_type || cf.consultationType || "online";
         const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true" || cf.translator_needed === "Yes";
         const isMessageConsult = consultationType === "message";
+
+        // === FINANCIAL TRACKING: Record deposit payment ===
+        try {
+          const alreadyProcessed = await isPaymentAlreadyProcessed(payment.id);
+          if (alreadyProcessed) {
+            console.log(`[Financial] Payment ${payment.id} already processed, skipping`);
+          } else {
+            const assignedArtist = cf.assigned_artist || cf.inquired_technician || 'unknown';
+            await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
+            if (!COMPACT_MODE) {
+              console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
+            }
+          }
+        } catch (financialErr) {
+          console.error('[Financial] Error recording payment:', financialErr.message || financialErr);
+          // Don't fail the webhook - deposit was already processed
+        }
 
         // Sync pipeline to QUALIFIED stage first
         if (!COMPACT_MODE) console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
@@ -1285,6 +1307,174 @@ function createApp() {
         console.error("❌ Appointment webhook handler error:", err.message || err);
       }
     });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FINANCIAL TRACKING API ENDPOINTS
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const { supabase } = require("../clients/supabaseClient");
+  const { recordTransaction } = require("../clients/financialTracking");
+
+  // POST /api/transactions - Record a manual transaction
+  app.post("/api/transactions", async (req, res) => {
+    try {
+      const {
+        contactId,
+        contactName,
+        appointmentId,
+        artistId,
+        transactionType,
+        paymentMethod,
+        paymentRecipient,
+        grossAmount,
+        sessionDate,
+        notes,
+        locationId
+      } = req.body;
+
+      // Validate required fields
+      if (!contactId || !artistId || !grossAmount || !transactionType || !paymentMethod) {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing required fields: contactId, artistId, grossAmount, transactionType, paymentMethod'
+        });
+      }
+
+      const transaction = await recordTransaction({
+        contactId,
+        contactName: contactName || 'Unknown',
+        appointmentId,
+        artistId,
+        transactionType,
+        paymentMethod,
+        paymentRecipient: paymentRecipient || 'shop',
+        grossAmount: parseFloat(grossAmount),
+        sessionDate: sessionDate ? new Date(sessionDate) : new Date(),
+        squarePaymentId: null,
+        locationId: locationId || process.env.GHL_LOCATION_ID || 'studio_az_tattoo',
+        notes
+      });
+
+      res.json({
+        success: true,
+        transaction
+      });
+
+    } catch (error) {
+      console.error('[API] Error recording transaction:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  // GET /api/artists/:artistId/earnings - Get artist earnings summary
+  app.get("/api/artists/:artistId/earnings", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({
+          success: false,
+          error: 'Financial tracking not available - Supabase not configured'
+        });
+      }
+
+      const { artistId } = req.params;
+      const { locationId, startDate, endDate } = req.query;
+
+      let query = supabase
+        .from('transactions')
+        .select('*')
+        .eq('artist_ghl_id', artistId);
+
+      if (locationId) {
+        query = query.eq('location_id', locationId);
+      }
+      if (startDate) {
+        query = query.gte('created_at', startDate);
+      }
+      if (endDate) {
+        query = query.lte('created_at', endDate);
+      }
+
+      const { data: transactions, error } = await query.order('created_at', { ascending: false });
+
+      if (error) throw error;
+
+      // Calculate summary
+      let totalEarned = 0;
+      let pendingFromShop = 0;
+      let owedToShop = 0;
+
+      for (const tx of transactions || []) {
+        totalEarned += parseFloat(tx.artist_amount) || 0;
+
+        if (tx.settlement_status !== 'settled') {
+          if (tx.payment_recipient === 'shop') {
+            pendingFromShop += parseFloat(tx.artist_amount) || 0;
+          } else if (tx.payment_recipient === 'artist_direct') {
+            owedToShop += parseFloat(tx.shop_amount) || 0;
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        earnings: {
+          artistId,
+          totalEarned,
+          pendingFromShop,
+          owedToShop,
+          netBalance: pendingFromShop - owedToShop,
+          transactionCount: transactions?.length || 0,
+          transactions
+        }
+      });
+
+    } catch (error) {
+      console.error('[API] Error fetching artist earnings:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
+  });
+
+  // GET /api/contacts/:contactId/financials - Get client LTV data
+  app.get("/api/contacts/:contactId/financials", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({
+          success: false,
+          error: 'Financial tracking not available - Supabase not configured'
+        });
+      }
+
+      const { contactId } = req.params;
+
+      const { data, error } = await supabase
+        .from('client_financials')
+        .select('*')
+        .eq('contact_id', contactId)
+        .single();
+
+      if (error && error.code !== 'PGRST116') { // PGRST116 = not found
+        throw error;
+      }
+
+      res.json({
+        success: true,
+        financials: data || null
+      });
+
+    } catch (error) {
+      console.error('[API] Error fetching client financials:', error);
+      res.status(500).json({
+        success: false,
+        error: error.message
+      });
+    }
   });
 
   return app;
