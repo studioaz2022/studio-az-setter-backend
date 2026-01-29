@@ -1406,9 +1406,15 @@ function createApp() {
       let totalEarned = 0;
       let pendingFromShop = 0;
       let owedToShop = 0;
+      let revenueGenerated = 0;
 
       for (const tx of transactions || []) {
         totalEarned += parseFloat(tx.artist_amount) || 0;
+
+        // Calculate revenue generated (sum of deposits + session payments)
+        if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
+          revenueGenerated += parseFloat(tx.gross_amount) || 0;
+        }
 
         if (tx.settlement_status !== 'settled') {
           if (tx.payment_recipient === 'shop') {
@@ -1419,16 +1425,42 @@ function createApp() {
         }
       }
 
+      // Get top clients from client_financials
+      let topClients = [];
+      const uniqueContactIds = [...new Set((transactions || []).map(t => t.contact_id).filter(Boolean))];
+      if (uniqueContactIds.length > 0) {
+        const { data: clientFinancials } = await supabase
+          .from('client_financials')
+          .select('*')
+          .in('contact_id', uniqueContactIds)
+          .order('total_spent', { ascending: false })
+          .limit(10);
+
+        if (clientFinancials) {
+          topClients = clientFinancials.map(cf => ({
+            contact_id: cf.contact_id,
+            contact_name: cf.contact_name,
+            total_spent: parseFloat(cf.total_spent) || 0,
+            quote_amount: cf.quote_amount ? parseFloat(cf.quote_amount) : null,
+            completed_tattoos: cf.completed_tattoos || 0,
+            is_returning_client: cf.is_returning_client || false,
+            last_appointment_date: cf.last_appointment_date
+          }));
+        }
+      }
+
       res.json({
         success: true,
         earnings: {
           artistId,
+          revenueGenerated,
           totalEarned,
           pendingFromShop,
           owedToShop,
           netBalance: pendingFromShop - owedToShop,
           transactionCount: transactions?.length || 0,
-          transactions
+          transactions,
+          topClients
         }
       });
 
