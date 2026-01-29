@@ -291,6 +291,20 @@ async function isPaymentAlreadyProcessed(squarePaymentId) {
     .eq('square_payment_id', squarePaymentId)
     .single();
 
+  // Handle errors properly to fail-safe
+  if (error) {
+    // PGRST116 = "not found" - this is expected when payment hasn't been processed
+    if (error.code === 'PGRST116') {
+      return false; // Payment not found, safe to process
+    }
+    
+    // Any other error (connection, query, etc.) - fail-safe to prevent duplicates
+    console.error('[Financial] Error checking payment status:', error);
+    console.warn('[Financial] Failing safe: treating payment as already processed to prevent duplicates');
+    return true; // Fail-safe: prevent duplicate processing
+  }
+
+  // No error, check if we found a record
   return !!data;
 }
 
