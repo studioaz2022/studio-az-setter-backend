@@ -190,6 +190,9 @@ async function updateClientFinancials(contactId) {
   // Determine if returning client (more than 1 completed tattoo or multiple deposits)
   const isReturningClient = completedTattoos > 1 || transactions.length > 2;
 
+  // Get location_id from the first transaction
+  const locationId = transactions[0]?.location_id || 'mUemx2jG4wly4kJWBkI4';
+
   // Upsert client financials
   const { error: upsertError } = await supabase
     .from('client_financials')
@@ -206,6 +209,7 @@ async function updateClientFinancials(contactId) {
       last_appointment_date: lastAppointmentDate?.toISOString(),
       last_payment_date: lastPaymentDate?.toISOString(),
       is_returning_client: isReturningClient,
+      location_id: locationId,
       updated_at: new Date().toISOString()
     }, {
       onConflict: 'contact_id'
@@ -344,4 +348,3 @@ module.exports = {
   isPaymentAlreadyProcessed,
   handleSquarePaymentFinancials,
 };
-
