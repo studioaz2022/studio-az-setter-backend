@@ -876,7 +876,8 @@ function createApp() {
 
         // Fetch contact info for consultation type check and personalization
         const contact = await getContact(contactId);
-        const cf = contact?.customField || contact?.customFields || {};
+        // Normalize custom fields from array to object with friendly names
+        const cf = normalizeCustomFields(contact?.customField || contact?.customFields || {});
         const firstName = contact?.firstName || contact?.first_name || "";
         const contactName = `${firstName} ${contact?.lastName || contact?.last_name || ""}`.trim() || "Unknown";
         const consultationType = cf.consultation_type || cf.consultationType || "online";
