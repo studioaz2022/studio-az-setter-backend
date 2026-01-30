@@ -41,6 +41,7 @@ const CUSTOM_FIELD_MAP = {
   first_tattoo: "QqDydmY1fnldidlcMnBC",
   tattoo_concerns: "tattoo_concerns", // TODO: Get actual ID if this field exists
   tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
+  consultation_type: "gM2PVo90yNBDHekV5G64", // Consultation type (message/online/in-person)
 };
 
 // 🔹 Reverse mapping: GHL field ID -> friendly name (for reading from GHL)
