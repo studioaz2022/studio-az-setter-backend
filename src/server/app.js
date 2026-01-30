@@ -971,7 +971,7 @@ function createApp() {
 
           // Use the actual GHL assigned user ID from the contact, not the custom field
           // This ensures tasks are created for the user who owns the contact
-          const assignedToUserId = contact?.assignedUserId || contact?.assigned_to || null;
+          const assignedToUserId = contact?.assignedTo || contact?.assignedUserId || null;
 
           await handleQualifiedLeadTasks({
             contactId,
