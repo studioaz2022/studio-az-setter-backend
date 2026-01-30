@@ -23,6 +23,7 @@ const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
   formatThreadForLLM,
+  normalizeCustomFields,
 } = require("../ai/contextBuilder");
 const {
   syncPipelineOnEntry,
