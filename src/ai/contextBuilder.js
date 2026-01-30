@@ -12,6 +12,7 @@ function getGhlFieldIdMapping() {
       // The reverse mapping is created in ghlClient, but we'll create it here to avoid circular deps
       // Actually, let's just create it inline based on known mappings
       const knownMappings = {
+        "gm2pvo90ynbdhekv5g64": "consultation_type", // CRITICAL: consultation type field
         "etxasc6qlyxraku18kbz": "language_preference",
         "h3psn8tzsw1kyckhjn9d": "inquired_technician",
         "fnydobmyqnxdxlljy5oe": "whatsapp_user",
