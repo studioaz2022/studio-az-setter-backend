@@ -969,13 +969,17 @@ function createApp() {
           const isSpanishOrComfortable = languagePreference === "Spanish" || leadSpanishComfortable;
           const tattooSize = cf.tattoo_size || cf.size_of_tattoo || "";
 
+          // Use the actual GHL assigned user ID from the contact, not the custom field
+          // This ensures tasks are created for the user who owns the contact
+          const assignedToUserId = contact?.assignedUserId || contact?.assigned_to || null;
+
           await handleQualifiedLeadTasks({
             contactId,
             contactName,
             consultationType,
             isSpanishOrComfortable,
             tattooSize,
-            assignedArtist: assignedArtist || "Unknown"
+            assignedArtist: assignedToUserId || null
           });
         } catch (taskErr) {
           console.error("❌ [TASK] Failed to create iOS app task:", taskErr.message || taskErr);
