@@ -973,13 +973,24 @@ function createApp() {
           // This ensures tasks are created for the user who owns the contact
           const assignedToUserId = contact?.assignedTo || contact?.assignedUserId || null;
 
+          // Map GHL user IDs to artist names for the webhook server
+          const USER_ID_TO_ARTIST_NAME = {
+            '1wuLf50VMODExBSJ9xPI': 'Joan',
+            'O8ChoMYj1BmMWJJsDlvC': 'Andrew',
+            'uAWhIMemqUPJC1SqCyDR': 'Maria',
+            '1kFG5FWdUDhXLUX46snG': 'Lionel',
+            'Wl24x1ZrucHuHatM0ODD': 'Claudia',
+          };
+          
+          const artistName = assignedToUserId ? USER_ID_TO_ARTIST_NAME[assignedToUserId] || assignedToUserId : null;
+
           await handleQualifiedLeadTasks({
             contactId,
             contactName,
             consultationType,
             isSpanishOrComfortable,
             tattooSize,
-            assignedArtist: assignedToUserId || null
+            assignedArtist: artistName
           });
         } catch (taskErr) {
           console.error("❌ [TASK] Failed to create iOS app task:", taskErr.message || taskErr);
