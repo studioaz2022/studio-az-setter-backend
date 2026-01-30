@@ -20,6 +20,7 @@ const EVENT_TYPES = {
   CONSULTATION_SCHEDULED: 'consultation_scheduled',
   LEAD_DISQUALIFIED: 'lead_disqualified',
   HUMAN_HANDOFF: 'human_handoff',
+  CREATE_TASK: 'create_task',  // Creates a task in iOS app Command Center
 };
 
 /**

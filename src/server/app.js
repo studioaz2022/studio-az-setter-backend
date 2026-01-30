@@ -55,6 +55,9 @@ const {
   isPaymentAlreadyProcessed,
   handleSquarePaymentFinancials,
 } = require("../clients/financialTracking");
+const {
+  handleQualifiedLeadTasks,
+} = require("../ai/qualifiedLeadHandler");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -845,8 +848,17 @@ function createApp() {
       const orderId = payment.order_id || payment.orderId || null;
       let contactId = payment.reference_id || payment.referenceId || null;
 
+      // Debug: Log payment structure to understand what we're receiving
+      if (!COMPACT_MODE) {
+        console.log("💳 [DEBUG] Payment object keys:", Object.keys(payment));
+        console.log("💳 [DEBUG] Order ID:", orderId);
+        console.log("💳 [DEBUG] Reference ID from payment:", contactId);
+      }
+
       if (!contactId && orderId) {
+        console.log("💳 [DEBUG] No reference_id on payment, fetching from order:", orderId);
         contactId = await getContactIdFromOrder(orderId);
+        console.log("💳 [DEBUG] Contact ID from order:", contactId);
       }
 
       if (contactId) {
@@ -922,6 +934,28 @@ function createApp() {
           consultationType,
           tattooSummary: cf.tattoo_summary || null,
         });
+
+        // === iOS APP TASK CREATION: Based on consultation type, language, and tattoo size ===
+        try {
+          const languagePreference = cf.language_preference || cf.languagePreference || "English";
+          const leadSpanishComfortable = cf.lead_spanish_comfortable === true || 
+                                          cf.lead_spanish_comfortable === "true" || 
+                                          cf.lead_spanish_comfortable === "Yes";
+          const isSpanishOrComfortable = languagePreference === "Spanish" || leadSpanishComfortable;
+          const tattooSize = cf.tattoo_size || cf.size_of_tattoo || "";
+
+          await handleQualifiedLeadTasks({
+            contactId,
+            contactName,
+            consultationType,
+            isSpanishOrComfortable,
+            tattooSize,
+            assignedArtist: assignedArtist || "Unknown"
+          });
+        } catch (taskErr) {
+          console.error("❌ [TASK] Failed to create iOS app task:", taskErr.message || taskErr);
+          // Don't fail the webhook - task creation is non-critical
+        }
 
         // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
         if (isMessageConsult) {
@@ -1043,6 +1077,9 @@ function createApp() {
         }
       } else {
         console.warn("⚠️ /square/webhook could not resolve contactId from payment");
+        console.warn("💳 [DEBUG] Payment ID:", payment.id);
+        console.warn("💳 [DEBUG] Order ID:", orderId);
+        console.warn("💳 [DEBUG] Payload:", JSON.stringify(payload, null, 2));
       }
 
       if (!COMPACT_MODE) console.log("💳 ════════════════════════════════════════════════════════\n");
