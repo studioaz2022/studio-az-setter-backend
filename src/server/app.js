@@ -845,7 +845,29 @@ function createApp() {
         console.log("💳 ════════════════════════════════════════════════════════");
       }
 
+      // IMPORTANT: Only process payment.updated events with COMPLETED status to avoid duplicates
+      // Square sends multiple webhook events (order.created, order.updated, payment.created, payment.updated)
+      // We only want to process the final payment.updated event when payment is complete
+      const eventType = payload?.type || '';
+      
+      if (eventType !== 'payment.updated') {
+        if (!COMPACT_MODE) {
+          console.log(`💳 Ignoring ${eventType} event (only processing payment.updated)`);
+        }
+        return res.json({ received: true, ignored: true, reason: `Only processing payment.updated events` });
+      }
+
       const payment = payload?.data?.object?.payment || {};
+      const paymentStatus = payment.status || '';
+      
+      // Only process completed payments
+      if (paymentStatus !== 'COMPLETED') {
+        if (!COMPACT_MODE) {
+          console.log(`💳 Ignoring payment with status: ${paymentStatus} (waiting for COMPLETED)`);
+        }
+        return res.json({ received: true, ignored: true, reason: `Payment status is ${paymentStatus}` });
+      }
+
       const orderId = payment.order_id || payment.orderId || null;
       let contactId = payment.reference_id || payment.referenceId || null;
 
@@ -854,6 +876,7 @@ function createApp() {
         console.log("💳 [DEBUG] Payment object keys:", Object.keys(payment));
         console.log("💳 [DEBUG] Order ID:", orderId);
         console.log("💳 [DEBUG] Reference ID from payment:", contactId);
+        console.log("💳 [DEBUG] Payment Status:", paymentStatus);
       }
 
       if (!contactId && orderId) {
