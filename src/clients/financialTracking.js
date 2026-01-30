@@ -239,7 +239,8 @@ async function updateClientFinancials(contactId) {
  * Update GHL contact custom fields with financial data
  */
 async function updateGHLClientFinancials(contactId, financials) {
-  const GHL_API_KEY = process.env.GHL_API_KEY;
+  // Use GHL_FILE_UPLOAD_TOKEN as the primary API key
+  const GHL_API_KEY = process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
 
   if (!GHL_API_KEY) {
     console.log(`[Financial] No GHL API key, skipping custom field update`);
