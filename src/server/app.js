@@ -1771,7 +1771,6 @@ function createApp() {
    * Checks if appointment has ended and creates quote verification task if needed
    */
   async function handleConsultationAppointment(contactId, data) {
-    const { supabase } = require("../clients/supabaseClient");
     const { appointmentId, calendarId, startTime, endTime, rawStatus, isCancelled } = data;
 
     console.log("🎬 Processing consultation appointment:", {
@@ -1788,12 +1787,37 @@ function createApp() {
       return;
     }
 
-    // Note: GHL only sends webhooks when appointments are created/updated, not when they end.
-    // We create the task immediately when a consultation is confirmed - the artist will
-    // complete it after the consultation ends. The due_at time is set to 2 hours after
-    // the appointment end time to give them time to follow up.
+    // GHL only sends webhooks when appointments are created/updated, not when they end.
+    // We schedule the task creation to run AFTER the appointment ends.
+    const now = new Date();
     const appointmentEndTime = new Date(endTime);
-    console.log(`✅ Consultation appointment detected (ends at ${endTime}), checking if quote verification task is needed...`);
+    const msUntilEnd = appointmentEndTime.getTime() - now.getTime();
+
+    if (msUntilEnd > 0) {
+      // Appointment hasn't ended yet - schedule the check for after it ends
+      console.log(`⏰ Scheduling quote verification check for after consultation ends`);
+      console.log(`   Appointment ends at: ${endTime}`);
+      console.log(`   Will check in: ${Math.round(msUntilEnd / 1000 / 60)} minutes`);
+
+      setTimeout(async () => {
+        console.log(`🔔 Consultation ended, now checking if quote verification is needed for contact ${contactId}`);
+        await createQuoteVerificationTaskIfNeeded(contactId, appointmentId, calendarId, appointmentEndTime);
+      }, msUntilEnd + 1000); // Add 1 second buffer
+
+      return;
+    }
+
+    // Appointment already ended - check immediately
+    console.log(`✅ Consultation already ended (ended at ${endTime}), checking if quote verification task is needed...`);
+    await createQuoteVerificationTaskIfNeeded(contactId, appointmentId, calendarId, appointmentEndTime);
+  }
+
+  /**
+   * Helper function to create quote verification task if needed
+   * Called either immediately (if appointment ended) or after scheduled delay
+   */
+  async function createQuoteVerificationTaskIfNeeded(contactId, appointmentId, calendarId, appointmentEndTime) {
+    const { supabase } = require("../clients/supabaseClient");
 
     // Fetch contact from GHL to check custom fields
     let contact = null;
