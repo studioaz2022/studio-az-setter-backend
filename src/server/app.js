@@ -1788,16 +1788,12 @@ function createApp() {
       return;
     }
 
-    // Check if appointment has ended (endTime is in the past)
-    const now = new Date();
+    // Note: GHL only sends webhooks when appointments are created/updated, not when they end.
+    // We create the task immediately when a consultation is confirmed - the artist will
+    // complete it after the consultation ends. The due_at time is set to 2 hours after
+    // the appointment end time to give them time to follow up.
     const appointmentEndTime = new Date(endTime);
-
-    if (appointmentEndTime > now) {
-      console.log(`ℹ️ Consultation hasn't ended yet (ends at ${endTime}), skipping`);
-      return;
-    }
-
-    console.log("✅ Consultation has ended, checking if quote verification is needed...");
+    console.log(`✅ Consultation appointment detected (ends at ${endTime}), checking if quote verification task is needed...`);
 
     // Fetch contact from GHL to check custom fields
     let contact = null;
@@ -1878,8 +1874,8 @@ function createApp() {
         return;
       }
 
-      // Create the task
-      const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours from now
+      // Create the task - due 2 hours after the appointment ends
+      const dueAt = new Date(appointmentEndTime.getTime() + 2 * 60 * 60 * 1000);
 
       const taskData = {
         type: "quote_verification",
