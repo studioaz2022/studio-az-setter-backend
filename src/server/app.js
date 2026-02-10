@@ -5,6 +5,7 @@ const multer = require("multer");
 
 const {
   getContact,
+  getContactV2,
   updateSystemFields,
   createContact,
   updateContact,
@@ -1819,10 +1820,11 @@ function createApp() {
   async function createQuoteVerificationTaskIfNeeded(contactId, appointmentId, calendarId, appointmentEndTime) {
     const { supabase } = require("../clients/supabaseClient");
 
-    // Fetch contact from GHL to check custom fields
+    // Fetch contact from GHL v2 API to get followers array
+    // v1 API doesn't return followers, only assignedTo
     let contact = null;
     try {
-      contact = await getContact(contactId);
+      contact = await getContactV2(contactId);
     } catch (err) {
       console.error("❌ Failed to fetch contact:", err.message);
       return;
@@ -1890,6 +1892,11 @@ function createApp() {
       const followers = contact.followers || [];
       const locationId = contact.locationId;
 
+      console.log("👥 Contact assignment info:", {
+        owner: contactOwner,
+        followers: followers,
+      });
+
       // Build assignees list (owner + followers)
       const assignees = [contactOwner, ...followers].filter(Boolean);
 
@@ -1897,6 +1904,8 @@ function createApp() {
         console.warn("⚠️ No assignees found for quote verification task");
         return;
       }
+
+      console.log("📋 Task will be assigned to:", assignees);
 
       // Create the task - due immediately when the appointment ends
       const dueAt = new Date(appointmentEndTime.getTime());

@@ -139,6 +139,42 @@ async function getContact(contactId) {
   }
 }
 
+/**
+ * Fetch a contact by ID from GoHighLevel using API v2
+ * This version includes followers array which is not available in v1
+ * Uses the Private Integration Token (GHL_FILE_UPLOAD_TOKEN) which works with v2
+ */
+async function getContactV2(contactId) {
+  if (!contactId) return null;
+
+  try {
+    const res = await axios.get(
+      `https://services.leadconnectorhq.com/contacts/${contactId}`,
+      {
+        headers: {
+          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+          Version: "2021-07-28",
+          Accept: "application/json",
+        },
+      }
+    );
+
+    const data = res.data || {};
+
+    // Handle either { contact: {...} } or just {...}
+    const contact = data.contact || data;
+
+    return contact;
+  } catch (err) {
+    console.error(
+      "❌ Error fetching contact from GHL v2:",
+      err.response?.status,
+      err.response?.data || err.message
+    );
+    return null;
+  }
+}
+
 /** Photo Form Data */
 async function uploadFilesToTattooCustomField(contactId, files = []) {
   if (!files || files.length === 0) return null;
@@ -1224,6 +1260,7 @@ async function addTranslatorAsFollower(contactId) {
 
 module.exports = {
   getContact,
+  getContactV2,
   updateContact,
   upsertContactFromWidget,
   updateSystemFields,
