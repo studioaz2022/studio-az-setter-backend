@@ -1874,8 +1874,8 @@ function createApp() {
         return;
       }
 
-      // Create the task - due 2 hours after the appointment ends
-      const dueAt = new Date(appointmentEndTime.getTime() + 2 * 60 * 60 * 1000);
+      // Create the task - due immediately when the appointment ends
+      const dueAt = new Date(appointmentEndTime.getTime());
 
       const taskData = {
         type: "quote_verification",
