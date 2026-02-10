@@ -29,11 +29,14 @@ const {
   syncPipelineOnEntry,
   transitionToStage,
 } = require("../ai/opportunityManager");
-const { 
-  OPPORTUNITY_STAGES, 
-  CALENDARS, 
+const {
+  OPPORTUNITY_STAGES,
+  CALENDARS,
   TRANSLATOR_CALENDARS,
   TRANSLATOR_USER_IDS,
+  CONSULTATION_CALENDARS,
+  GHL_USER_IDS,
+  GHL_CUSTOM_FIELD_IDS,
 } = require("../config/constants");
 const { formatSlotDisplay } = require("../ai/bookingController");
 const {
@@ -1207,15 +1210,31 @@ function createApp() {
           return;
         }
 
-        // Build calendar sets to determine if this is artist or translator
+        // Build calendar sets to determine calendar type
         const artistCalendarSet = new Set(Object.values(CALENDARS).filter(Boolean));
         const translatorCalendarSet = new Set(Object.values(TRANSLATOR_CALENDARS).filter(Boolean));
+        const consultationCalendarSet = new Set(Object.values(CONSULTATION_CALENDARS).filter(Boolean));
 
         const isArtistCalendar = artistCalendarSet.has(calendarId);
         const isTranslatorCalendar = translatorCalendarSet.has(calendarId);
+        const isConsultationCalendar = consultationCalendarSet.has(calendarId);
+
+        // Handle consultation calendar appointments - check for consultation ended
+        if (isConsultationCalendar) {
+          console.log("📋 Consultation calendar detected, checking for consultation end...");
+          await handleConsultationAppointment(contactId, {
+            appointmentId,
+            calendarId,
+            startTime,
+            endTime,
+            rawStatus,
+            isCancelled,
+          });
+          return;
+        }
 
         if (!isArtistCalendar && !isTranslatorCalendar) {
-          console.log("ℹ️ Calendar not in artist or translator list, skipping sync");
+          console.log("ℹ️ Calendar not in artist, translator, or consultation list, skipping sync");
           return;
         }
 
@@ -1741,6 +1760,165 @@ function createApp() {
       });
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CONSULTATION ENDED HANDLING
+  // Creates quote verification task when a consultation appointment ends
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Handle consultation calendar appointment events
+   * Checks if appointment has ended and creates quote verification task if needed
+   */
+  async function handleConsultationAppointment(contactId, data) {
+    const { supabase } = require("../clients/supabaseClient");
+    const { appointmentId, calendarId, startTime, endTime, rawStatus, isCancelled } = data;
+
+    console.log("🎬 Processing consultation appointment:", {
+      contactId,
+      appointmentId,
+      calendarId,
+      endTime,
+      status: rawStatus,
+    });
+
+    // Skip if cancelled
+    if (isCancelled) {
+      console.log("ℹ️ Consultation was cancelled, skipping quote verification");
+      return;
+    }
+
+    // Check if appointment has ended (endTime is in the past)
+    const now = new Date();
+    const appointmentEndTime = new Date(endTime);
+
+    if (appointmentEndTime > now) {
+      console.log(`ℹ️ Consultation hasn't ended yet (ends at ${endTime}), skipping`);
+      return;
+    }
+
+    console.log("✅ Consultation has ended, checking if quote verification is needed...");
+
+    // Fetch contact from GHL to check custom fields
+    let contact = null;
+    try {
+      contact = await getContact(contactId);
+    } catch (err) {
+      console.error("❌ Failed to fetch contact:", err.message);
+      return;
+    }
+
+    if (!contact) {
+      console.warn("⚠️ Contact not found:", contactId);
+      return;
+    }
+
+    // Extract custom field values
+    const customFields = contact.customFields || contact.customField || [];
+    const getFieldValue = (fieldId) => {
+      const field = customFields.find((f) => f.id === fieldId);
+      return field ? field.value : null;
+    };
+
+    const quotedValue = getFieldValue(GHL_CUSTOM_FIELD_IDS.QUOTED);
+    const clientInformed = getFieldValue(GHL_CUSTOM_FIELD_IDS.CLIENT_INFORMED);
+    const languagePreference = getFieldValue(GHL_CUSTOM_FIELD_IDS.LANGUAGE_PREFERENCE);
+
+    console.log("📊 Contact quote status:", {
+      quoted: quotedValue,
+      clientInformed,
+      languagePreference,
+    });
+
+    // Check if quote verification is needed
+    const hasQuote = quotedValue && String(quotedValue).trim() !== "" && String(quotedValue) !== "0";
+    const isClientInformed = clientInformed &&
+      (String(clientInformed).toLowerCase() === "yes" || String(clientInformed).toLowerCase() === "true");
+
+    const needsQuoteVerification = !hasQuote || !isClientInformed;
+
+    if (!needsQuoteVerification) {
+      console.log("✅ Quote is set and client is informed, no verification needed");
+      return;
+    }
+
+    console.log("📋 Quote verification needed:", {
+      hasQuote,
+      isClientInformed,
+      reason: !hasQuote ? "Quote not set" : "Client not informed",
+    });
+
+    // Check if task already exists
+    if (supabase) {
+      const { data: existingTask } = await supabase
+        .from("command_center_tasks")
+        .select("id")
+        .eq("type", "quote_verification")
+        .eq("contact_id", contactId)
+        .eq("trigger_event", "consultation_ended")
+        .eq("status", "pending")
+        .maybeSingle();
+
+      if (existingTask) {
+        console.log("ℹ️ Quote verification task already exists, skipping");
+        return;
+      }
+
+      // Get contact name and owner
+      const contactName = [contact.firstName, contact.lastName].filter(Boolean).join(" ") || "Unknown Contact";
+      const contactOwner = contact.assignedTo;
+      const followers = contact.followers || [];
+      const locationId = contact.locationId;
+
+      // Build assignees list (owner + followers)
+      const assignees = [contactOwner, ...followers].filter(Boolean);
+
+      if (assignees.length === 0) {
+        console.warn("⚠️ No assignees found for quote verification task");
+        return;
+      }
+
+      // Create the task
+      const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000); // 2 hours from now
+
+      const taskData = {
+        type: "quote_verification",
+        contact_id: contactId,
+        contact_name: contactName,
+        assigned_to: assignees,
+        created_by: "system",
+        created_at: new Date().toISOString(),
+        due_at: dueAt.toISOString(),
+        status: "pending",
+        urgency_level: "normal",
+        trigger_event: "consultation_ended",
+        related_appointment_id: appointmentId,
+        requires_all_assignees: false,
+        metadata: {
+          current_quote: hasQuote ? String(quotedValue) : "",
+          client_informed: isClientInformed ? "true" : "false",
+          requires_quote_entry: hasQuote ? "false" : "true",
+          language_preference: languagePreference || "english",
+          consultation_calendar: calendarId,
+        },
+        location_id: locationId,
+      };
+
+      const { error: insertError } = await supabase
+        .from("command_center_tasks")
+        .insert([taskData]);
+
+      if (insertError) {
+        console.error("❌ Failed to create quote verification task:", insertError);
+      } else {
+        console.log("✅ Created quote_verification task for:", contactName);
+        console.log("   Assigned to:", assignees);
+        console.log("   Due at:", dueAt.toISOString());
+      }
+    } else {
+      console.warn("⚠️ Supabase not configured, cannot create quote verification task");
+    }
+  }
 
   return app;
 }

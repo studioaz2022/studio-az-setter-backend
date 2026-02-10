@@ -141,6 +141,30 @@ const TRANSLATOR_CALENDARS = {
   MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
 };
 
+// Consultation calendars for artists (separate from tattoo calendars)
+// Used to detect consultation_ended events for quote verification
+const CONSULTATION_CALENDARS = {
+  CLAUDIA: "6RVbtnlSgXsnv2yG18Bo",
+  JOAN: "2EJcAtrllnYOtuSx4Dua",
+  // Add more artist consultation calendars here as needed
+};
+
+// GHL User IDs for all team members
+const GHL_USER_IDS = {
+  CLAUDIA: "Wl24x1ZrucHuHatM0ODD",
+  JOAN: "O8ChoMYj1BmMWJJsDlvC",
+  ANDREW: "1wuLf50VMODExBSJ9xPI",
+  LIONEL: "1kFG5FWdUDhXLUX46snG",
+  MARIA: "uAWhIMemqUPJC1SqCyDR",
+};
+
+// GHL Custom Field IDs for quote-related fields
+const GHL_CUSTOM_FIELD_IDS = {
+  QUOTED: "U4vZ7BVoyw6Zkwq33sj6",
+  CLIENT_INFORMED: "w4f5vvG2BXok9JhayjYD",
+  LANGUAGE_PREFERENCE: "ETxasC6QlyxRaKU18kbz",
+};
+
 // Translator user IDs (for GHL appointment assignment)
 const TRANSLATOR_USER_IDS = {
   LIONEL: "1kFG5FWdUDhXLUX46snG",
@@ -207,6 +231,9 @@ module.exports = {
   CALENDARS,
   TRANSLATOR_CALENDARS,
   TRANSLATOR_USER_IDS,
+  CONSULTATION_CALENDARS,
+  GHL_USER_IDS,
+  GHL_CUSTOM_FIELD_IDS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
   ARTIST_ASSIGNED_USER_IDS,
