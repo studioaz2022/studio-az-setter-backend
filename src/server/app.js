@@ -19,7 +19,7 @@ const {
   addTranslatorAsFollower,
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
-const { getContactIdFromOrder } = require("../payments/squareClient");
+const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
@@ -1948,6 +1948,56 @@ function createApp() {
       console.warn("⚠️ Supabase not configured, cannot create quote verification task");
     }
   }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SQUARE PAYMENT LINK GENERATION (iOS app on-demand)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // POST /api/generate-payment-link - Generate a Square payment link for a contact
+  app.post("/api/generate-payment-link", async (req, res) => {
+    try {
+      const { contactId, amountCents, description } = req.body;
+
+      if (!contactId) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required field: contactId",
+        });
+      }
+
+      if (!amountCents || typeof amountCents !== "number" || amountCents <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing or invalid required field: amountCents (must be a positive number)",
+        });
+      }
+
+      console.log(`[API] Generating payment link for contact ${contactId} — $${amountCents / 100}`);
+
+      const paymentLink = await createDepositLinkForContact({
+        contactId,
+        amountCents,
+        description: description || "Studio AZ Tattoo Payment",
+      });
+
+      console.log(`[API] Payment link generated: ${paymentLink.url}`);
+
+      res.json({
+        success: true,
+        paymentLink: {
+          url: paymentLink.url,
+          paymentLinkId: paymentLink.paymentLinkId,
+          orderId: paymentLink.orderId,
+        },
+      });
+    } catch (error) {
+      console.error("[API] Error generating payment link:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to generate payment link",
+      });
+    }
+  });
 
   return app;
 }
