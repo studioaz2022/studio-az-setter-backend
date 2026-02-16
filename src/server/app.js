@@ -783,6 +783,7 @@ function createApp() {
         consultExplained: contact?.customField?.consult_explained || webhookCustomFields?.consult_explained,
         conversationThread, // Pass thread context to AI
         channelContext, // Pass channel context for message sending
+        qualifiedLeadFAQMode: responseCheck.appendFrontDesk, // Tell AI this is a qualified lead FAQ
       });
 
       // ═══ COMPACT MODE: LOG AI RESPONSE ═══

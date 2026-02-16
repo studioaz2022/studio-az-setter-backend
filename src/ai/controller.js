@@ -36,6 +36,7 @@ async function handleInboundMessage({
   payloadCustomFields = {},
   conversationThread = null, // NEW: Formatted conversation history
   channelContext = {}, // NEW: Channel context for message sending
+  qualifiedLeadFAQMode = false, // NEW: FAQ-only mode for qualified leads
 }) {
   const startTime = Date.now();
   
@@ -46,6 +47,7 @@ async function handleInboundMessage({
       contactId: contact?.id || contact?._id,
       contactName: `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)",
       consultExplained,
+      qualifiedLeadFAQMode, // NEW: Log FAQ mode
       threadStats: conversationThread ? {
         totalMessages: conversationThread.totalCount,
         recentMessages: conversationThread.thread?.length || 0,
@@ -54,6 +56,37 @@ async function handleInboundMessage({
         wasHumanHandling: conversationThread.handoffContext?.wasHumanHandling || false,
       } : null,
     });
+  }
+
+  // ═══ QUALIFIED LEAD FAQ MODE ═══
+  // For qualified leads asking FAQ questions, provide a simple direct answer
+  // without any booking/scheduling logic
+  if (qualifiedLeadFAQMode) {
+    if (!COMPACT_MODE) {
+      console.log("💬 [FAQ MODE] Qualified lead FAQ - providing direct answer only");
+    }
+    
+    // Simple FAQ response without booking logic
+    // Just answer the question based on conversation context
+    const faqResponse = await generateOpenerForContact({
+      contact: effectiveContact,
+      contactProfile: { faq_mode: true }, // Flag to tell AI to just answer the question
+      latestMessage: latestMessageText,
+      phase: "faq", // Special phase for FAQ-only responses
+      conversationThread, // Include conversation history for context
+      isSpanish: false, // Detect from message if needed
+    });
+
+    const endTime = Date.now();
+    
+    return {
+      aiResult: faqResponse,
+      ai_phase: "faq",
+      lead_temperature: null,
+      flags: { qualifiedLeadFAQMode: true },
+      routing: { selected_handler: "qualified_faq", reason: "qualified_lead_faq_question" },
+      timing: { total: endTime - startTime },
+    };
   }
 
   const effectiveContact = buildEffectiveContact(contact, payloadCustomFields);
