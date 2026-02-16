@@ -3,6 +3,9 @@ const cors = require("cors");
 const crypto = require("crypto");
 const multer = require("multer");
 const axios = require("axios");
+const OpenAI = require("openai");
+
+const openai = new OpenAI({ apiKey: process.env.LLM_API_KEY });
 
 const {
   getContact,
@@ -2703,6 +2706,67 @@ function createApp() {
       res.status(500).json({
         success: false,
         error: error.message || "Failed to generate payment link",
+      });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TRANSLATION (iOS in-app message translation via OpenAI)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // POST /api/translate - Translate text between English and Spanish
+  app.post("/api/translate", async (req, res) => {
+    try {
+      const { text, targetLanguage } = req.body;
+
+      if (!text || typeof text !== "string" || !text.trim()) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required field: text",
+        });
+      }
+
+      const target = targetLanguage || "es"; // Default: English → Spanish
+      const targetLabel = target === "es" ? "Spanish" : "English";
+      const sourceLabel = target === "es" ? "English" : "Spanish";
+
+      console.log(`[API] Translating text (${sourceLabel} → ${targetLabel}): "${text.substring(0, 60)}..."`);
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini",
+        messages: [
+          {
+            role: "system",
+            content: `You are a translator for a tattoo studio. Translate the following message from ${sourceLabel} to ${targetLabel}. Keep the tone natural and conversational — this is a text message between a tattoo artist and a client. Return ONLY the translated text, nothing else.`,
+          },
+          {
+            role: "user",
+            content: text.trim(),
+          },
+        ],
+        temperature: 0.3,
+        max_tokens: 500,
+      });
+
+      const translatedText = completion.choices[0]?.message?.content?.trim();
+
+      if (!translatedText) {
+        throw new Error("Empty response from OpenAI");
+      }
+
+      console.log(`[API] Translation result: "${translatedText.substring(0, 60)}..."`);
+
+      res.json({
+        success: true,
+        translatedText,
+        sourceLanguage: target === "es" ? "en" : "es",
+        targetLanguage: target,
+      });
+    } catch (error) {
+      console.error("[API] Translation error:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to translate message",
       });
     }
   });
