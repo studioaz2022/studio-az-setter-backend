@@ -2002,14 +2002,17 @@ function createApp() {
    */
   function verifyFirefliesSignature(rawBody, signature, secret) {
     if (!signature || !secret) return false;
+    // Strip algorithm prefix if present (e.g. "sha256=abc..." → "abc...")
+    const sig = signature.includes("=") ? signature.split("=").slice(1).join("=") : signature;
     const expected = crypto
       .createHmac("sha256", secret)
       .update(rawBody)
       .digest("hex");
-    return crypto.timingSafeEqual(
-      Buffer.from(signature),
-      Buffer.from(expected)
-    );
+    // Guard against length mismatch to avoid timingSafeEqual throwing
+    const sigBuf = Buffer.from(sig, "utf-8");
+    const expBuf = Buffer.from(expected, "utf-8");
+    if (sigBuf.length !== expBuf.length) return false;
+    return crypto.timingSafeEqual(sigBuf, expBuf);
   }
 
   /**

@@ -348,6 +348,8 @@ async function getDocContent(documentId) {
 async function searchDriveForMeetNotes(meetingCode, options = {}) {
   console.log(`${TAG} Searching Drive for Gemini meeting notes`);
 
+  const TIME_WINDOW_MS = 2 * 60 * 60 * 1000; // ±2 hours
+
   try {
     const config = await authHeaders();
 
@@ -377,24 +379,35 @@ async function searchDriveForMeetNotes(meetingCode, options = {}) {
 
       const files = resp.data?.files || [];
       if (files.length > 0) {
-        // If we have a meeting date, prefer docs created on the same day
-        let doc = files[0];
+        let doc = null;
+
         if (options.meetingDate) {
-          const meetDate = new Date(options.meetingDate).toDateString();
-          const sameDayDoc = files.find(
-            (f) => new Date(f.createdTime).toDateString() === meetDate
-          );
-          if (sameDayDoc) doc = sameDayDoc;
+          const meetTime = new Date(options.meetingDate).getTime();
+          // Only accept docs created within ±2 hours of the meeting start
+          const matched = files.find((f) => {
+            const docTime = new Date(f.createdTime).getTime();
+            return Math.abs(docTime - meetTime) <= TIME_WINDOW_MS;
+          });
+          if (matched) {
+            doc = matched;
+          } else {
+            console.log(`${TAG} Found ${files.length} Gemini doc(s) but none within ±2hr of meeting time — skipping`);
+            continue;
+          }
+        } else {
+          doc = files[0];
         }
 
-        console.log(`${TAG} Found Gemini notes: "${doc.name}" (${doc.id})`);
+        if (doc) {
+          console.log(`${TAG} Found Gemini notes: "${doc.name}" (${doc.id})`);
 
-        const docText = await getDocContent(doc.id);
-        return {
-          docUrl: doc.webViewLink || `https://docs.google.com/document/d/${doc.id}/edit`,
-          docId: doc.id,
-          docText,
-        };
+          const docText = await getDocContent(doc.id);
+          return {
+            docUrl: doc.webViewLink || `https://docs.google.com/document/d/${doc.id}/edit`,
+            docId: doc.id,
+            docText,
+          };
+        }
       }
     }
 

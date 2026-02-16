@@ -25,6 +25,7 @@ const {
   CALENDARS,
   TRANSLATOR_CALENDARS,
   TRANSLATOR_USER_IDS,
+  GHL_USER_EMAILS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
 } = require("../config/constants");
@@ -1199,6 +1200,14 @@ async function createConsultAppointment({
     if (consultMode === "online") {
       try {
         const attendeeEmails = contact.email ? [contact.email] : [];
+        // Invite assigned artist/user to Google Calendar event
+        if (assignedUserId && GHL_USER_EMAILS[assignedUserId]) {
+          attendeeEmails.push(GHL_USER_EMAILS[assignedUserId]);
+        }
+        // Invite translator to Google Calendar event
+        if (translatorNeeded && translatorUserId && GHL_USER_EMAILS[translatorUserId]) {
+          attendeeEmails.push(GHL_USER_EMAILS[translatorUserId]);
+        }
         const meetResp = await createGoogleMeet({
           summary: title,
           description: baseDescription,

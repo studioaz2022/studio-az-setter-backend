@@ -158,6 +158,15 @@ const GHL_USER_IDS = {
   MARIA: "uAWhIMemqUPJC1SqCyDR",
 };
 
+// GHL User emails by userId (for Google Calendar invites)
+const GHL_USER_EMAILS = {
+  "Wl24x1ZrucHuHatM0ODD": "l.jchavez@hotmail.com",       // Claudia
+  "O8ChoMYj1BmMWJJsDlvC": "andrew_fernandez1@icloud.com", // Joan
+  "1wuLf50VMODExBSJ9xPI": "cjoanmartinez73@gmail.com",    // Andrew
+  "1kFG5FWdUDhXLUX46snG": "chavezctz@gmail.com",           // Lionel
+  "uAWhIMemqUPJC1SqCyDR": "mariaaclaflin@gmail.com",       // Maria
+};
+
 // GHL Custom Field IDs for quote-related fields
 const GHL_CUSTOM_FIELD_IDS = {
   QUOTED: "U4vZ7BVoyw6Zkwq33sj6",
@@ -233,6 +242,7 @@ module.exports = {
   TRANSLATOR_USER_IDS,
   CONSULTATION_CALENDARS,
   GHL_USER_IDS,
+  GHL_USER_EMAILS,
   GHL_CUSTOM_FIELD_IDS,
   HOLD_CONFIG,
   APPOINTMENT_STATUS,
