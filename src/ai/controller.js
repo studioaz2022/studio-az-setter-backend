@@ -66,13 +66,22 @@ async function handleInboundMessage({
       console.log("💬 [FAQ MODE] Qualified lead FAQ - providing direct answer only");
     }
     
+    // Build contact profile with FAQ-only instruction
+    const faqContactProfile = {
+      ...buildContactProfile(buildCanonicalState(effectiveContact), {
+        changedFields: [],
+        derivedPhase: "qualified",
+        intents: {},
+      }),
+      special_instructions: "IMPORTANT: This lead already has a consultation scheduled with an artist. They are asking a simple FAQ question. Answer their question briefly and professionally. DO NOT offer to book appointments, schedule consultations, or provide appointment slots. Just answer the question directly.",
+    };
+    
     // Simple FAQ response without booking logic
-    // Just answer the question based on conversation context
     const faqResponse = await generateOpenerForContact({
       contact: effectiveContact,
-      contactProfile: { faq_mode: true }, // Flag to tell AI to just answer the question
+      contactProfile: faqContactProfile,
       latestMessage: latestMessageText,
-      phase: "faq", // Special phase for FAQ-only responses
+      phase: "qualified", // Use qualified phase instead of faq
       conversationThread, // Include conversation history for context
       isSpanish: false, // Detect from message if needed
     });
@@ -81,7 +90,7 @@ async function handleInboundMessage({
     
     return {
       aiResult: faqResponse,
-      ai_phase: "faq",
+      ai_phase: "qualified_faq",
       lead_temperature: null,
       flags: { qualifiedLeadFAQMode: true },
       routing: { selected_handler: "qualified_faq", reason: "qualified_lead_faq_question" },
