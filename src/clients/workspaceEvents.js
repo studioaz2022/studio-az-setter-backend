@@ -38,7 +38,7 @@ const SUBSCRIPTION_TTL_SECONDS = 86400;
  * @param {string} contactId - GHL contact ID
  * @returns {Promise<{subscriptionName: string, spaceName: string}|null>}
  */
-async function subscribeToMeetSpace(meetUrl, contactId) {
+async function subscribeToMeetSpace(meetUrl, contactId, { calendarEventTitle, scheduledStart, scheduledEnd } = {}) {
   if (!PUBSUB_TOPIC) {
     console.warn(`${TAG} GOOGLE_CLOUD_PROJECT_ID not set — skipping subscription`);
     return null;
@@ -121,6 +121,9 @@ async function subscribeToMeetSpace(meetUrl, contactId) {
         subscription_name: subscriptionName,
         status: "active",
         subscription_expires_at: expiresAt,
+        calendar_event_title: calendarEventTitle || null,
+        scheduled_start: scheduledStart || null,
+        scheduled_end: scheduledEnd || null,
       },
       { onConflict: "space_name" }
     );

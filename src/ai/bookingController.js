@@ -1217,7 +1217,11 @@ async function createConsultAppointment({
         // Subscribe to Workspace Events for real-time artifact notifications
         if (meetUrl) {
           try {
-            await subscribeToMeetSpace(meetUrl, contactId);
+            await subscribeToMeetSpace(meetUrl, contactId, {
+              calendarEventTitle: title,
+              scheduledStart: startTime,
+              scheduledEnd: endTime,
+            });
           } catch (subErr) {
             console.warn(
               "⚠️ Failed to subscribe to workspace events (non-blocking):",

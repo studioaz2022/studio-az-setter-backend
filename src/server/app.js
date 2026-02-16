@@ -68,6 +68,12 @@ const {
   lookupContactBySpace,
   markSubscriptionCompleted,
 } = require("../clients/workspaceEvents");
+const {
+  getTranscript,
+  formatTranscriptText,
+  batchDeleteTranscripts,
+} = require("../clients/firefliesClient");
+const { summarizeConsultation } = require("../ai/consultationSummarizer");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -161,6 +167,41 @@ function getNonEmptyCustomFields(contact) {
 }
 
 // Helper: Derive channel context from webhook payload and contact
+/**
+ * Check if phone number is a U.S. number based on country code.
+ * U.S. numbers start with +1 followed by a 3-digit area code.
+ * This matches the logic in the iOS app's Conversation.swift model.
+ */
+function isUSPhoneNumber(phone) {
+  if (!phone) return true; // Default to US if no phone
+  
+  // Remove all non-digit characters except leading +
+  const cleanedPhone = phone.replace(/[^0-9+]/g, '');
+  
+  // Check for +1 country code (US/Canada)
+  if (cleanedPhone.startsWith('+1') && cleanedPhone.length >= 12) {
+    return true;
+  }
+  
+  // Check for 1 followed by 10 digits (US format without +)
+  if (cleanedPhone.startsWith('1') && cleanedPhone.length === 11) {
+    return true;
+  }
+  
+  // Check for 10-digit number (US format without country code)
+  if (!cleanedPhone.startsWith('+') && cleanedPhone.length === 10) {
+    return true;
+  }
+  
+  // If it starts with a different country code, it's international
+  if (cleanedPhone.startsWith('+') && !cleanedPhone.startsWith('+1')) {
+    return false;
+  }
+  
+  // Default to US if we can't determine
+  return true;
+}
+
 function deriveChannelContext(payload, contact) {
   // Check if this is a DM based on attribution source medium
   const medium = (
@@ -185,24 +226,40 @@ function deriveChannelContext(payload, contact) {
     t.includes("messenger")
   );
   
-  // Detect WhatsApp - check tags, medium, OR custom field from form
-  const cf = contact?.customField || contact?.customFields || {};
-  const whatsappUser = cf.whatsapp_user || cf.whatsappUser || "";
-  const isWhatsAppFromField = whatsappUser.toLowerCase() === "yes";
-  const isWhatsApp = tagsLower.some(t => t.includes("whatsapp")) || medium === "whatsapp" || isWhatsAppFromField;
+  // Detect phone information
+  const phone = contact?.phone || contact?.phoneNumber || payload?.phone || null;
+  const hasPhone = !!phone;
+  const isUSPhone = isUSPhoneNumber(phone);
   
-  // Detect SMS (has phone, not DM, not WhatsApp)
-  const hasPhone = !!(contact?.phone || contact?.phoneNumber || payload?.phone);
+  // Detect WhatsApp - ONLY use it if:
+  // 1. The whatsapp_user custom field is "Yes", AND
+  // 2. The contact does NOT have a US phone number (international numbers only)
+  const cf = contact?.customField || contact?.customFields || {};
+  const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
+  const isWhatsAppFromField = whatsappUser.toLowerCase() === "yes";
+  
+  // Only use WhatsApp if explicitly enabled AND phone is international
+  const isWhatsApp = isWhatsAppFromField && !isUSPhone;
+  
+  // Check tags for WhatsApp indicators (as backup context)
+  const hasWhatsAppTag = tagsLower.some(t => t.includes("whatsapp")) || medium === "whatsapp";
+  
+  // Detect DM
   const isDm = isDmFromMedium || isDmFromTags;
-  const isSms = hasPhone && !isDm && !isWhatsApp && messageType !== 11;
+  
+  // Detect SMS (has phone, not DM, not WhatsApp, OR has US phone)
+  // For US numbers, always prefer SMS even if WhatsApp is enabled
+  const isSms = hasPhone && !isDm && (!isWhatsApp || isUSPhone) && messageType !== 11;
   
   // Determine channel type for pipeline purposes
   let channelType = "unknown";
   if (isDm) {
     channelType = medium === "instagram" || medium === "ig" ? "instagram" : "facebook";
-  } else if (isWhatsApp) {
+  } else if (isWhatsApp && !isUSPhone) {
+    // Only use WhatsApp channel if international number
     channelType = "whatsapp";
-  } else if (isSms) {
+  } else if (isSms || isUSPhone) {
+    // For US numbers, always use SMS
     channelType = "sms";
   } else if (messageType === 11) {
     // GHL message type 11 is typically DM/social
@@ -216,7 +273,8 @@ function deriveChannelContext(payload, contact) {
     isSms,
     channelType,
     conversationId: null,
-    phone: contact?.phone || contact?.phoneNumber || payload?.phone || null,
+    phone,
+    isUSPhone, // Add this for debugging/logging
   };
 }
 
@@ -249,9 +307,9 @@ function createApp() {
     allowedHeaders: ['Content-Type', 'Authorization'],
   }));
 
-  // Use JSON body parsing for all routes except the Square webhook (raw body needed for signature)
+  // Use JSON body parsing for all routes except webhooks that need raw body for signature verification
   app.use((req, res, next) => {
-    if (req.path === "/square/webhook") {
+    if (req.path === "/square/webhook" || req.path === "/fireflies/webhook") {
       return next();
     }
     return express.json({ limit: "1mb" })(req, res, next);
@@ -1049,14 +1107,33 @@ function createApp() {
         // === SEND DEPOSIT CONFIRMATION MESSAGE ===
         try {
           // Build channel context from contact for message sending
+          // Use the same logic as deriveChannelContext to ensure consistency
           const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
           const hasWhatsAppEnabled = whatsappUser.toLowerCase() === "yes";
+          const phone = contact?.phone || contact?.phoneNumber;
+          const hasPhone = !!phone;
+          const isUSPhone = isUSPhoneNumber(phone);
+          
+          // Only use WhatsApp if explicitly enabled AND phone is international
+          // For US numbers, always use SMS
+          const useWhatsApp = hasWhatsAppEnabled && !isUSPhone;
+          
+          if (!COMPACT_MODE) {
+            console.log(`📱 [CHANNEL] Deposit confirmation channel selection:`, {
+              phone,
+              isUSPhone,
+              hasWhatsAppEnabled,
+              willUse: useWhatsApp ? "WhatsApp" : "SMS"
+            });
+          }
+          
           const depositChannelContext = {
             isDm: false,
-            hasPhone: !!(contact?.phone || contact?.phoneNumber),
-            isWhatsApp: hasWhatsAppEnabled,
-            isSms: !hasWhatsAppEnabled && !!(contact?.phone || contact?.phoneNumber),
-            channelType: hasWhatsAppEnabled ? "whatsapp" : "sms",
+            hasPhone,
+            isWhatsApp: useWhatsApp,
+            isSms: !useWhatsApp && hasPhone,
+            channelType: useWhatsApp ? "whatsapp" : "sms",
+            isUSPhone, // Add for debugging/logging
             conversationId: null,
             phone: contact?.phone || contact?.phoneNumber || null,
           };
@@ -1911,6 +1988,328 @@ function createApp() {
         console.error("❌ Pub/Sub push handler error:", err.message || err);
       }
     });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES.AI WEBHOOK
+  // Receives notifications when Fireflies finishes transcribing a meeting.
+  // Acts as a backup when Google Meet/Gemini artifacts are unavailable.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * Verify Fireflies webhook HMAC signature.
+   * Fireflies sends x-hub-signature header with SHA-256 HMAC of the raw body.
+   */
+  function verifyFirefliesSignature(rawBody, signature, secret) {
+    if (!signature || !secret) return false;
+    const expected = crypto
+      .createHmac("sha256", secret)
+      .update(rawBody)
+      .digest("hex");
+    return crypto.timingSafeEqual(
+      Buffer.from(signature),
+      Buffer.from(expected)
+    );
+  }
+
+  /**
+   * Extract the client name from a calendar event title.
+   * Title format: "Signature Consultation📱: Leonel Chavez"
+   * Returns the name portion after the colon, or null.
+   */
+  function extractNameFromTitle(title) {
+    if (!title || !title.includes(":")) return null;
+    const afterColon = title.split(":").pop().trim();
+    // Strip any emoji prefixes/suffixes
+    return afterColon.replace(/[\u{1F000}-\u{1FFFF}]/gu, "").trim() || null;
+  }
+
+  /**
+   * Check if Google/Gemini artifacts already exist for a contact.
+   * @param {string} contactId
+   * @returns {Promise<boolean>}
+   */
+  async function checkGoogleArtifactsExist(contactId) {
+    try {
+      const contact = await getContact(contactId);
+      const cf = contact?.customField || contact?.customFields;
+      let summaryText = null;
+      let recordingUrl = null;
+
+      if (Array.isArray(cf)) {
+        const summaryField = cf.find((f) => f.id === "xHbhQ2sA7r0jzMfIFMQT");
+        summaryText = summaryField?.value;
+        const recordField = cf.find((f) => f.id === "BEkPhRd1GFo2o3JdEUU7");
+        recordingUrl = recordField?.value;
+      } else if (cf) {
+        summaryText = cf["xHbhQ2sA7r0jzMfIFMQT"];
+        recordingUrl = cf["BEkPhRd1GFo2o3JdEUU7"];
+      }
+
+      return !!(summaryText || recordingUrl);
+    } catch {
+      return false;
+    }
+  }
+
+  app.post("/fireflies/webhook", express.raw({ type: "*/*", limit: "1mb" }), async (req, res) => {
+    // Acknowledge immediately
+    res.status(200).json({ ok: true });
+
+    setImmediate(async () => {
+      try {
+        console.log("\n🔥 ════════════════════════════════════════════════════════");
+        console.log("🔥 FIREFLIES WEBHOOK NOTIFICATION");
+        console.log("🔥 ════════════════════════════════════════════════════════");
+
+        // Raw body is a Buffer from express.raw()
+        const rawBody = Buffer.isBuffer(req.body) ? req.body.toString("utf-8") : String(req.body);
+
+        // Verify HMAC signature
+        const webhookSecret = process.env.FIREFLIES_WEBHOOK_SECRET;
+        const signature = req.headers["x-hub-signature"];
+
+        if (webhookSecret && !verifyFirefliesSignature(rawBody, signature, webhookSecret)) {
+          console.error("🔥 Invalid Fireflies webhook signature — rejecting");
+          return;
+        }
+
+        const payload = JSON.parse(rawBody);
+        const { meetingId, eventType } = payload;
+
+        console.log("🔥 Event:", eventType, "| Meeting ID:", meetingId);
+
+        if (eventType !== "Transcription completed" || !meetingId) {
+          console.log("🔥 Ignoring non-transcription event");
+          return;
+        }
+
+        // Brief delay to ensure transcript is fully available
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+
+        // 1. Fetch transcript from Fireflies
+        let transcript;
+        try {
+          transcript = await getTranscript(meetingId);
+        } catch (err) {
+          console.error("🔥 Failed to fetch transcript:", err.message);
+          return;
+        }
+
+        if (!transcript || !transcript.sentences || transcript.sentences.length === 0) {
+          console.warn("🔥 Transcript is empty or has no sentences");
+          return;
+        }
+
+        console.log(`🔥 Transcript: "${transcript.title}" (${transcript.sentences.length} sentences)`);
+
+        // 2. Match to contact via calendar event title
+        const transcriptTitle = transcript.title || "";
+        const transcriptDate = transcript.date ? new Date(transcript.date) : new Date();
+        let contactId = null;
+        let clientName = null;
+
+        // Try matching by title — extract name from transcript title
+        // Fireflies uses the calendar event title, so it should match our format
+        const nameFromTitle = extractNameFromTitle(transcriptTitle);
+
+        if (nameFromTitle && supabase) {
+          // Search meet_event_subscriptions for a matching calendar event
+          const windowStart = new Date(transcriptDate.getTime() - 24 * 60 * 60 * 1000).toISOString();
+          const windowEnd = new Date(transcriptDate.getTime() + 24 * 60 * 60 * 1000).toISOString();
+
+          const { data: matches } = await supabase
+            .from("meet_event_subscriptions")
+            .select("contact_id, calendar_event_title")
+            .ilike("calendar_event_title", `%${nameFromTitle}%`)
+            .gte("scheduled_start", windowStart)
+            .lte("scheduled_start", windowEnd)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (matches && matches.length > 0) {
+            contactId = matches[0].contact_id;
+            clientName = nameFromTitle;
+            console.log(`🔥 Matched to contact ${contactId} via title "${nameFromTitle}"`);
+          }
+        }
+
+        // Fallback: try matching by transcript title directly against calendar_event_title
+        if (!contactId && supabase) {
+          const { data: titleMatches } = await supabase
+            .from("meet_event_subscriptions")
+            .select("contact_id, calendar_event_title")
+            .ilike("calendar_event_title", `%${transcriptTitle.substring(0, 50)}%`)
+            .order("created_at", { ascending: false })
+            .limit(1);
+
+          if (titleMatches && titleMatches.length > 0) {
+            contactId = titleMatches[0].contact_id;
+            clientName = extractNameFromTitle(titleMatches[0].calendar_event_title);
+            console.log(`🔥 Matched to contact ${contactId} via direct title match`);
+          }
+        }
+
+        if (!contactId) {
+          console.warn("🔥 Could not match transcript to any contact — storing as unmatched");
+          if (supabase) {
+            await supabase.from("fireflies_transcripts").upsert(
+              {
+                transcript_id: meetingId,
+                meeting_title: transcriptTitle,
+                meeting_date: transcriptDate.toISOString(),
+                status: "unmatched",
+              },
+              { onConflict: "transcript_id" }
+            );
+          }
+          return;
+        }
+
+        // 3. Check if Google/Gemini artifacts already exist (priority check)
+        const googleExists = await checkGoogleArtifactsExist(contactId);
+        if (googleExists) {
+          console.log("🔥 Google/Gemini artifacts already exist — skipping Fireflies backup");
+          if (supabase) {
+            await supabase.from("fireflies_transcripts").upsert(
+              {
+                transcript_id: meetingId,
+                contact_id: contactId,
+                meeting_title: transcriptTitle,
+                meeting_date: transcriptDate.toISOString(),
+                status: "skipped_google_exists",
+                processed_at: new Date().toISOString(),
+              },
+              { onConflict: "transcript_id" }
+            );
+          }
+          return;
+        }
+
+        // 4. Format transcript
+        const rawText = formatTranscriptText(transcript.sentences);
+        console.log(`🔥 Formatted transcript: ${rawText.length} chars`);
+
+        // 5. Generate ChatGPT summary
+        let summaryText = "";
+        try {
+          // Look up tattoo summary for context
+          let tattooSummary = null;
+          try {
+            const contact = await getContact(contactId);
+            const cf = contact?.customField || contact?.customFields;
+            if (Array.isArray(cf)) {
+              const tsField = cf.find((f) => f.id === "xAGtMfmbxtfCHdo2oyf7");
+              tattooSummary = tsField?.value;
+            } else if (cf) {
+              tattooSummary = cf["xAGtMfmbxtfCHdo2oyf7"] || cf.tattoo_summary;
+            }
+          } catch {}
+
+          summaryText = await summarizeConsultation(rawText, {
+            clientName: clientName || "Client",
+            tattooSummary,
+          });
+        } catch (err) {
+          console.error("🔥 Failed to generate summary:", err.message);
+          summaryText = "Summary generation failed. See raw transcript.";
+        }
+
+        // 6. Save to GHL custom fields
+        const customField = {
+          Tj9WuXbE1hWtxfTgCMGM: rawText,         // fireflies_transcript_text
+          EU4U5jeDJxXHQ8Jh8gfT: summaryText,     // fireflies_chatgpt_summary
+          LUASmxIwwPBr3SsZEHd9: meetingId,       // fireflies_transcript_id
+          HORoQH6waBo9xSabFbyM: new Date().toISOString(), // fireflies_processed_at
+        };
+
+        try {
+          await updateContact(contactId, { customField });
+          console.log(`🔥 ✅ Saved Fireflies data to contact ${contactId}`);
+        } catch (err) {
+          console.error("🔥 Failed to update GHL contact:", err.message);
+        }
+
+        // 7. Track for cleanup
+        if (supabase) {
+          await supabase.from("fireflies_transcripts").upsert(
+            {
+              transcript_id: meetingId,
+              contact_id: contactId,
+              meeting_title: transcriptTitle,
+              meeting_date: transcriptDate.toISOString(),
+              status: "processed",
+              processed_at: new Date().toISOString(),
+            },
+            { onConflict: "transcript_id" }
+          );
+        }
+
+        console.log("🔥 ════════════════════════════════════════════════════════\n");
+      } catch (err) {
+        console.error("🔥 Fireflies webhook handler error:", err.message || err);
+      }
+    });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES CLEANUP ENDPOINT
+  // Deletes processed transcripts from Fireflies to stay within free plan
+  // storage limits. Call weekly via cron or manually.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/fireflies/cleanup", async (req, res) => {
+    try {
+      console.log("🧹 Starting Fireflies transcript cleanup...");
+
+      if (!supabase) {
+        return res.status(500).json({ error: "Supabase not configured" });
+      }
+
+      // Find transcripts older than 7 days that are processed or skipped
+      const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+
+      const { data: toDelete, error: queryErr } = await supabase
+        .from("fireflies_transcripts")
+        .select("transcript_id")
+        .in("status", ["processed", "skipped_google_exists"])
+        .lt("created_at", cutoffDate);
+
+      if (queryErr) {
+        console.error("🧹 Error querying transcripts:", queryErr);
+        return res.status(500).json({ error: queryErr.message });
+      }
+
+      if (!toDelete || toDelete.length === 0) {
+        console.log("🧹 No transcripts to clean up");
+        return res.json({ success: true, deleted: 0, message: "No transcripts to clean up" });
+      }
+
+      const ids = toDelete.map((r) => r.transcript_id);
+      console.log(`🧹 Found ${ids.length} transcripts to delete from Fireflies`);
+
+      // Delete from Fireflies API
+      const deletedCount = await batchDeleteTranscripts(ids);
+
+      // Mark as deleted in Supabase
+      const { error: updateErr } = await supabase
+        .from("fireflies_transcripts")
+        .update({
+          status: "deleted",
+          deleted_at: new Date().toISOString(),
+        })
+        .in("transcript_id", ids);
+
+      if (updateErr) {
+        console.error("🧹 Error updating deletion status:", updateErr);
+      }
+
+      console.log(`🧹 Cleanup complete: ${deletedCount}/${ids.length} deleted`);
+      res.json({ success: true, deleted: deletedCount, total: ids.length });
+    } catch (err) {
+      console.error("🧹 Cleanup error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

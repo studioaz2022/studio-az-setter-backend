@@ -74,9 +74,13 @@ async function createGoogleMeet({
     MEET_CALENDAR_ID
   )}/events?conferenceDataVersion=1&sendUpdates=all`;
 
-  const attendeeObjects = (attendees || [])
-    .filter(Boolean)
-    .map((email) => ({ email }));
+  // Auto-invite Fireflies bot for backup transcription
+  const FIREFLIES_BOT_EMAIL = "fred@fireflies.ai";
+  const baseAttendees = (attendees || []).filter(Boolean);
+  if (!baseAttendees.includes(FIREFLIES_BOT_EMAIL)) {
+    baseAttendees.push(FIREFLIES_BOT_EMAIL);
+  }
+  const attendeeObjects = baseAttendees.map((email) => ({ email }));
 
   const eventBody = {
     summary: summary || "Consultation",
