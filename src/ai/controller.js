@@ -66,36 +66,47 @@ async function handleInboundMessage({
       console.log("💬 [FAQ MODE] Qualified lead FAQ - providing direct answer only");
     }
     
-    // Build contact profile with FAQ-only instruction
-    const faqContactProfile = {
-      ...buildContactProfile(buildCanonicalState(effectiveContact), {
-        changedFields: [],
-        derivedPhase: "qualified",
-        intents: {},
-      }),
-      special_instructions: "IMPORTANT: This lead already has a consultation scheduled with an artist. They are asking a simple FAQ question. Answer their question briefly and professionally. DO NOT offer to book appointments, schedule consultations, or provide appointment slots. Just answer the question directly.",
-    };
-    
-    // Simple FAQ response without booking logic
-    const faqResponse = await generateOpenerForContact({
-      contact: effectiveContact,
-      contactProfile: faqContactProfile,
-      latestMessage: latestMessageText,
-      phase: "qualified", // Use qualified phase instead of faq
-      conversationThread, // Include conversation history for context
-      isSpanish: false, // Detect from message if needed
-    });
+    try {
+      const effectiveContact = buildEffectiveContact(contact, payloadCustomFields);
+      const canonicalState = buildCanonicalState(effectiveContact);
+      
+      // Build contact profile with FAQ-only instruction
+      const faqContactProfile = {
+        ...buildContactProfile(canonicalState, {
+          changedFields: [],
+          derivedPhase: "qualified",
+          intents: {},
+        }),
+        special_instructions: "IMPORTANT: This lead already has a consultation scheduled with an artist. They are asking a simple FAQ question. Answer their question briefly and professionally. DO NOT offer to book appointments, schedule consultations, or provide appointment slots. Just answer the question directly.",
+      };
+      
+      // Simple FAQ response without booking logic
+      const faqResponse = await generateOpenerForContact({
+        contact: effectiveContact,
+        contactProfile: faqContactProfile,
+        latestMessage: latestMessageText,
+        phase: "qualified", // Use qualified phase instead of faq
+        conversationThread, // Include conversation history for context
+        isSpanish: false, // Detect from message if needed
+      });
 
-    const endTime = Date.now();
-    
-    return {
-      aiResult: faqResponse,
-      ai_phase: "qualified_faq",
-      lead_temperature: null,
-      flags: { qualifiedLeadFAQMode: true },
-      routing: { selected_handler: "qualified_faq", reason: "qualified_lead_faq_question" },
-      timing: { total: endTime - startTime },
-    };
+      const endTime = Date.now();
+      
+      return {
+        aiResult: faqResponse,
+        ai_phase: "qualified_faq",
+        lead_temperature: null,
+        flags: { qualifiedLeadFAQMode: true },
+        routing: { selected_handler: "qualified_faq", reason: "qualified_lead_faq_question" },
+        timing: { total: endTime - startTime },
+      };
+    } catch (err) {
+      console.error("❌ [FAQ MODE] Error in qualified lead FAQ mode:", err.message || err);
+      // Fall through to normal processing if FAQ mode fails
+      if (!COMPACT_MODE) {
+        console.log("⚠️  [FAQ MODE] Falling back to normal AI processing");
+      }
+    }
   }
 
   const effectiveContact = buildEffectiveContact(contact, payloadCustomFields);
