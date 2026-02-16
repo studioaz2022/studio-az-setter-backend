@@ -2001,37 +2001,22 @@ function createApp() {
    * Fireflies sends x-hub-signature header with SHA-256 HMAC of the raw body.
    */
   function verifyFirefliesSignature(rawBody, signature, secret) {
-    if (!signature || !secret) {
-      console.log("🔥 [HMAC DEBUG] Missing signature or secret:", { hasSignature: !!signature, hasSecret: !!secret });
-      return false;
-    }
+    if (!signature || !secret) return false;
 
-    console.log("🔥 [HMAC DEBUG] Raw x-hub-signature header:", JSON.stringify(signature));
-    console.log("🔥 [HMAC DEBUG] Signature length:", signature.length);
-
-    // Strip algorithm prefix if present (e.g. "sha256=abc..." → "abc...")
+    // Strip "sha256=" prefix (Fireflies sends "sha256=<hex>")
     const sig = signature.includes("=") ? signature.split("=").slice(1).join("=") : signature;
-    console.log("🔥 [HMAC DEBUG] After prefix strip:", JSON.stringify(sig));
-    console.log("🔥 [HMAC DEBUG] Stripped length:", sig.length);
 
     const expected = crypto
       .createHmac("sha256", secret)
       .update(rawBody)
       .digest("hex");
-    console.log("🔥 [HMAC DEBUG] Computed HMAC:", JSON.stringify(expected));
-    console.log("🔥 [HMAC DEBUG] Computed length:", expected.length);
 
     // Guard against length mismatch to avoid timingSafeEqual throwing
     const sigBuf = Buffer.from(sig, "utf-8");
     const expBuf = Buffer.from(expected, "utf-8");
-    if (sigBuf.length !== expBuf.length) {
-      console.error("🔥 [HMAC DEBUG] LENGTH MISMATCH — sigBuf:", sigBuf.length, "vs expBuf:", expBuf.length);
-      return false;
-    }
+    if (sigBuf.length !== expBuf.length) return false;
 
-    const match = crypto.timingSafeEqual(sigBuf, expBuf);
-    console.log("🔥 [HMAC DEBUG] Signature match:", match);
-    return match;
+    return crypto.timingSafeEqual(sigBuf, expBuf);
   }
 
   /**
@@ -2215,22 +2200,8 @@ function createApp() {
         // 5. Generate ChatGPT summary
         let summaryText = "";
         try {
-          // Look up tattoo summary for context
-          let tattooSummary = null;
-          try {
-            const contact = await getContact(contactId);
-            const cf = contact?.customField || contact?.customFields;
-            if (Array.isArray(cf)) {
-              const tsField = cf.find((f) => f.id === "xAGtMfmbxtfCHdo2oyf7");
-              tattooSummary = tsField?.value;
-            } else if (cf) {
-              tattooSummary = cf["xAGtMfmbxtfCHdo2oyf7"] || cf.tattoo_summary;
-            }
-          } catch {}
-
           summaryText = await summarizeConsultation(rawText, {
             clientName: clientName || "Client",
-            tattooSummary,
           });
         } catch (err) {
           console.error("🔥 Failed to generate summary:", err.message);
