@@ -63,6 +63,11 @@ const {
 const {
   handleQualifiedLeadTasks,
 } = require("../ai/qualifiedLeadHandler");
+const { fetchAllArtifacts } = require("../clients/googleMeetArtifacts");
+const {
+  lookupContactBySpace,
+  markSubscriptionCompleted,
+} = require("../clients/workspaceEvents");
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -1760,6 +1765,152 @@ function createApp() {
         message: error.message || 'Failed to save checklist'
       });
     }
+  });
+
+  // PUT /api/contacts/:contactId/consultation-artifacts - Fetch and store Google Meet consultation artifacts
+  app.put("/api/contacts/:contactId/consultation-artifacts", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      let { meetUrl } = req.body;
+
+      // If no meetUrl provided, look up the contact's existing google_meet_link
+      if (!meetUrl) {
+        const contact = await getContact(contactId);
+        // GHL returns customFields as array of {id, value} objects or as a flat object
+        const cf = contact?.customField || contact?.customFields;
+        if (Array.isArray(cf)) {
+          const meetField = cf.find(f => f.id === "rQrUAlymMTeoJZ1uxSvt");
+          meetUrl = meetField?.value;
+        } else if (cf) {
+          meetUrl = cf.google_meet_link || cf.rQrUAlymMTeoJZ1uxSvt;
+        }
+      }
+
+      if (!meetUrl) {
+        return res.status(400).json({ error: "No Google Meet URL found for this contact" });
+      }
+
+      console.log(`[consultation-artifacts] Fetching artifacts for contact ${contactId}, meetUrl: ${meetUrl}`);
+
+      const artifacts = await fetchAllArtifacts(meetUrl);
+
+      // Build custom field updates using the same key-value object format used elsewhere
+      const customField = {};
+      if (artifacts.recordingUrl) {
+        customField["BEkPhRd1GFo2o3JdEUU7"] = artifacts.recordingUrl;
+      }
+      if (artifacts.transcriptUrl) {
+        customField["gahUM3ON1zMOl3meTOJt"] = artifacts.transcriptUrl;
+      }
+      if (artifacts.smartNotesUrl) {
+        customField["tey5KNaD9CGSyMTCRV07"] = artifacts.smartNotesUrl;
+      }
+      if (artifacts.smartNotesText) {
+        customField["xHbhQ2sA7r0jzMfIFMQT"] = artifacts.smartNotesText;
+      }
+
+      if (Object.keys(customField).length > 0) {
+        await updateContact(contactId, { customField });
+      }
+
+      res.json({ success: true, artifacts });
+    } catch (err) {
+      console.error("[consultation-artifacts] Error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GOOGLE PUB/SUB PUSH WEBHOOK
+  // Receives push notifications from Workspace Events API when Meet artifacts
+  // (recordings, transcripts) are ready after a consultation.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/google/pubsub/push", async (req, res) => {
+    // Acknowledge immediately so Pub/Sub doesn't retry
+    res.status(200).json({ ok: true });
+
+    setImmediate(async () => {
+      try {
+        console.log("\n📡 ════════════════════════════════════════════════════════");
+        console.log("📡 GOOGLE PUB/SUB PUSH NOTIFICATION");
+        console.log("📡 ════════════════════════════════════════════════════════");
+
+        const message = req.body?.message;
+        if (!message) {
+          console.warn("⚠️ Pub/Sub push with no message body");
+          return;
+        }
+
+        // Decode the base64-encoded Pub/Sub message data
+        const dataStr = message.data
+          ? Buffer.from(message.data, "base64").toString("utf-8")
+          : "{}";
+
+        const attributes = message.attributes || {};
+        const eventType = attributes["ce-type"] || "";
+        const subject = attributes["ce-subject"] || "";
+
+        console.log("📦 Event type:", eventType);
+        console.log("📦 Subject:", subject);
+
+        // Extract space name from ce-subject
+        // Format: "//meet.googleapis.com/spaces/abc-defg-hij"
+        let spaceName = null;
+        if (subject.includes("meet.googleapis.com/spaces/")) {
+          spaceName = subject.replace("//meet.googleapis.com/", "");
+        }
+
+        if (!spaceName) {
+          console.warn("⚠️ Could not extract space name from subject:", subject);
+          return;
+        }
+
+        console.log("🔍 Space:", spaceName);
+
+        // Look up the contact associated with this meeting space
+        const mapping = await lookupContactBySpace(spaceName);
+        if (!mapping) {
+          console.warn(`⚠️ No contact mapping found for space: ${spaceName}`);
+          return;
+        }
+
+        const { contactId, meetUrl } = mapping;
+        console.log(`👤 Contact: ${contactId} | Meet: ${meetUrl}`);
+
+        // Brief delay — file may need a few seconds to finalize after notification
+        await new Promise((resolve) => setTimeout(resolve, 10000));
+
+        // Fetch all artifacts (recordings, transcripts, smart notes)
+        console.log(`🔄 Fetching artifacts for contact ${contactId}...`);
+        const artifacts = await fetchAllArtifacts(meetUrl);
+
+        // Save to GHL custom fields
+        const customField = {};
+        if (artifacts.recordingUrl)
+          customField["BEkPhRd1GFo2o3JdEUU7"] = artifacts.recordingUrl;
+        if (artifacts.transcriptUrl)
+          customField["gahUM3ON1zMOl3meTOJt"] = artifacts.transcriptUrl;
+        if (artifacts.smartNotesUrl)
+          customField["tey5KNaD9CGSyMTCRV07"] = artifacts.smartNotesUrl;
+        if (artifacts.smartNotesText)
+          customField["xHbhQ2sA7r0jzMfIFMQT"] = artifacts.smartNotesText;
+
+        if (Object.keys(customField).length > 0) {
+          await updateContact(contactId, { customField });
+          console.log(
+            `✅ Saved ${Object.keys(customField).length} artifact(s) for contact ${contactId}`
+          );
+          await markSubscriptionCompleted(spaceName);
+        } else {
+          console.log(`⚠️ No artifacts available yet for contact ${contactId}`);
+        }
+
+        console.log("📡 ════════════════════════════════════════════════════════\n");
+      } catch (err) {
+        console.error("❌ Pub/Sub push handler error:", err.message || err);
+      }
+    });
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

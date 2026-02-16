@@ -115,4 +115,5 @@ async function createGoogleMeet({
 
 module.exports = {
   createGoogleMeet,
+  getAccessToken,
 };

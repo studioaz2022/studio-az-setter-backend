@@ -20,6 +20,7 @@ const {
   getCalendarFreeSlots,
 } = require("../clients/ghlCalendarClient");
 const { createGoogleMeet } = require("../clients/googleMeet");
+const { subscribeToMeetSpace } = require("../clients/workspaceEvents");
 const {
   CALENDARS,
   TRANSLATOR_CALENDARS,
@@ -1212,6 +1213,18 @@ async function createConsultAppointment({
           "| calendar event:",
           meetResp.htmlLink
         );
+
+        // Subscribe to Workspace Events for real-time artifact notifications
+        if (meetUrl) {
+          try {
+            await subscribeToMeetSpace(meetUrl, contactId);
+          } catch (subErr) {
+            console.warn(
+              "⚠️ Failed to subscribe to workspace events (non-blocking):",
+              subErr.message
+            );
+          }
+        }
       } catch (meetErr) {
         console.warn(
           "⚠️ Failed to create Google Meet (continuing without link):",
