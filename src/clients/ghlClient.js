@@ -22,6 +22,62 @@ const AI_MESSAGE_MARKER = "  ";
 const AI_BOT_USER_ID = "3dsbsgZpCWrDYCFPvhKu";
 
 /**
+ * Temporarily reassign contact to AI Bot, send message, then reassign back
+ * This is necessary because GHL only allows sending messages with userId of the assigned user
+ */
+async function temporaryReassignForAIMessage(contactId, originalAssignedTo) {
+  if (!contactId) return null;
+  
+  try {
+    // Reassign to AI Bot temporarily
+    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
+    const payload = { assignedTo: AI_BOT_USER_ID };
+    
+    await axios.put(url, payload, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Version: "2021-07-28",
+      },
+    });
+    
+    if (!COMPACT_MODE) console.log(`🔄 Temporarily reassigned contact ${contactId} to AI Bot`);
+    
+    return originalAssignedTo; // Return for reassigning back later
+  } catch (err) {
+    console.error("❌ Error temporarily reassigning to AI Bot:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
+/**
+ * Reassign contact back to original artist after AI message sent
+ */
+async function reassignToOriginalArtist(contactId, originalAssignedTo) {
+  if (!contactId || !originalAssignedTo) return;
+  
+  try {
+    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
+    const payload = { assignedTo: originalAssignedTo };
+    
+    await axios.put(url, payload, {
+      headers: {
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        "Content-Type": "application/json",
+        Accept: "application/json",
+        Version: "2021-07-28",
+      },
+    });
+    
+    if (!COMPACT_MODE) console.log(`🔄 Reassigned contact ${contactId} back to original artist: ${originalAssignedTo}`);
+  } catch (err) {
+    console.error("❌ Error reassigning back to original artist:", err.response?.data || err.message);
+    // Don't throw - message was already sent successfully
+  }
+}
+
+/**
  * Check if phone number is a U.S. number based on country code.
  * U.S. numbers start with +1 followed by a 3-digit area code.
  * This matches the logic in the iOS app's Conversation.swift model.
@@ -886,6 +942,27 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     }));
   }
 
+  // ═══ TEMPORARY REASSIGNMENT WORKFLOW FOR AI BOT USERID ═══
+  // GHL requires contact to be assigned to the user whose userId we want in the message
+  // So we temporarily reassign to AI Bot, send message, then reassign back
+  let originalAssignedTo = null;
+  let needsReassignment = false;
+  
+  try {
+    // Fetch current assignment
+    const contact = await getContact(contactId);
+    originalAssignedTo = contact?.assignedTo;
+    
+    // Only reassign if contact is assigned to someone other than AI Bot
+    if (originalAssignedTo && originalAssignedTo !== AI_BOT_USER_ID) {
+      needsReassignment = true;
+      await temporaryReassignForAIMessage(contactId, originalAssignedTo);
+    }
+  } catch (err) {
+    console.error("⚠️ Error in reassignment workflow setup:", err.message);
+    // Continue anyway - worst case message won't have userId
+  }
+
   // 1) DM reply path (no phone required)
   if (isDm) {
     // If no conversationId provided, try to find existing DM conversation
@@ -1025,9 +1102,20 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
         if (!COMPACT_MODE) console.log("📨 GHL DM reply response:", { status: resp.status, contactId, conversationId: finalConversationId });
 
+        // Reassign back to original artist
+        if (needsReassignment && originalAssignedTo) {
+          await reassignToOriginalArtist(contactId, originalAssignedTo);
+        }
+
         return resp.data;
       } catch (err) {
         console.error("❌ Error sending DM reply via GHL:", err.response?.data || err.message);
+        
+        // Reassign back even on error
+        if (needsReassignment && originalAssignedTo) {
+          await reassignToOriginalArtist(contactId, originalAssignedTo);
+        }
+        
         // fall through to try alternative method
       }
     }
@@ -1063,12 +1151,28 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
           if (!COMPACT_MODE) console.log("📨 GHL DM message response (new conversation):", { status: resp.status, contactId, type: inferredType });
 
+          // Reassign back to original artist
+          if (needsReassignment && originalAssignedTo) {
+            await reassignToOriginalArtist(contactId, originalAssignedTo);
+          }
+
           return resp.data;
         } else {
           console.warn(`⚠️ Cannot send DM: inferred type is ${inferredType}, not IG/FB`);
+          
+          // Reassign back even if we can't send
+          if (needsReassignment && originalAssignedTo) {
+            await reassignToOriginalArtist(contactId, originalAssignedTo);
+          }
         }
       } catch (err) {
         console.error("❌ Error sending DM via GHL (new conversation):", err.response?.data || err.message);
+        
+        // Reassign back even on error
+        if (needsReassignment && originalAssignedTo) {
+          await reassignToOriginalArtist(contactId, originalAssignedTo);
+        }
+        
         // fall through to error handling
       }
     }
@@ -1103,9 +1207,20 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
       if (!COMPACT_MODE) console.log("📨 GHL conversations API response:", { status: resp.status, contactId, type });
 
+      // Reassign back to original artist
+      if (needsReassignment && originalAssignedTo) {
+        await reassignToOriginalArtist(contactId, originalAssignedTo);
+      }
+
       return resp.data;
     } catch (err) {
       console.error("❌ Error sending SMS/phone message via GHL:", err.response?.data || err.message);
+      
+      // Reassign back even on error
+      if (needsReassignment && originalAssignedTo) {
+        await reassignToOriginalArtist(contactId, originalAssignedTo);
+      }
+      
       throw err;
     }
   } else {
@@ -1161,6 +1276,11 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
       } catch (err) {
         console.error("❌ Error sending message via GHL (fallback):", err.response?.data || err.message);
         throw err;
+      } finally {
+        // Reassign back to original artist if we temporarily reassigned
+        if (needsReassignment && originalAssignedTo) {
+          await reassignToOriginalArtist(contactId, originalAssignedTo);
+        }
       }
     } else {
       // This should not happen now since DM handling is above, but keep as safety net
@@ -1168,6 +1288,12 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         "⚠️ No valid phone number and no DM conversationId; cannot send message.",
         { contactId, isDm, hasPhone, conversationId }
       );
+      
+      // Reassign back if we temporarily reassigned
+      if (needsReassignment && originalAssignedTo) {
+        await reassignToOriginalArtist(contactId, originalAssignedTo);
+      }
+      
       return null;
     }
   }
