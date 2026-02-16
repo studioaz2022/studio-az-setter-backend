@@ -2,6 +2,7 @@ const express = require("express");
 const cors = require("cors");
 const crypto = require("crypto");
 const multer = require("multer");
+const axios = require("axios");
 
 const {
   getContact,
@@ -74,6 +75,9 @@ const {
   batchDeleteTranscripts,
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
+
+// ═══ ENVIRONMENT VARIABLES ═══
+const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE DEBOUNCING SYSTEM
@@ -172,11 +176,31 @@ const QUALIFIED_STAGE_IDS = [
 
 /**
  * Check if contact is in a qualified stage where AI should limit responses
+ * Fetches opportunities from GHL API and checks their stage IDs
  */
-function isInQualifiedStage(contact) {
-  const cf = contact?.customField || contact?.customFields || {};
-  const stageId = cf.opportunity_stage_id || cf.opportunityStageId;
-  return QUALIFIED_STAGE_IDS.includes(stageId);
+async function isInQualifiedStage(contactId, locationId) {
+  try {
+    const opportunitiesUrl = `https://services.leadconnectorhq.com/opportunities/search?location_id=${locationId}&contact_id=${contactId}`;
+    const oppsResp = await axios.get(opportunitiesUrl, {
+      headers: {
+        'Authorization': `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        'Version': '2021-07-28',
+        'Accept': 'application/json'
+      }
+    });
+
+    const opportunities = oppsResp.data.opportunities || [];
+    
+    // Check if contact has any open opportunity in a qualified stage
+    const hasQualifiedOpp = opportunities.some(opp => 
+      QUALIFIED_STAGE_IDS.includes(opp.pipelineStageId) && opp.status === 'open'
+    );
+
+    return hasQualifiedOpp;
+  } catch (err) {
+    console.error("⚠️ Error checking qualified stage:", err.message);
+    return false; // Default to not qualified if error
+  }
 }
 
 /**
@@ -240,9 +264,11 @@ function detectFAQQuestion(text) {
  * Determine if AI should respond to this message
  * Returns: { shouldRespond: boolean, reason: string, appendFrontDesk: boolean }
  */
-function shouldAIRespond(contact, messageText) {
+async function shouldAIRespond(contactId, locationId, messageText) {
   // Check if lead is in qualified stage
-  if (!isInQualifiedStage(contact)) {
+  const isQualified = await isInQualifiedStage(contactId, locationId);
+  
+  if (!isQualified) {
     return { 
       shouldRespond: true, 
       reason: 'lead_not_qualified',
@@ -726,7 +752,7 @@ function createApp() {
       }
 
       // ═══ CHECK IF AI SHOULD RESPOND (QUALIFIED LEAD LOGIC) ═══
-      const responseCheck = shouldAIRespond(contact, combinedMessageText);
+      const responseCheck = await shouldAIRespond(contactId, contact.locationId, combinedMessageText);
       
       if (!responseCheck.shouldRespond) {
         if (COMPACT_MODE) {
