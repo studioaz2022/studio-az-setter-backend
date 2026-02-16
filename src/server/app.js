@@ -160,6 +160,115 @@ function filterNonEmpty(obj) {
   return filtered;
 }
 
+// ============================================================================
+// Qualified Lead AI Response Logic
+// ============================================================================
+
+// Stage IDs where AI should limit responses (only FAQ questions)
+const QUALIFIED_STAGE_IDS = [
+  'd30d3a30-3a78-4123-9387-8db3d6dd8a20', // Consult Appointment (video scheduled)
+  '09587a76-13ae-41b3-bd57-81da11f1c56c'  // Consult Message (artist handling)
+];
+
+/**
+ * Check if contact is in a qualified stage where AI should limit responses
+ */
+function isInQualifiedStage(contact) {
+  const cf = contact?.customField || contact?.customFields || {};
+  const stageId = cf.opportunity_stage_id || cf.opportunityStageId;
+  return QUALIFIED_STAGE_IDS.includes(stageId);
+}
+
+/**
+ * Detect if message is an FAQ question
+ * These patterns match common pre-appointment questions
+ */
+function detectFAQQuestion(text) {
+  if (!text) return false;
+  
+  const lower = text.toLowerCase();
+  
+  // Common FAQ patterns for tattoo studio
+  const faqPatterns = [
+    // Time/scheduling questions
+    /what\s+time/i,
+    /when\s+(is|are)/i,
+    /appointment\s+time/i,
+    
+    // Location questions
+    /where\s+(is|are|do)/i,
+    /address/i,
+    /location/i,
+    /how\s+do\s+i\s+get/i,
+    /directions/i,
+    
+    // Preparation questions
+    /what\s+should\s+i\s+bring/i,
+    /how\s+(to|do\s+i)\s+prepare/i,
+    /before\s+(my|the)\s+appointment/i,
+    /what\s+to\s+(expect|wear)/i,
+    
+    // Logistics
+    /parking/i,
+    /how\s+long/i,
+    /duration/i,
+    /how\s+much\s+time/i,
+    
+    // Rescheduling
+    /reschedule/i,
+    /cancel/i,
+    /change\s+(my\s+)?appointment/i,
+    /move\s+(my\s+)?appointment/i,
+    
+    // Payment/cost
+    /how\s+much/i,
+    /cost/i,
+    /price/i,
+    /payment/i,
+    /pay/i,
+    
+    // Aftercare (pre-appointment questions about post-care)
+    /aftercare/i,
+    /how\s+to\s+care/i,
+    /healing/i,
+  ];
+  
+  return faqPatterns.some(pattern => pattern.test(lower));
+}
+
+/**
+ * Determine if AI should respond to this message
+ * Returns: { shouldRespond: boolean, reason: string, appendFrontDesk: boolean }
+ */
+function shouldAIRespond(contact, messageText) {
+  // Check if lead is in qualified stage
+  if (!isInQualifiedStage(contact)) {
+    return { 
+      shouldRespond: true, 
+      reason: 'lead_not_qualified',
+      appendFrontDesk: false
+    };
+  }
+  
+  // Lead is qualified - only respond to FAQ questions
+  const isFAQ = detectFAQQuestion(messageText);
+  
+  if (isFAQ) {
+    return { 
+      shouldRespond: true, 
+      reason: 'qualified_faq_question',
+      appendFrontDesk: true  // Add -FrontDesk suffix
+    };
+  }
+  
+  // Qualified lead, not FAQ - artist should handle
+  return { 
+    shouldRespond: false, 
+    reason: 'qualified_artist_handles',
+    appendFrontDesk: false
+  };
+}
+
 // Helper: Extract non-empty custom fields from contact
 function getNonEmptyCustomFields(contact) {
   const cf = contact?.customField || contact?.customFields || {};
@@ -616,6 +725,29 @@ function createApp() {
         });
       }
 
+      // ═══ CHECK IF AI SHOULD RESPOND (QUALIFIED LEAD LOGIC) ═══
+      const responseCheck = shouldAIRespond(contact, combinedMessageText);
+      
+      if (!responseCheck.shouldRespond) {
+        if (COMPACT_MODE) {
+          console.log(`⏭️ [AI SKIP] ${responseCheck.reason}`);
+        } else {
+          console.log(`⏭️ [AI SKIP] Lead is qualified - AI will not respond (reason: ${responseCheck.reason})`);
+          console.log(`   Stage ID: ${cf.opportunity_stage_id || cf.opportunityStageId}`);
+          console.log(`   Message: "${combinedMessageText.substring(0, 50)}${combinedMessageText.length > 50 ? '...' : ''}"`);
+        }
+        return res.status(200).json({ 
+          ok: true, 
+          skipped: true, 
+          reason: responseCheck.reason 
+        });
+      }
+      
+      // Log if this is a qualified lead FAQ response
+      if (responseCheck.appendFrontDesk && !COMPACT_MODE) {
+        console.log(`💬 [FAQ] Qualified lead asked FAQ question - AI will respond with -FrontDesk suffix`);
+      }
+
       const result = await handleInboundMessage({
         contact,
         aiPhase: null,
@@ -655,9 +787,15 @@ function createApp() {
       for (const bubble of bubbles) {
         if (bubble && bubble.trim()) {
           try {
+            // Append -FrontDesk suffix if this is a qualified lead FAQ response
+            let messageBody = bubble;
+            if (responseCheck.appendFrontDesk) {
+              messageBody = `${bubble}\n\n-FrontDesk`;
+            }
+            
             await sendConversationMessage({
               contactId,
-              body: bubble,
+              body: messageBody,
               channelContext,
             });
             sentCount++;

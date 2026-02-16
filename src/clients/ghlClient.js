@@ -16,6 +16,46 @@ const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 // Using double-space instead of zero-width space to avoid UCS-2 encoding (which doubles SMS costs)
 const AI_MESSAGE_MARKER = "  ";
 
+// AI Bot user ID in GHL - used to identify AI-sent messages in iOS app
+// iOS app checks message.userId to show "AI Response ✓" indicator
+// This is more reliable than text markers since GHL trims trailing spaces in SMS
+const AI_BOT_USER_ID = "3dsbsgZpCWrDYCFPvhKu";
+
+/**
+ * Check if phone number is a U.S. number based on country code.
+ * U.S. numbers start with +1 followed by a 3-digit area code.
+ * This matches the logic in the iOS app's Conversation.swift model.
+ */
+function isUSPhoneNumber(phone) {
+  if (!phone) return true; // Default to US if no phone
+  
+  // Remove all non-digit characters except leading +
+  const cleanedPhone = phone.replace(/[^0-9+]/g, '');
+  
+  // Check for +1 country code (US/Canada)
+  if (cleanedPhone.startsWith('+1') && cleanedPhone.length >= 12) {
+    return true;
+  }
+  
+  // Check for 1 followed by 10 digits (US format without +)
+  if (cleanedPhone.startsWith('1') && cleanedPhone.length === 11) {
+    return true;
+  }
+  
+  // Check for 10-digit number (US format without country code)
+  if (!cleanedPhone.startsWith('+') && cleanedPhone.length === 10) {
+    return true;
+  }
+  
+  // If it starts with a different country code, it's international
+  if (cleanedPhone.startsWith('+') && !cleanedPhone.startsWith('+1')) {
+    return false;
+  }
+  
+  // Default to US if we can't determine
+  return true;
+}
+
 // Axios client for GHL v1 API
 const ghl = axios.create({
   baseURL: "https://rest.gohighlevel.com", // v1 base
@@ -826,8 +866,8 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     return null;
   }
 
-  // Append AI marker (zero-width space) to all AI-sent messages
-  // iOS app detects this to show "AI Response ✓" indicator
+  // Keep AI marker for DM messages (works for FB/IG where spaces aren't trimmed)
+  // For SMS, iOS app will detect AI messages via userId field instead
   const markedBody = body + AI_MESSAGE_MARKER;
 
   const {
@@ -968,6 +1008,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           contactId,
           message: markedBody,
           type: dmType, // Use inferred type (IG or FB)
+          userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
         };
 
         if (!COMPACT_MODE) console.log("📨 Sending DM reply via GHL:", payload);
@@ -1005,6 +1046,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
             locationId: GHL_LOCATION_ID,
             message: markedBody,
             type: inferredType,
+            userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
           };
 
           if (!COMPACT_MODE) console.log("📨 Sending DM via GHL (creating new conversation):", payload);
@@ -1045,6 +1087,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         locationId: GHL_LOCATION_ID,
         message: markedBody,
         type, // e.g. "SMS", "FB", "IG", ...
+        userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
       };
 
       const url = "https://services.leadconnectorhq.com/conversations/messages";
@@ -1072,6 +1115,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         let type = await inferConversationMessageType(contactId);
 
         // SAFETY CHECK: If inferred type is WhatsApp, verify contact actually has WhatsApp enabled
+        // AND doesn't have a US phone number (WhatsApp only for international)
         // This prevents sending WhatsApp messages to contacts who don't have it,
         // which can happen if a previous message was incorrectly sent via WhatsApp
         if (type === "WhatsApp") {
@@ -1079,9 +1123,11 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           const cf = contact?.customField || contact?.customFields || {};
           const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
           const hasWhatsAppEnabled = whatsappUser.toLowerCase() === "yes";
+          const phone = contact?.phone || contact?.phoneNumber;
+          const isUSPhone = isUSPhoneNumber(phone);
 
-          if (!hasWhatsAppEnabled) {
-            console.warn(`⚠️ [CHANNEL] Inferred WhatsApp but contact ${contactId} doesn't have WhatsApp enabled - falling back to SMS`);
+          if (!hasWhatsAppEnabled || isUSPhone) {
+            console.warn(`⚠️ [CHANNEL] Inferred WhatsApp but contact ${contactId} ${!hasWhatsAppEnabled ? "doesn't have WhatsApp enabled" : "has a US phone number"} - falling back to SMS`);
             type = "SMS";
           }
         }
@@ -1091,6 +1137,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           locationId: GHL_LOCATION_ID,
           message: markedBody,
           type,
+          userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
         };
 
         const url = "https://services.leadconnectorhq.com/conversations/messages";
