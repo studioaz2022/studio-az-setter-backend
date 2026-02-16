@@ -28,27 +28,22 @@ const AI_BOT_USER_ID = "3dsbsgZpCWrDYCFPvhKu";
 async function temporaryReassignForAIMessage(contactId, originalAssignedTo) {
   if (!contactId) return null;
   
-  try {
-    // Reassign to AI Bot temporarily
-    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
-    const payload = { assignedTo: AI_BOT_USER_ID };
-    
-    await axios.put(url, payload, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Version: "2021-07-28",
-      },
-    });
-    
-    if (!COMPACT_MODE) console.log(`🔄 Temporarily reassigned contact ${contactId} to AI Bot`);
-    
-    return originalAssignedTo; // Return for reassigning back later
-  } catch (err) {
-    console.error("❌ Error temporarily reassigning to AI Bot:", err.response?.data || err.message);
-    throw err;
-  }
+  // Reassign to AI Bot temporarily
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
+  const payload = { assignedTo: AI_BOT_USER_ID };
+  
+  await axios.put(url, payload, {
+    headers: {
+      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      Version: "2021-07-28",
+    },
+  });
+  
+  if (!COMPACT_MODE) console.log(`🔄 Temporarily reassigned contact ${contactId} to AI Bot`);
+  
+  return originalAssignedTo; // Return for reassigning back later
 }
 
 /**
@@ -57,10 +52,10 @@ async function temporaryReassignForAIMessage(contactId, originalAssignedTo) {
 async function reassignToOriginalArtist(contactId, originalAssignedTo) {
   if (!contactId || !originalAssignedTo) return;
   
+  const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
+  const payload = { assignedTo: originalAssignedTo };
+  
   try {
-    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
-    const payload = { assignedTo: originalAssignedTo };
-    
     await axios.put(url, payload, {
       headers: {
         Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
@@ -956,7 +951,13 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     // Only reassign if contact is assigned to someone other than AI Bot
     if (originalAssignedTo && originalAssignedTo !== AI_BOT_USER_ID) {
       needsReassignment = true;
-      await temporaryReassignForAIMessage(contactId, originalAssignedTo);
+      try {
+        await temporaryReassignForAIMessage(contactId, originalAssignedTo);
+      } catch (reassignErr) {
+        console.error("⚠️ Failed to temporarily reassign to AI Bot:", reassignErr.message);
+        console.warn("⚠️ Continuing anyway - message will not have AI Bot userId");
+        needsReassignment = false; // Don't try to reassign back if initial reassign failed
+      }
     }
   } catch (err) {
     console.error("⚠️ Error in reassignment workflow setup:", err.message);
