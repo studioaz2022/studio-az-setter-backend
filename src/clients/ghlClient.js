@@ -255,38 +255,55 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
   const form = new FormData();
 
   files.forEach((file, idx) => {
+    if (!file.buffer || file.buffer.length === 0) {
+      console.warn(`⚠️ Skipping file ${idx}: empty buffer (${file.originalname})`);
+      return;
+    }
     const key = `${customFieldId}_${idx + 1}`;
     form.append(key, file.buffer, {
-      filename: file.originalname,
-      contentType: file.mimetype,
+      filename: file.originalname || `photo_${idx + 1}.jpg`,
+      contentType: file.mimetype || "image/jpeg",
     });
   });
 
   const url = `https://services.leadconnectorhq.com/forms/upload-custom-files?contactId=${contactId}&locationId=${locationId}`;
 
+  // Log file details for debugging
   console.log(
     "📎 Uploading files to GHL custom field via:",
     url,
     "files:",
-    files.length
+    files.map(f => ({ name: f.originalname, size: f.size, type: f.mimetype }))
   );
 
-  // Use SDK's httpClient for auth headers, but need FormData headers too
-  const res = await axios.post(url, form, {
-    headers: {
-      ...form.getHeaders(),
-      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-      Accept: "application/json",
-      Version: "2021-07-28",
-    },
-  });
+  try {
+    const res = await axios.post(url, form, {
+      headers: {
+        ...form.getHeaders(),
+        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
+        Accept: "application/json",
+        Version: "2021-07-28",
+      },
+      maxContentLength: 50 * 1024 * 1024,
+      maxBodyLength: 50 * 1024 * 1024,
+    });
 
-  console.log(
-    "✅ GHL custom file upload response (truncated):",
-    JSON.stringify({ status: res.status, contactId }, null, 2)
-  );
+    console.log(
+      "✅ GHL custom file upload response:",
+      JSON.stringify({ status: res.status, contactId }, null, 2)
+    );
 
-  return res.data;
+    return res.data;
+  } catch (uploadErr) {
+    console.error("❌ GHL file upload failed:", {
+      status: uploadErr.response?.status,
+      data: uploadErr.response?.data,
+      message: uploadErr.message,
+      fileCount: files.length,
+      fileSizes: files.map(f => f.size),
+    });
+    throw uploadErr;
+  }
 }
 
 /**
