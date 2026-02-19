@@ -1,13 +1,12 @@
 require("dotenv").config();
 
-// ghlClient.js
-const axios = require("axios");
+// ghlClient.js — powered by @gohighlevel/api-client SDK
+const axios = require("axios"); // Retained for: uploadFilesToTattooCustomField (multipart FormData upload)
 const FormData = require("form-data");
+const { ghl: ghlSdk } = require("./ghlSdk");
 const { cleanLogObject, COMPACT_MODE, shortId } = require("../utils/logger");
 const { SYSTEM_FIELDS } = require("../config/constants");
 
-// Use GHL_FILE_UPLOAD_TOKEN as the primary API key for all GHL operations
-const GHL_API_KEY = process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 
@@ -21,28 +20,81 @@ const AI_MESSAGE_MARKER = "  ";
 // This is more reliable than text markers since GHL trims trailing spaces in SMS
 const AI_BOT_USER_ID = "3dsbsgZpCWrDYCFPvhKu";
 
+// ============================================================================
+// Custom Field Format Conversion Utilities
+// ============================================================================
+
+/**
+ * Convert v1 customField object → v2 customFields array
+ * Used before sending to GHL v2 API (which rejects the v1 format)
+ * { "fieldId": "value" } → [{ id: "fieldId", field_value: "value" }]
+ */
+function customFieldToV2(customFieldObj) {
+  if (!customFieldObj || typeof customFieldObj !== "object") return undefined;
+  if (Array.isArray(customFieldObj)) return customFieldObj; // already v2
+  return Object.entries(customFieldObj).map(([id, value]) => ({
+    id,
+    field_value: typeof value === "string" ? value : String(value),
+  }));
+}
+
+/**
+ * Normalize contact response: ensure both customField (object) and customFields (array) exist
+ * So callers using either format continue to work
+ */
+function normalizeContactCustomFields(contact) {
+  if (!contact) return contact;
+
+  // If v2 array exists but v1 object doesn't, build v1 object
+  if (Array.isArray(contact.customFields) && !contact.customField) {
+    contact.customField = {};
+    for (const cf of contact.customFields) {
+      if (cf.id) contact.customField[cf.id] = cf.value;
+    }
+  }
+
+  // If v1 object exists but v2 array doesn't, build v2 array
+  if (contact.customField && typeof contact.customField === "object" && !Array.isArray(contact.customFields)) {
+    contact.customFields = Object.entries(contact.customField).map(([id, value]) => ({
+      id,
+      value: typeof value === "string" ? value : String(value),
+    }));
+  }
+
+  return contact;
+}
+
+/**
+ * Transform a contact update/create body: convert customField → customFields for v2 API
+ */
+function transformBodyForV2(body) {
+  if (!body) return body;
+  if (body.customField && !body.customFields) {
+    body.customFields = customFieldToV2(body.customField);
+    delete body.customField;
+  }
+  return body;
+}
+
+// ============================================================================
+// Temporary Reassignment Workflow for AI Messages
+// ============================================================================
+
 /**
  * Temporarily reassign contact to AI Bot, send message, then reassign back
  * This is necessary because GHL only allows sending messages with userId of the assigned user
  */
 async function temporaryReassignForAIMessage(contactId, originalAssignedTo) {
   if (!contactId) return null;
-  
-  // Reassign to AI Bot temporarily
-  const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
-  const payload = { assignedTo: AI_BOT_USER_ID };
-  
-  await axios.put(url, payload, {
-    headers: {
-      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Version: "2021-07-28",
-    },
-  });
-  
+
+  // Reassign to AI Bot temporarily via SDK
+  await ghlSdk.contacts.updateContact(
+    { contactId },
+    { assignedTo: AI_BOT_USER_ID }
+  );
+
   if (!COMPACT_MODE) console.log(`🔄 Temporarily reassigned contact ${contactId} to AI Bot`);
-  
+
   return originalAssignedTo; // Return for reassigning back later
 }
 
@@ -51,20 +103,13 @@ async function temporaryReassignForAIMessage(contactId, originalAssignedTo) {
  */
 async function reassignToOriginalArtist(contactId, originalAssignedTo) {
   if (!contactId || !originalAssignedTo) return;
-  
-  const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
-  const payload = { assignedTo: originalAssignedTo };
-  
+
   try {
-    await axios.put(url, payload, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Version: "2021-07-28",
-      },
-    });
-    
+    await ghlSdk.contacts.updateContact(
+      { contactId },
+      { assignedTo: originalAssignedTo }
+    );
+
     if (!COMPACT_MODE) console.log(`🔄 Reassigned contact ${contactId} back to original artist: ${originalAssignedTo}`);
   } catch (err) {
     console.error("❌ Error reassigning back to original artist:", err.response?.data || err.message);
@@ -72,71 +117,45 @@ async function reassignToOriginalArtist(contactId, originalAssignedTo) {
   }
 }
 
+// ============================================================================
+// Pure Helpers (no API calls, unchanged)
+// ============================================================================
+
 /**
  * Check if phone number is a U.S. number based on country code.
- * U.S. numbers start with +1 followed by a 3-digit area code.
- * This matches the logic in the iOS app's Conversation.swift model.
  */
 function isUSPhoneNumber(phone) {
   if (!phone) return true; // Default to US if no phone
-  
-  // Remove all non-digit characters except leading +
+
   const cleanedPhone = phone.replace(/[^0-9+]/g, '');
-  
-  // Check for +1 country code (US/Canada)
-  if (cleanedPhone.startsWith('+1') && cleanedPhone.length >= 12) {
-    return true;
-  }
-  
-  // Check for 1 followed by 10 digits (US format without +)
-  if (cleanedPhone.startsWith('1') && cleanedPhone.length === 11) {
-    return true;
-  }
-  
-  // Check for 10-digit number (US format without country code)
-  if (!cleanedPhone.startsWith('+') && cleanedPhone.length === 10) {
-    return true;
-  }
-  
-  // If it starts with a different country code, it's international
-  if (cleanedPhone.startsWith('+') && !cleanedPhone.startsWith('+1')) {
-    return false;
-  }
-  
-  // Default to US if we can't determine
+
+  if (cleanedPhone.startsWith('+1') && cleanedPhone.length >= 12) return true;
+  if (cleanedPhone.startsWith('1') && cleanedPhone.length === 11) return true;
+  if (!cleanedPhone.startsWith('+') && cleanedPhone.length === 10) return true;
+  if (cleanedPhone.startsWith('+') && !cleanedPhone.startsWith('+1')) return false;
+
   return true;
 }
 
-// Axios client for GHL v1 API
-const ghl = axios.create({
-  baseURL: "https://rest.gohighlevel.com", // v1 base
-  headers: {
-    Authorization: `Bearer ${process.env.GHL_API_KEY}`,
-    "Content-Type": "application/json",
-  },
-});
-
 // 🔹 Map widget custom field keys -> actual GHL custom field IDs
-// These are the actual GHL field IDs from the contact API
 const CUSTOM_FIELD_MAP = {
   language_preference: "ETxasC6QlyxRaKU18kbz",
   inquired_technician: "H3PSN8tZSw1kYckHJN9D",
   whatsapp_user: "FnYDobmYqnXDxlLJY5oe",
-  tattoo_title: "8JqgdVJraABsqgUeqJ3a", // "Lower forearm vine warp. Fillers for patch half"
-  tattoo_summary: "xAGtMfmbxtfCHdo2oyf7", // "Realistic vine with "
+  tattoo_title: "8JqgdVJraABsqgUeqJ3a",
+  tattoo_summary: "xAGtMfmbxtfCHdo2oyf7",
   tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
   tattoo_style: "12b2O4ydlfO99FA4yCuk",
-  // Canonical CRM key (was size_of_tattoo historically)
   tattoo_size: "KXtfZYdeSKUyS5llTKsr",
   tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
   how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
   first_tattoo: "QqDydmY1fnldidlcMnBC",
-  tattoo_concerns: "tattoo_concerns", // TODO: Get actual ID if this field exists
+  tattoo_concerns: "tattoo_concerns",
   tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
-  consultation_type: "gM2PVo90yNBDHekV5G64", // Consultation type (message/online/in-person)
+  consultation_type: "gM2PVo90yNBDHekV5G64",
 };
 
-// 🔹 Reverse mapping: GHL field ID -> friendly name (for reading from GHL)
+// 🔹 Reverse mapping: GHL field ID -> friendly name
 const GHL_FIELD_ID_TO_NAME = Object.fromEntries(
   Object.entries(CUSTOM_FIELD_MAP).map(([name, id]) => [id.toLowerCase(), name])
 );
@@ -149,20 +168,15 @@ const SYSTEM_FIELD_MAP = Object.values(SYSTEM_FIELDS || {}).reduce((acc, fieldId
   return acc;
 }, {});
 
-
-
-// Convert widget customFields → GHL v1 customField object
+// Convert widget customFields → GHL customField object
 function mapCustomFields(widgetFields = {}) {
   const customField = {};
-
   Object.entries(widgetFields).forEach(([key, value]) => {
     if (value == null || value === "") return;
     const fieldId = CUSTOM_FIELD_MAP[key];
-    if (!fieldId) return; // no mapping yet
-
+    if (!fieldId) return;
     customField[fieldId] = value;
   });
-
   return customField;
 }
 
@@ -173,57 +187,45 @@ function normalizeTags(rawTags = [], mode = "partial") {
     .map((t) => String(t).trim());
 
   const lowerTarget = "consultation request";
-
   let result = [...tags];
 
   if (mode === "partial") {
-    // For partial submission, strip the consultation tag so we don't trigger Workflow 1 yet
     result = result.filter((t) => t.toLowerCase() !== lowerTarget);
   } else if (mode === "final") {
-    // For final submission, ensure the consultation tag is present
     const has = result.some((t) => t.toLowerCase() === lowerTarget);
-    if (!has) {
-      result.push("consultation request");
-    }
+    if (!has) result.push("consultation request");
   }
 
-  // Ensure "Source: Web Widget" is present
   if (!result.some((t) => t.toLowerCase().includes("source: web widget"))) {
     result.push("Source: Web Widget");
   }
 
-  // De-dupe
   return Array.from(new Set(result));
 }
 
+// ============================================================================
+// Contact Operations (migrated from v1 axios to SDK)
+// ============================================================================
+
 /**
  * Fetch a contact by ID from GoHighLevel
- * (Used by your /ghl/* webhooks)
  */
 async function getContact(contactId) {
   if (!contactId) return null;
 
   try {
-    const res = await axios.get(
-      `https://rest.gohighlevel.com/v1/contacts/${contactId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${process.env.GHL_API_KEY}`,
-          Accept: "application/json",
-        },
-      }
-    );
+    // SDK returns response.data directly: { contact: {...}, traceId }
+    const data = await ghlSdk.contacts.getContact({ contactId });
+    const contact = data?.contact || data;
 
-    const data = res.data || {};
-
-    // Handle either { contact: {...} } or just {...}
-    const contact = data.contact || data;
+    // Normalize: ensure both customField (object) and customFields (array) exist
+    normalizeContactCustomFields(contact);
 
     return contact;
   } catch (err) {
     console.error(
       "❌ Error fetching contact from GHL:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
@@ -233,40 +235,10 @@ async function getContact(contactId) {
 /**
  * Fetch a contact by ID from GoHighLevel using API v2
  * This version includes followers array which is not available in v1
- * Uses the Private Integration Token (GHL_FILE_UPLOAD_TOKEN) which works with v2
  */
-async function getContactV2(contactId) {
-  if (!contactId) return null;
+const getContactV2 = getContact; // Both now use the same SDK v2 endpoint
 
-  try {
-    const res = await axios.get(
-      `https://services.leadconnectorhq.com/contacts/${contactId}`,
-      {
-        headers: {
-          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-          Version: "2021-07-28",
-          Accept: "application/json",
-        },
-      }
-    );
-
-    const data = res.data || {};
-
-    // Handle either { contact: {...} } or just {...}
-    const contact = data.contact || data;
-
-    return contact;
-  } catch (err) {
-    console.error(
-      "❌ Error fetching contact from GHL v2:",
-      err.response?.status,
-      err.response?.data || err.message
-    );
-    return null;
-  }
-}
-
-/** Photo Form Data */
+/** Photo Form Data — No SDK method, uses raw httpClient */
 async function uploadFilesToTattooCustomField(contactId, files = []) {
   if (!files || files.length === 0) return null;
 
@@ -299,13 +271,11 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
     files.length
   );
 
-  const token =
-    process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
-
+  // Use SDK's httpClient for auth headers, but need FormData headers too
   const res = await axios.post(url, form, {
     headers: {
       ...form.getHeaders(),
-      Authorization: `Bearer ${token}`,
+      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
       Accept: "application/json",
       Version: "2021-07-28",
     },
@@ -319,58 +289,52 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
   return res.data;
 }
 
-
 /**
- * Lookup a contact by email or phone using v1 lookup endpoint
- * https://rest.gohighlevel.com/v1/contacts/lookup?email=john@doe.com
+ * Lookup a contact by email or phone
+ * Uses SDK getDuplicateContact (v2 equivalent of v1 lookup)
  */
 async function lookupContactIdByEmailOrPhone(email, phone) {
   try {
     if (email) {
-      const res = await ghl.get("/v1/contacts/lookup", {
-        params: { email },
+      const data = await ghlSdk.contacts.getDuplicateContact({
+        locationId: GHL_LOCATION_ID,
+        email,
       });
 
-      const data = res.data || {};
-      if (Array.isArray(data.contacts) && data.contacts.length > 0) {
-        return data.contacts[0].id || data.contacts[0]._id;
-      }
-      if (data.contact) {
+      // Extract contact ID from response — handles various shapes
+      if (data?.contact) {
         return data.contact.id || data.contact._id;
       }
-      if (data.id || data._id) {
+      if (data?.id || data?._id) {
         return data.id || data._id;
       }
     }
   } catch (err) {
     console.warn(
       "⚠️ Email lookup failed:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
   }
 
   try {
     if (phone) {
-      const res = await ghl.get("/v1/contacts/lookup", {
-        params: { phone },
+      const data = await ghlSdk.contacts.getDuplicateContact({
+        locationId: GHL_LOCATION_ID,
+        number: phone,
       });
 
-      const data = res.data || {};
-      if (Array.isArray(data.contacts) && data.contacts.length > 0) {
-        return data.contacts[0].id || data.contacts[0]._id;
-      }
-      if (data.contact) {
+      if (data?.contact) {
         return data.contact.id || data.contact._id;
       }
-      if (data.id || data._id) {
+      if (data?.id || data?._id) {
         return data.id || data._id;
       }
     }
   } catch (err) {
     console.warn(
       "⚠️ Phone lookup failed:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
   }
@@ -379,23 +343,29 @@ async function lookupContactIdByEmailOrPhone(email, phone) {
 }
 
 async function createContact(body) {
-  const res = await ghl.post("/v1/contacts/", body);
-  return res.data;
+  // Transform customField → customFields for v2 API
+  const v2Body = transformBodyForV2({ ...body });
+  // Ensure locationId is set
+  if (!v2Body.locationId) v2Body.locationId = GHL_LOCATION_ID;
+
+  // SDK returns response.data directly
+  return ghlSdk.contacts.createContact(v2Body);
 }
 
 async function updateContact(contactId, body) {
-  const res = await ghl.put(`/v1/contacts/${contactId}`, body);
-  return res.data;
+  // Transform customField → customFields for v2 API
+  const v2Body = transformBodyForV2({ ...body });
+
+  // SDK returns response.data directly
+  return ghlSdk.contacts.updateContact({ contactId }, v2Body);
 }
 
 /**
  * Create a task on a contact using GHL v2 API
- * @param {string} contactId
- * @param {object} task
  */
 async function createTaskForContact(contactId, task = {}) {
   if (!contactId) throw new Error("contactId is required to create a task");
-  
+
   // Set dueDate to tomorrow if not provided (v2 API requires it)
   let dueDate = task.dueDate || null;
   if (!dueDate) {
@@ -403,32 +373,21 @@ async function createTaskForContact(contactId, task = {}) {
     tomorrow.setDate(tomorrow.getDate() + 1);
     dueDate = tomorrow.toISOString();
   }
-  
+
   const payload = {
     title: task.title || "Consultation follow-up",
     body: task.description || task.body || "",
     dueDate: dueDate,
-    completed: task.completed !== undefined ? task.completed : false, // v2 uses boolean "completed" instead of "status"
+    completed: task.completed !== undefined ? task.completed : false,
     assignedTo: task.assignedTo || null,
   };
 
-  // Use v2 API endpoint
-  const url = `https://services.leadconnectorhq.com/contacts/${contactId}/tasks`;
-  const res = await axios.post(url, payload, {
-    headers: {
-      Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-      "Content-Type": "application/json",
-      Accept: "application/json",
-      Version: "2021-07-28", // Required for v2 API
-    },
-  });
-  
-  return res.data;
+  // SDK returns response.data directly
+  return ghlSdk.contacts.createTask({ contactId }, payload);
 }
 
 /**
  * Update the CRM owner (assigned user) for a contact.
- * Used when we decide which artist owns the lead.
  */
 async function updateContactAssignedUser(contactId, assignedUserId) {
   if (!contactId || !assignedUserId) {
@@ -446,7 +405,7 @@ async function updateContactAssignedUser(contactId, assignedUserId) {
   } catch (err) {
     console.error(
       "❌ Error updating assigned user in GHL:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
@@ -455,8 +414,6 @@ async function updateContactAssignedUser(contactId, assignedUserId) {
 
 /**
  * Upsert a contact from the widget payload.
- * - mode = "partial" → background create/update, no consultation tag
- * - mode = "final"   → ensure consultation tag present (triggers Workflow 1)
  */
 async function upsertContactFromWidget(widgetPayload, mode = "partial") {
   const {
@@ -480,7 +437,6 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
     tags: normalizedTags,
     customField,
     source: "AI Tattoo Widget",
-    // If you later map UTM to real custom fields, you can stuff them into customField above.
   };
 
   // Try to find existing contact
@@ -508,15 +464,6 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
 
 /**
  * Update AI/system custom fields on a contact
- * Only writes fields that are provided (non-undefined).
- *
- * fields: {
- *   ai_phase?: string,
- *   lead_temperature?: string,
- *   deposit_link_sent?: boolean,
- *   deposit_paid?: boolean,
- *   last_phase_update_at?: string (ISO)
- * }
  */
 async function updateSystemFields(contactId, fields = {}) {
   if (!contactId) {
@@ -551,7 +498,7 @@ async function updateSystemFields(contactId, fields = {}) {
   } catch (err) {
     console.error(
       "❌ Error updating system fields in GHL:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
@@ -560,9 +507,6 @@ async function updateSystemFields(contactId, fields = {}) {
 
 /**
  * Update tattoo-related custom fields on a contact using the CUSTOM_FIELD_MAP.
- * 
- * @param {string} contactId
- * @param {object} fields - keys like "tattoo_placement", "tattoo_size", etc.
  */
 async function updateTattooFields(contactId, fields = {}) {
   if (!contactId) {
@@ -575,18 +519,16 @@ async function updateTattooFields(contactId, fields = {}) {
     return null;
   }
 
-  // Map from friendly keys → actual GHL customField IDs
   const customField = {};
 
   Object.entries(fields).forEach(([key, value]) => {
     if (value === undefined || value === null || value === "") return;
 
     const fieldId = CUSTOM_FIELD_MAP[key];
-    if (!fieldId) return; // no mapping defined for this key
+    if (!fieldId) return;
 
     let outboundValue = value;
 
-    // Special handling: first_tattoo is a TEXT field in GHL, but we keep it boolean in AI.
     if (key === "first_tattoo") {
       if (typeof value === "boolean") {
         outboundValue = value ? "Yes" : "No";
@@ -597,7 +539,6 @@ async function updateTattooFields(contactId, fields = {}) {
         } else if (["no", "n", "false"].includes(v)) {
           outboundValue = "No";
         } else {
-          // fall back to the raw string if it's something unexpected
           outboundValue = value;
         }
       }
@@ -619,53 +560,43 @@ async function updateTattooFields(contactId, fields = {}) {
   } catch (err) {
     console.error(
       "❌ Error updating tattoo fields in GHL:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
   }
 }
 
+// ============================================================================
+// Conversation Operations
+// ============================================================================
+
 // Search for conversations for a contact
-// Options:
-//   preferDm: boolean - if true, prioritize FB/IG conversations over SMS
-//   typeFilter: "DM" | "SMS" | null - filter by conversation type
 async function findConversationForContact(contactId, { preferDm = false, typeFilter = null } = {}) {
   if (!contactId) return null;
 
-  const url = `https://services.leadconnectorhq.com/conversations/search?locationId=${encodeURIComponent(
-    GHL_LOCATION_ID
-  )}&contactId=${encodeURIComponent(contactId)}`;
-
   try {
-    const resp = await axios.get(url, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        Accept: "application/json",
-        Version: "2021-04-15",
-      },
+    // SDK returns response.data directly: { conversations: [...], total, traceId }
+    const data = await ghlSdk.conversations.searchConversation({
+      locationId: GHL_LOCATION_ID,
+      contactId,
     });
 
-    const convs = resp.data?.conversations || [];
-    if (!convs.length) {
-      return null;
-    }
+    const convs = data?.conversations || [];
+    if (!convs.length) return null;
 
-    // Helper to check if a conversation is a DM (FB/IG)
     const isDmConversation = (conv) => {
       const type = (conv.type || conv.lastMessageType || "").toUpperCase();
-      return type.includes("FACEBOOK") || type.includes("FB") || 
+      return type.includes("FACEBOOK") || type.includes("FB") ||
              type.includes("INSTAGRAM") || type.includes("IG") ||
              type.includes("MESSENGER");
     };
 
-    // Helper to check if a conversation is SMS
     const isSmsConversation = (conv) => {
       const type = (conv.type || conv.lastMessageType || "").toUpperCase();
       return type.includes("SMS");
     };
 
-    // If a specific type filter is requested
     if (typeFilter === "DM") {
       const dmConv = convs.find(isDmConversation);
       if (dmConv) {
@@ -675,7 +606,7 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
       if (!COMPACT_MODE) console.log("🔍 No DM conversation found for contact");
       return null;
     }
-    
+
     if (typeFilter === "SMS") {
       const smsConv = convs.find(isSmsConversation);
       if (smsConv) {
@@ -686,18 +617,15 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
       return null;
     }
 
-    // If preferDm is true, try to find a DM conversation first
     if (preferDm) {
       const dmConv = convs.find(isDmConversation);
       if (dmConv) {
         if (!COMPACT_MODE) console.log(`🔍 Preferring DM conversation: ${dmConv.id} (type: ${dmConv.type || dmConv.lastMessageType})`);
         return dmConv;
       }
-      // Fall back to most recent if no DM found
       if (!COMPACT_MODE) console.log("🔍 No DM conversation found, falling back to most recent");
     }
 
-    // Return the most recent conversation (they're sorted newest-first)
     return convs[0];
   } catch (err) {
     console.error(
@@ -710,14 +638,7 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
 
 /**
  * Fetch conversation history for a contact from GHL
- * Uses the /conversations/messages/export endpoint
- * 
- * @param {string} contactId - The contact's ID
- * @param {object} options - Query options
- * @param {number} options.limit - Number of messages to fetch (default 50, max 500)
- * @param {string} options.channel - Filter by channel: "SMS", "Instagram", "Facebook", "WhatsApp", "Email"
- * @param {string} options.sortOrder - "desc" (newest first) or "asc" (oldest first)
- * @returns {Promise<Array>} Array of messages with direction, body, attachments, dateAdded, source
+ * NOTE: No SDK method for /conversations/messages/export — uses SDK's httpClient
  */
 async function getConversationHistory(contactId, {
   limit = 50,
@@ -732,27 +653,19 @@ async function getConversationHistory(contactId, {
   const params = new URLSearchParams({
     locationId: GHL_LOCATION_ID,
     contactId,
-    limit: String(Math.min(limit, 500)), // Cap at 500 (API max)
+    limit: String(Math.max(10, Math.min(limit, 500))),
     sortBy: "createdAt",
     sortOrder,
   });
 
-  // Only add channel filter if specified
-  // When null, API returns all non-email messages including activity messages
   if (channel) {
     params.append("channel", channel);
   }
 
-  const url = `https://services.leadconnectorhq.com/conversations/messages/export?${params}`;
-
   try {
-    const resp = await axios.get(url, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        Accept: "application/json",
-        Version: "2021-04-15",
-      },
-    });
+    // Use SDK's pre-configured httpClient (has auth headers)
+    const httpClient = ghlSdk.getHttpClient();
+    const resp = await httpClient.get(`/conversations/messages/export?${params}`);
 
     const messages = resp.data?.messages || [];
     if (!COMPACT_MODE) console.log(`📜 Fetched ${messages.length} messages for contact ${contactId}`);
@@ -767,35 +680,31 @@ async function getConversationHistory(contactId, {
   }
 }
 
-// Infer the outbound "type" for /conversations/messages by looking at the last inbound message
-// Options:
-//   preferDm: boolean - if true, prioritize FB/IG over SMS when checking contact
+// Infer the outbound "type" for /conversations/messages
 async function inferConversationMessageType(contactId, { preferDm = false } = {}) {
   if (!contactId) return "SMS";
 
-  // If preferDm, check contact's social IDs first before looking at conversations
   if (preferDm) {
     try {
       const contact = await getContact(contactId);
       const hasInstagramId = !!(
-        contact?.instagramId || 
-        contact?.instagram || 
+        contact?.instagramId ||
+        contact?.instagram ||
         contact?.socialProfiles?.instagram ||
         contact?.customField?.instagram_id
       );
       const hasFacebookId = !!(
-        contact?.facebookId || 
-        contact?.facebook || 
+        contact?.facebookId ||
+        contact?.facebook ||
         contact?.socialProfiles?.facebook ||
         contact?.customField?.facebook_id
       );
-      
-      // Check tags for DM indicators
+
       const tags = contact?.tags || [];
       const tagsLower = Array.isArray(tags) ? tags.map(t => String(t).toLowerCase()) : [];
       const hasInstagramTag = tagsLower.some(t => t.includes("instagram") || t.includes("ig"));
       const hasFacebookTag = tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger"));
-      
+
       if (hasInstagramId || hasInstagramTag) {
         if (!COMPACT_MODE) console.log("inferConversationMessageType: found Instagram from contact, returning IG");
         return "IG";
@@ -809,25 +718,19 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
     }
   }
 
-  // Try to find a DM conversation first if preferDm
   const searchOptions = preferDm ? { typeFilter: "DM" } : {};
   const conversation = await findConversationForContact(contactId, searchOptions);
-  
+
   if (!conversation) {
-    // If preferDm and no DM conversation found, still check contact for social IDs
     if (preferDm) {
       if (!COMPACT_MODE) console.warn("inferConversationMessageType: no DM conversation found, checking contact tags...");
       try {
         const contact = await getContact(contactId);
         const tags = contact?.tags || [];
         const tagsLower = Array.isArray(tags) ? tags.map(t => String(t).toLowerCase()) : [];
-        
-        if (tagsLower.some(t => t.includes("instagram") || t.includes("ig"))) {
-          return "IG";
-        }
-        if (tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger") || t.includes("dm"))) {
-          return "FB";
-        }
+
+        if (tagsLower.some(t => t.includes("instagram") || t.includes("ig"))) return "IG";
+        if (tagsLower.some(t => t.includes("facebook") || t.includes("fb") || t.includes("messenger") || t.includes("dm"))) return "FB";
       } catch (err) {
         console.warn("Error checking contact tags:", err.message);
       }
@@ -836,75 +739,53 @@ async function inferConversationMessageType(contactId, { preferDm = false } = {}
     return "SMS";
   }
 
-  // Check conversation type first - if it's SMS, return SMS (don't infer DM type)
   const conversationType = (conversation.type || "").toUpperCase();
-  if (conversationType.includes("SMS")) {
-    return "SMS";
-  }
+  if (conversationType.includes("SMS")) return "SMS";
 
-  // For DM conversations, check contact's actual social IDs first
   try {
     const contact = await getContact(contactId);
-    // Check for social media IDs in contact object
-    // GHL stores these in various fields - check common patterns
     const hasInstagramId = !!(
-      contact?.instagramId || 
-      contact?.instagram || 
-      contact?.socialProfiles?.instagram ||
-      contact?.customField?.instagram_id
+      contact?.instagramId || contact?.instagram ||
+      contact?.socialProfiles?.instagram || contact?.customField?.instagram_id
     );
     const hasFacebookId = !!(
-      contact?.facebookId || 
-      contact?.facebook || 
-      contact?.socialProfiles?.facebook ||
-      contact?.customField?.facebook_id
+      contact?.facebookId || contact?.facebook ||
+      contact?.socialProfiles?.facebook || contact?.customField?.facebook_id
     );
-    
-    if (hasInstagramId) {
-      return "IG";
-    }
-    if (hasFacebookId) {
-      return "FB";
-    }
+
+    if (hasInstagramId) return "IG";
+    if (hasFacebookId) return "FB";
   } catch (err) {
     console.warn("Error checking contact for type inference:", err.message);
   }
 
   const lastType = conversation.lastMessageType || conversation.type || "";
-
   if (!lastType || typeof lastType !== "string") {
     if (!COMPACT_MODE) console.warn("inferConversationMessageType: no lastMessageType on conversation, defaulting to SMS");
     return "SMS";
   }
 
   const t = lastType.toUpperCase();
+  if (t.includes("INSTAGRAM")) return "IG";
+  if (t.includes("FACEBOOK")) return "FB";
+  if (t.includes("WHATSAPP")) return "WhatsApp";
+  if (t.includes("GMB")) return "GMB";
+  if (t.includes("WEBCHAT") || t.includes("LIVE_CHAT")) return "Live_Chat";
+  if (t.includes("EMAIL")) return "Email";
+  if (t.includes("SMS") || t.includes("PHONE") || t.includes("CALL") || t.includes("CUSTOM_SMS")) return "SMS";
 
-  // Map GHL lastMessageType → Conversations API "type" enum
-  if (t.includes("INSTAGRAM")) {
-    return "IG";
-  }
-  if (t.includes("FACEBOOK")) {
-    return "FB";
-  }
-  if (t.includes("WHATSAPP")) {
-    return "WhatsApp";
-  }
-  if (t.includes("GMB")) {
-    return "GMB";
-  }
-  if (t.includes("WEBCHAT") || t.includes("LIVE_CHAT")) {
-    return "Live_Chat";
-  }
-  if (t.includes("EMAIL")) {
-    return "Email";
-  }
-  if (t.includes("SMS") || t.includes("PHONE") || t.includes("CALL") || t.includes("CUSTOM_SMS")) {
-    return "SMS";
-  }
-
-  // Fallback - prefer FB over IG for DM contexts (more common, and less likely to fail)
   if (!COMPACT_MODE) console.warn(`inferConversationMessageType: unrecognized lastMessageType=${lastType}, defaulting to FB`);
   return "FB";
+}
+
+/**
+ * Helper: send a message via SDK's conversations API
+ * The SDK's sendANewMessage posts to POST /conversations/messages
+ */
+async function _sendMessage(payload) {
+  // SDK's SendMessageBodyDto doesn't include userId/conversationId/locationId
+  // but the underlying API accepts them. Pass them through.
+  return ghlSdk.conversations.sendANewMessage(payload);
 }
 
 // Send a message in a contact's conversation
@@ -917,8 +798,6 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
     return null;
   }
 
-  // Keep AI marker for DM messages (works for FB/IG where spaces aren't trimmed)
-  // For SMS, iOS app will detect AI messages via userId field instead
   const markedBody = body + AI_MESSAGE_MARKER;
 
   const {
@@ -930,25 +809,18 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
 
   if (!COMPACT_MODE) {
     console.log("✉️ sendConversationMessage context:", cleanLogObject({
-      contactId,
-      isDm,
-      hasPhone,
-      conversationId,
+      contactId, isDm, hasPhone, conversationId,
     }));
   }
 
   // ═══ TEMPORARY REASSIGNMENT WORKFLOW FOR AI BOT USERID ═══
-  // GHL requires contact to be assigned to the user whose userId we want in the message
-  // So we temporarily reassign to AI Bot, send message, then reassign back
   let originalAssignedTo = null;
   let needsReassignment = false;
-  
+
   try {
-    // Fetch current assignment
     const contact = await getContact(contactId);
     originalAssignedTo = contact?.assignedTo;
-    
-    // Only reassign if contact is assigned to someone other than AI Bot
+
     if (originalAssignedTo && originalAssignedTo !== AI_BOT_USER_ID) {
       needsReassignment = true;
       try {
@@ -956,38 +828,33 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
       } catch (reassignErr) {
         console.error("⚠️ Failed to temporarily reassign to AI Bot:", reassignErr.message);
         console.warn("⚠️ Continuing anyway - message will not have AI Bot userId");
-        needsReassignment = false; // Don't try to reassign back if initial reassign failed
+        needsReassignment = false;
       }
     }
   } catch (err) {
     console.error("⚠️ Error in reassignment workflow setup:", err.message);
-    // Continue anyway - worst case message won't have userId
   }
 
   // 1) DM reply path (no phone required)
   if (isDm) {
-    // If no conversationId provided, try to find existing DM conversation
     let finalConversationId = conversationId;
     let dmType = null;
-
     let foundConversation = null;
+
     if (!finalConversationId) {
       if (!COMPACT_MODE) console.log("🔍 No conversationId provided for DM, searching for DM conversation...");
-      
-      // Specifically search for a DM conversation (FB/IG), not SMS
+
       foundConversation = await findConversationForContact(contactId, { typeFilter: "DM" });
-      
+
       if (foundConversation) {
         finalConversationId = foundConversation.id || foundConversation._id;
-        
-        // Infer type from the conversation
+
         const lastType = (foundConversation.lastMessageType || foundConversation.type || "").toUpperCase();
         if (lastType.includes("INSTAGRAM") || lastType.includes("IG")) {
           dmType = "IG";
         } else if (lastType.includes("FACEBOOK") || lastType.includes("FB") || lastType.includes("MESSENGER")) {
           dmType = "FB";
         } else {
-          // Fall back to inference function if conversation type is unclear (prefer DM since isDm=true)
           dmType = await inferConversationMessageType(contactId, { preferDm: true });
         }
         if (!COMPACT_MODE) console.log(`✅ Found DM conversation ${finalConversationId} with type ${dmType}`);
@@ -995,18 +862,13 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         if (!COMPACT_MODE) console.log("🔍 No existing DM conversation found, will try to infer type from contact...");
       }
     } else {
-      // If conversationId was provided, still infer the type (prefer DM since isDm=true)
       dmType = await inferConversationMessageType(contactId, { preferDm: true });
     }
 
-    // If we have a conversationId and valid DM type, use it
     if (finalConversationId && dmType && dmType !== "SMS") {
-      // If we found the conversation from GHL, trust that GHL knows the type
-      // Only validate contact IDs if we're inferring from other sources
-      const shouldValidateIds = !foundConversation; // Only validate if we didn't find conversation from GHL
-      
+      const shouldValidateIds = !foundConversation;
+
       if (shouldValidateIds) {
-        // Get contact once to check tags and social IDs
         let contact = null;
         try {
           contact = await getContact(contactId);
@@ -1014,46 +876,37 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           console.error("❌ Error fetching contact for DM validation:", err.message);
           throw err;
         }
-        
-        // Helper function to check social IDs
+
         const checkSocialIds = (contact) => {
           const hasInstagramId = !!(
-            contact?.instagramId || 
-            contact?.instagram || 
-            contact?.socialProfiles?.instagram ||
-            contact?.customField?.instagram_id
+            contact?.instagramId || contact?.instagram ||
+            contact?.socialProfiles?.instagram || contact?.customField?.instagram_id
           );
           const hasFacebookId = !!(
-            contact?.facebookId || 
-            contact?.facebook || 
-            contact?.socialProfiles?.facebook ||
-            contact?.customField?.facebook_id
+            contact?.facebookId || contact?.facebook ||
+            contact?.socialProfiles?.facebook || contact?.customField?.facebook_id
           );
           return { hasInstagramId, hasFacebookId };
         };
-        
-        // Ensure we have a valid type (IG or FB for social media DMs)
+
         if (dmType !== "IG" && dmType !== "FB") {
-          // Try to infer from contact tags or check contact's social IDs
           const tags = contact?.tags || [];
           const hasInstagram = tags.some(t => String(t).toUpperCase().includes("INSTAGRAM"));
           const hasFacebook = tags.some(t => String(t).toUpperCase().includes("FACEBOOK"));
-          
+
           const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
-          
+
           if (hasInstagramId || (hasInstagram && !hasFacebookId)) {
             dmType = "IG";
           } else if (hasFacebookId || hasFacebook) {
             dmType = "FB";
           } else {
-            // Default to FB as fallback (more common than IG, less likely to fail)
             dmType = "FB";
           }
         }
-        
-        // Validate that contact has the required social ID before sending
+
         const { hasInstagramId, hasFacebookId } = checkSocialIds(contact);
-        
+
         if (dmType === "IG") {
           if (!hasInstagramId) {
             console.warn("⚠️ Contact has no Instagram ID, switching to FB");
@@ -1076,7 +929,6 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           }
         }
       } else {
-        // We found the conversation from GHL - trust that GHL knows the type
         if (!COMPACT_MODE) console.log(`✅ Using conversation type ${dmType} from GHL conversation - skipping ID validation`);
       }
 
@@ -1085,105 +937,76 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           conversationId: finalConversationId,
           contactId,
           message: markedBody,
-          type: dmType, // Use inferred type (IG or FB)
-          userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
+          type: dmType,
+          userId: AI_BOT_USER_ID,
         };
 
         if (!COMPACT_MODE) console.log("📨 Sending DM reply via GHL:", payload);
 
-        const url = "https://services.leadconnectorhq.com/conversations/messages";
-        const resp = await axios.post(url, payload, {
-          headers: {
-            Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            Version: "2021-07-28",
-          },
-        });
+        const result = await _sendMessage(payload);
 
-        if (!COMPACT_MODE) console.log("📨 GHL DM reply response:", { status: resp.status, contactId, conversationId: finalConversationId });
+        if (!COMPACT_MODE) console.log("📨 GHL DM reply response:", { contactId, conversationId: finalConversationId });
 
-        // Reassign back to original artist
         if (needsReassignment && originalAssignedTo) {
           await reassignToOriginalArtist(contactId, originalAssignedTo);
         }
 
-        return resp.data;
+        return result;
       } catch (err) {
         console.error("❌ Error sending DM reply via GHL:", err.response?.data || err.message);
-        
-        // Reassign back even on error
+
         if (needsReassignment && originalAssignedTo) {
           await reassignToOriginalArtist(contactId, originalAssignedTo);
         }
-        
+
         // fall through to try alternative method
       }
     }
 
-    // If no conversationId found, try to infer type and send without conversationId
-    // GHL will create a new conversation if needed
     if (!finalConversationId) {
       try {
-        // Infer DM type from contact tags or default to IG/FB (prefer DM since isDm=true)
         const inferredType = await inferConversationMessageType(contactId, { preferDm: true });
-        
-        // Only proceed if it's a social media type
+
         if (inferredType === "IG" || inferredType === "FB") {
           const payload = {
             contactId,
             locationId: GHL_LOCATION_ID,
             message: markedBody,
             type: inferredType,
-            userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
+            userId: AI_BOT_USER_ID,
           };
 
           if (!COMPACT_MODE) console.log("📨 Sending DM via GHL (creating new conversation):", payload);
 
-          const url = "https://services.leadconnectorhq.com/conversations/messages";
-          const resp = await axios.post(url, payload, {
-            headers: {
-              Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-              "Content-Type": "application/json",
-              Accept: "application/json",
-              Version: "2021-07-28",
-            },
-          });
+          const result = await _sendMessage(payload);
 
-          if (!COMPACT_MODE) console.log("📨 GHL DM message response (new conversation):", { status: resp.status, contactId, type: inferredType });
+          if (!COMPACT_MODE) console.log("📨 GHL DM message response (new conversation):", { contactId, type: inferredType });
 
-          // Reassign back to original artist
           if (needsReassignment && originalAssignedTo) {
             await reassignToOriginalArtist(contactId, originalAssignedTo);
           }
 
-          return resp.data;
+          return result;
         } else {
           console.warn(`⚠️ Cannot send DM: inferred type is ${inferredType}, not IG/FB`);
-          
-          // Reassign back even if we can't send
+
           if (needsReassignment && originalAssignedTo) {
             await reassignToOriginalArtist(contactId, originalAssignedTo);
           }
         }
       } catch (err) {
         console.error("❌ Error sending DM via GHL (new conversation):", err.response?.data || err.message);
-        
-        // Reassign back even on error
+
         if (needsReassignment && originalAssignedTo) {
           await reassignToOriginalArtist(contactId, originalAssignedTo);
         }
-        
-        // fall through to error handling
       }
     }
   }
 
-  // 2) SMS / phone-based path (existing behavior)
+  // 2) SMS / phone-based path
   if (hasPhone && phone) {
     try {
-      // Check if contact prefers WhatsApp, otherwise use SMS
-      // Don't infer type here - inference is for DM conversations
       const { isWhatsApp = false } = channelContext;
       const type = isWhatsApp ? "WhatsApp" : "SMS";
 
@@ -1191,49 +1014,34 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         contactId,
         locationId: GHL_LOCATION_ID,
         message: markedBody,
-        type, // e.g. "SMS", "FB", "IG", ...
-        userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
+        type,
+        userId: AI_BOT_USER_ID,
       };
 
-      const url = "https://services.leadconnectorhq.com/conversations/messages";
+      const result = await _sendMessage(payload);
 
-      const resp = await axios.post(url, payload, {
-        headers: {
-          Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-          "Content-Type": "application/json",
-          Accept: "application/json",
-          Version: "2021-07-28",
-        },
-      });
+      if (!COMPACT_MODE) console.log("📨 GHL conversations API response:", { contactId, type });
 
-      if (!COMPACT_MODE) console.log("📨 GHL conversations API response:", { status: resp.status, contactId, type });
-
-      // Reassign back to original artist
       if (needsReassignment && originalAssignedTo) {
         await reassignToOriginalArtist(contactId, originalAssignedTo);
       }
 
-      return resp.data;
+      return result;
     } catch (err) {
       console.error("❌ Error sending SMS/phone message via GHL:", err.response?.data || err.message);
-      
-      // Reassign back even on error
+
       if (needsReassignment && originalAssignedTo) {
         await reassignToOriginalArtist(contactId, originalAssignedTo);
       }
-      
+
       throw err;
     }
   } else {
-    // Fallback: try to infer type and send anyway (existing behavior for backward compatibility)
+    // Fallback
     if (!isDm) {
       try {
         let type = await inferConversationMessageType(contactId);
 
-        // SAFETY CHECK: If inferred type is WhatsApp, verify contact actually has WhatsApp enabled
-        // AND doesn't have a US phone number (WhatsApp only for international)
-        // This prevents sending WhatsApp messages to contacts who don't have it,
-        // which can happen if a previous message was incorrectly sent via WhatsApp
         if (type === "WhatsApp") {
           const contact = await getContact(contactId);
           const cf = contact?.customField || contact?.customFields || {};
@@ -1253,113 +1061,73 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
           locationId: GHL_LOCATION_ID,
           message: markedBody,
           type,
-          userId: AI_BOT_USER_ID, // Mark as AI-sent for iOS app detection
+          userId: AI_BOT_USER_ID,
         };
 
-        const url = "https://services.leadconnectorhq.com/conversations/messages";
+        const result = await _sendMessage(payload);
 
-        const resp = await axios.post(url, payload, {
-          headers: {
-            Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-            "Content-Type": "application/json",
-            Accept: "application/json",
-            Version: "2021-07-28",
-          },
-        });
+        if (!COMPACT_MODE) console.log("📨 GHL conversations API response (fallback):", { contactId, type });
 
-        if (!COMPACT_MODE) console.log("📨 GHL conversations API response (fallback):", {
-          status: resp.status,
-          contactId,
-          type,
-        });
-
-        return resp.data;
+        return result;
       } catch (err) {
         console.error("❌ Error sending message via GHL (fallback):", err.response?.data || err.message);
         throw err;
       } finally {
-        // Reassign back to original artist if we temporarily reassigned
         if (needsReassignment && originalAssignedTo) {
           await reassignToOriginalArtist(contactId, originalAssignedTo);
         }
       }
     } else {
-      // This should not happen now since DM handling is above, but keep as safety net
       console.warn(
         "⚠️ No valid phone number and no DM conversationId; cannot send message.",
         { contactId, isDm, hasPhone, conversationId }
       );
-      
-      // Reassign back if we temporarily reassigned
+
       if (needsReassignment && originalAssignedTo) {
         await reassignToOriginalArtist(contactId, originalAssignedTo);
       }
-      
+
       return null;
     }
   }
 }
 
-
-
-
-
-
 // ============================================================================
 // V2 API Functions for Contact Assignment and Followers
 // ============================================================================
 
-// Artist ID for message-based consultations (assigned after deposit paid)
 const MESSAGE_CONSULT_ARTIST_ID = "y0BeYjuRIlDwsDcOHOJo";
-
-// Translator ID for video call consultations (added as follower)
 const TRANSLATOR_FOLLOWER_ID = "sx6wyHhbFdRXh302Lunr";
 
 /**
  * Assign an artist to a contact using GHL v2 API.
- * Used specifically when lead chooses message-based consultation and deposit is paid.
- * 
- * @param {string} contactId - The contact ID to assign
- * @param {string} assignedToId - The user ID to assign (defaults to MESSAGE_CONSULT_ARTIST_ID)
- * @returns {Promise<object|null>} The API response or null on error
  */
 async function assignContactToArtist(contactId, assignedToId = MESSAGE_CONSULT_ARTIST_ID) {
   if (!contactId) {
     console.warn("assignContactToArtist called without contactId");
     return null;
   }
-
   if (!assignedToId) {
     console.warn("assignContactToArtist called without assignedToId");
     return null;
   }
 
   try {
-    const url = `https://services.leadconnectorhq.com/contacts/${contactId}`;
-    const payload = {
-      assignedTo: assignedToId,
-    };
-
-    const resp = await axios.put(url, payload, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Version: "2021-07-28", // Required for GHL v2 API
-      },
-    });
+    const result = await ghlSdk.contacts.updateContact(
+      { contactId },
+      { assignedTo: assignedToId }
+    );
 
     console.log("✅ Assigned artist to contact", {
       contactId,
       assignedTo: assignedToId,
-      status: resp.status,
     });
 
-    return resp.data;
+    return result;
   } catch (err) {
     console.error(
       "❌ Error assigning artist to contact:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
@@ -1368,11 +1136,6 @@ async function assignContactToArtist(contactId, assignedToId = MESSAGE_CONSULT_A
 
 /**
  * Add followers to a contact using GHL v2 API.
- * Used to add translator as follower for video call consultations.
- * 
- * @param {string} contactId - The contact ID
- * @param {string|string[]} followerIds - Single follower ID or array of follower IDs
- * @returns {Promise<object|null>} The API response or null on error
  */
 async function addFollowersToContact(contactId, followerIds) {
   if (!contactId) {
@@ -1380,40 +1143,29 @@ async function addFollowersToContact(contactId, followerIds) {
     return null;
   }
 
-  // Normalize to array
   const followers = Array.isArray(followerIds) ? followerIds : [followerIds];
-  
+
   if (followers.length === 0 || !followers[0]) {
     console.warn("addFollowersToContact called without valid followerIds");
     return null;
   }
 
   try {
-    const url = `https://services.leadconnectorhq.com/contacts/${contactId}/followers`;
-    const payload = {
-      followers: followers,
-    };
-
-    const resp = await axios.post(url, payload, {
-      headers: {
-        Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        Version: "2021-07-28", // Required for GHL v2 API
-      },
-    });
+    const result = await ghlSdk.contacts.addFollowersContact(
+      { contactId },
+      { followers }
+    );
 
     console.log("✅ Added followers to contact", {
       contactId,
-      followers: followers,
-      status: resp.status,
+      followers,
     });
 
-    return resp.data;
+    return result;
   } catch (err) {
     console.error(
       "❌ Error adding followers to contact:",
-      err.response?.status,
+      err.response?.status || err.statusCode,
       err.response?.data || err.message
     );
     return null;
@@ -1422,10 +1174,6 @@ async function addFollowersToContact(contactId, followerIds) {
 
 /**
  * Add translator as follower to a contact.
- * Convenience wrapper for adding the default translator follower.
- * 
- * @param {string} contactId - The contact ID
- * @returns {Promise<object|null>} The API response or null on error
  */
 async function addTranslatorAsFollower(contactId) {
   console.log(`🌐 Adding translator as follower for contact ${contactId}`);
@@ -1435,21 +1183,28 @@ async function addTranslatorAsFollower(contactId) {
 module.exports = {
   getContact,
   getContactV2,
+  createContact,
   updateContact,
+  lookupContactIdByEmailOrPhone,
   upsertContactFromWidget,
   updateSystemFields,
   updateTattooFields,
   uploadFilesToTattooCustomField,
   sendConversationMessage,
+  findConversationForContact,
+  inferConversationMessageType,
   updateContactAssignedUser,
   createTaskForContact,
   getConversationHistory,
-  // V2 API functions
   assignContactToArtist,
   addFollowersToContact,
   addTranslatorAsFollower,
+  temporaryReassignForAIMessage,
+  reassignToOriginalArtist,
+  isUSPhoneNumber,
+  mapCustomFields,
+  normalizeTags,
   // Constants for external use
   MESSAGE_CONSULT_ARTIST_ID,
   TRANSLATOR_FOLLOWER_ID,
 };
-

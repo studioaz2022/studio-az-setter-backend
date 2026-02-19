@@ -1,25 +1,10 @@
-const axios = require("axios");
+const { ghl } = require("./ghlSdk");
 const { PIPELINE_ID } = require("../config/pipelineConfig");
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
-const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
-const GHL_BASE_URL = "https://services.leadconnectorhq.com";
-
-if (!GHL_FILE_UPLOAD_TOKEN) {
-  console.warn("[GHL Opportunities] Missing GHL_FILE_UPLOAD_TOKEN env var");
-}
 
 if (!GHL_LOCATION_ID) {
   console.warn("[GHL Opportunities] Missing GHL_LOCATION_ID env var");
-}
-
-function ghlHeaders() {
-  return {
-    Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    Version: "2021-07-28",
-  };
 }
 
 async function createOpportunity({
@@ -52,13 +37,8 @@ async function createOpportunity({
     payload.assignedUserId = assignedUserId;
   }
 
-  const url = `${GHL_BASE_URL}/opportunities/`;
-
-  const response = await axios.post(url, payload, {
-    headers: ghlHeaders(),
-  });
-
-  return response.data;
+  // SDK returns response.data directly (same shape as before)
+  return ghl.opportunities.createOpportunity(payload);
 }
 
 async function upsertOpportunity({
@@ -94,30 +74,21 @@ async function upsertOpportunity({
     payload.assignedTo = finalAssignee;
   }
 
-  const url = `${GHL_BASE_URL}/opportunities/upsert`;
-
-  const response = await axios.post(url, payload, {
-    headers: ghlHeaders(),
-    maxBodyLength: Infinity,
-  });
-
-  return response.data;
+  // SDK returns response.data directly (same shape as before)
+  return ghl.opportunities.upsertOpportunity(payload);
 }
 
 async function updateOpportunity(opportunityId, body = {}) {
   if (!opportunityId) throw new Error("updateOpportunity requires opportunityId");
 
-  const url = `${GHL_BASE_URL}/opportunities/${opportunityId}`;
-  const response = await axios.put(
-    url,
+  // SDK returns response.data directly (same shape as before)
+  return ghl.opportunities.updateOpportunity(
+    { id: opportunityId },
     {
       ...body,
       locationId: GHL_LOCATION_ID,
-    },
-    { headers: ghlHeaders() }
+    }
   );
-
-  return response.data;
 }
 
 async function updateOpportunityStage({ opportunityId, pipelineStageId, status }) {
@@ -141,15 +112,12 @@ async function addOpportunityNote({ opportunityId, content }) {
   if (!opportunityId) throw new Error("addOpportunityNote requires opportunityId");
   if (!content) return null;
 
-  const url = `${GHL_BASE_URL}/opportunities/${opportunityId}/notes`;
-  const payload = {
-    locationId: GHL_LOCATION_ID,
-    content,
-  };
-
-  const response = await axios.post(url, payload, {
-    headers: ghlHeaders(),
-  });
+  // No SDK method for opportunity notes — use SDK's pre-configured httpClient
+  const httpClient = ghl.getHttpClient();
+  const response = await httpClient.post(
+    `/opportunities/${opportunityId}/notes`,
+    { locationId: GHL_LOCATION_ID, content }
+  );
 
   return response.data;
 }
@@ -175,46 +143,38 @@ async function searchOpportunities({
   }
 
   // Build query params - require at least contactId OR assignedTo
-  const params = new URLSearchParams();
-  params.set("location_id", String(locationId));
-
-  if (contactId) {
-    params.set("contact_id", String(contactId));
-  } else if (assignedTo) {
-    params.set("assigned_to", String(assignedTo));
-  } else {
-    // No supported filter provided
+  if (!contactId && !assignedTo) {
     console.warn(
       "⚠️ [GHL Opportunities] searchOpportunities called without contact_id or assigned_to; returning empty list."
     );
     return [];
   }
 
-  // Add status filter to API request (supported: open, won, lost, abandoned, all)
-  if (status && status !== "all") {
-    params.set("status", String(status));
-  }
-
-  // Optional pagination inputs for first page
+  // First page via SDK
+  const sdkParams = { locationId };
+  if (contactId) sdkParams.contactId = String(contactId);
+  if (assignedTo) sdkParams.assignedTo = String(assignedTo);
+  if (status && status !== "all") sdkParams.status = String(status);
   if (pagination?.startAfter !== undefined && pagination?.startAfter !== null) {
-    params.set("startAfter", String(pagination.startAfter));
+    sdkParams.startAfter = String(pagination.startAfter);
   }
   if (pagination?.startAfterId) {
-    params.set("startAfterId", String(pagination.startAfterId));
+    sdkParams.startAfterId = String(pagination.startAfterId);
   }
 
-  // Fetch all pages
-  let url = `${GHL_BASE_URL}/opportunities/search?${params.toString()}`;
-  const results = [];
+  // SDK returns response.data directly: { opportunities, meta, traceId }
+  const firstPage = await ghl.opportunities.searchOpportunity(sdkParams);
+  const results = [...(firstPage?.opportunities || [])];
 
-  while (url) {
-    const response = await axios.get(url, { headers: ghlHeaders() });
+  // Auto-paginate using SDK's httpClient for subsequent pages
+  let nextPageUrl = firstPage?.meta?.nextPageUrl || firstPage?.meta?.nextPageURL || null;
+  const httpClient = ghl.getHttpClient();
+
+  while (nextPageUrl) {
+    const response = await httpClient.get(nextPageUrl);
     const opportunities = response.data?.opportunities || [];
     results.push(...opportunities);
-
-    // Check for next page
-    const nextPageUrl = response.data?.meta?.nextPageUrl || response.data?.meta?.nextPageURL || null;
-    url = nextPageUrl || null;
+    nextPageUrl = response.data?.meta?.nextPageUrl || response.data?.meta?.nextPageURL || null;
   }
 
   // Client-side filtering for pipelineStageId (not supported by API)
@@ -230,9 +190,8 @@ async function searchOpportunities({
 
 async function getOpportunity(opportunityId) {
   if (!opportunityId) throw new Error("getOpportunity requires opportunityId");
-  const url = `${GHL_BASE_URL}/opportunities/${opportunityId}?locationId=${encodeURIComponent(GHL_LOCATION_ID)}`;
-  const response = await axios.get(url, { headers: ghlHeaders() });
-  return response.data;
+  // SDK returns response.data directly: { opportunity: {...}, traceId }
+  return ghl.opportunities.getOpportunity({ id: opportunityId });
 }
 
 async function getOpportunitiesByContact({ contactId, pipelineId = PIPELINE_ID }) {

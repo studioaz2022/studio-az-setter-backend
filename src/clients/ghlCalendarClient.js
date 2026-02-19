@@ -1,28 +1,12 @@
 // ghlCalendarClient.js
-// GHL Calendar API client for appointment booking
+// GHL Calendar API client for appointment booking — powered by @gohighlevel/api-client SDK
 
-require("dotenv").config();
-const axios = require("axios");
+const { ghl } = require("./ghlSdk");
 
-const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
-const GHL_BASE_URL = "https://services.leadconnectorhq.com";
-
-if (!GHL_FILE_UPLOAD_TOKEN) {
-  console.warn("[GHL Calendar] GHL_FILE_UPLOAD_TOKEN is not set.");
-}
 
 if (!GHL_LOCATION_ID) {
   console.warn("[GHL Calendar] GHL_LOCATION_ID is not set.");
-}
-
-function ghlHeaders() {
-  return {
-    Authorization: `Bearer ${GHL_FILE_UPLOAD_TOKEN}`,
-    Accept: "application/json",
-    "Content-Type": "application/json",
-    Version: "2021-04-15",
-  };
 }
 
 /**
@@ -73,8 +57,6 @@ async function createAppointment({
     throw new Error("locationId is required (set GHL_LOCATION_ID env var)");
   }
 
-  const url = `${GHL_BASE_URL}/calendars/events/appointments`;
-
   const payload = {
     title: title || "Consultation",
     meetingLocationType,
@@ -99,19 +81,18 @@ async function createAppointment({
   }
 
   try {
-    const resp = await axios.post(url, payload, {
-      headers: ghlHeaders(),
-    });
+    // SDK returns response.data directly
+    const result = await ghl.calendars.createAppointment(payload);
 
     console.log("✅ Created appointment:", {
-      appointmentId: resp.data?.id,
+      appointmentId: result?.id,
       calendarId,
       contactId,
       startTime,
       appointmentStatus,
     });
 
-    return resp.data;
+    return result;
   } catch (err) {
     console.error("❌ Error creating appointment:", err.response?.data || err.message);
     throw err;
@@ -128,14 +109,10 @@ async function listAppointmentsForContact(contactId) {
     throw new Error("contactId is required for listAppointmentsForContact");
   }
 
-  const url = `${GHL_BASE_URL}/contacts/${encodeURIComponent(contactId)}/appointments`;
-
   try {
-    const resp = await axios.get(url, {
-      headers: ghlHeaders(),
-    });
-
-    const events = resp.data?.events || [];
+    // SDK returns response.data directly: { events: [...] }
+    const result = await ghl.contacts.getAppointmentsForContact({ contactId });
+    const events = result?.events || [];
     console.log(`✅ Found ${events.length} appointments for contact ${contactId}`);
 
     return events;
@@ -162,10 +139,6 @@ async function updateAppointmentStatus(appointmentId, status, calendarId = null)
     throw new Error("status is required for updateAppointmentStatus");
   }
 
-  const url = `${GHL_BASE_URL}/calendars/events/appointments/${encodeURIComponent(
-    appointmentId
-  )}`;
-
   const payload = {
     appointmentStatus: status,
     toNotify: false,
@@ -177,17 +150,18 @@ async function updateAppointmentStatus(appointmentId, status, calendarId = null)
   }
 
   try {
-    // GHL uses PUT for appointment updates, not PATCH
-    const resp = await axios.put(url, payload, {
-      headers: ghlHeaders(),
-    });
+    // SDK returns response.data directly
+    const result = await ghl.calendars.editAppointment(
+      { eventId: appointmentId },
+      payload
+    );
 
     console.log("✅ Updated appointment status:", {
       appointmentId,
       status,
     });
 
-    return resp.data;
+    return result;
   } catch (err) {
     console.error("❌ Error updating appointment status:", err.response?.data || err.message);
     throw err;
@@ -205,10 +179,6 @@ async function rescheduleAppointment(appointmentId, { startTime, endTime, appoin
   if (!startTime || !endTime) {
     throw new Error("startTime and endTime are required for rescheduleAppointment");
   }
-
-  const url = `${GHL_BASE_URL}/calendars/events/appointments/${encodeURIComponent(
-    appointmentId
-  )}`;
 
   const payload = {
     startTime,
@@ -233,17 +203,18 @@ async function rescheduleAppointment(appointmentId, { startTime, endTime, appoin
   }
 
   try {
-    // GHL uses PUT for appointment updates, not PATCH
-    const resp = await axios.put(url, payload, {
-      headers: ghlHeaders(),
-    });
+    // SDK returns response.data directly
+    const result = await ghl.calendars.editAppointment(
+      { eventId: appointmentId },
+      payload
+    );
     console.log("✅ Rescheduled appointment:", {
       appointmentId,
       startTime,
       endTime,
       appointmentStatus,
     });
-    return resp.data;
+    return result;
   } catch (err) {
     console.error("❌ Error rescheduling appointment:", err.response?.data || err.message);
     throw err;
@@ -287,7 +258,7 @@ async function getConsultAppointmentsForContact(contactId, consultCalendarIds) {
  * @param {Date} startDate - Start of date range
  * @param {Date} endDate - End of date range (max 31 days from startDate)
  * @returns {Promise<Array>} Array of slot objects with startTime, endTime, displayText
- * 
+ *
  * NOTE: GHL API constraint - date range cannot exceed 31 days
  */
 async function getCalendarFreeSlots(calendarId, startDate, endDate) {
@@ -310,21 +281,21 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate) {
     finalEndMs = startMs + maxRangeMs;
   }
 
-  const url = `${GHL_BASE_URL}/calendars/${encodeURIComponent(calendarId)}/free-slots?startDate=${startMs}&endDate=${finalEndMs}`;
-
   try {
-    const resp = await axios.get(url, {
-      headers: ghlHeaders(),
+    // SDK returns response.data directly — same date-keyed structure
+    const data = await ghl.calendars.getSlots({
+      calendarId,
+      startDate: startMs,
+      endDate: finalEndMs,
     });
 
-    const data = resp.data || {};
     const slots = [];
 
     // Parse the response - it's organized by date with slots array
     // Example: { "2025-12-22": { "slots": ["2025-12-22T10:00:00-06:00", ...] }, ... }
-    for (const [dateKey, dateData] of Object.entries(data)) {
+    for (const [dateKey, dateData] of Object.entries(data || {})) {
       if (dateKey === "traceId") continue; // Skip the traceId field
-      
+
       const dateSlots = dateData?.slots || [];
       for (const slotTime of dateSlots) {
         const startTime = new Date(slotTime);
@@ -359,4 +330,3 @@ module.exports = {
   rescheduleAppointment,
   getCalendarFreeSlots,
 };
-
