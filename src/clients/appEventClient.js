@@ -1,14 +1,14 @@
 /**
  * App Event Client
  *
- * Sends events to the Studio AZ Tattoo App webhook server
- * for real-time integration between AI Setter and the iOS app.
+ * Dispatches events to the AI Setter event handler for real-time integration
+ * between the AI Setter bot and the iOS app's Command Center.
+ *
+ * Previously sent HTTP requests to a separate webhook server.
+ * Now calls the handler directly as an in-process function call.
  */
 
-const axios = require('axios');
-
-// Webhook server URL (configure via environment variable)
-const APP_WEBHOOK_URL = process.env.APP_WEBHOOK_URL || 'http://localhost:3000';
+const { handleAISetterEvent } = require('./aiSetterEventHandler');
 
 // Event types that the app understands
 const EVENT_TYPES = {
@@ -44,21 +44,14 @@ async function sendAppEvent(type, contactId, data = {}) {
   };
 
   try {
-    const url = `${APP_WEBHOOK_URL}/webhooks/ai-setter/events`;
-    const response = await axios.post(url, payload, {
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      timeout: 5000, // 5 second timeout
-    });
-
-    console.log(`📱 App event sent: ${type} for contact ${contactId}`);
-    return response.data;
+    const result = await handleAISetterEvent(payload);
+    console.log(`📱 App event processed: ${type} for contact ${contactId}`);
+    return result;
   } catch (err) {
     // Don't throw - app events are non-critical
     console.warn(
-      `⚠️ Failed to send app event (${type}):`,
-      err.response?.status || err.message
+      `⚠️ Failed to process app event (${type}):`,
+      err.message
     );
     return null;
   }

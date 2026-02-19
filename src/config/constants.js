@@ -152,8 +152,8 @@ const CONSULTATION_CALENDARS = {
 // GHL User IDs for all team members
 const GHL_USER_IDS = {
   CLAUDIA: "Wl24x1ZrucHuHatM0ODD",
-  JOAN: "O8ChoMYj1BmMWJJsDlvC",
-  ANDREW: "1wuLf50VMODExBSJ9xPI",
+  JOAN: "1wuLf50VMODExBSJ9xPI",
+  ANDREW: "O8ChoMYj1BmMWJJsDlvC",
   LIONEL: "1kFG5FWdUDhXLUX46snG",
   MARIA: "uAWhIMemqUPJC1SqCyDR",
 };
@@ -161,8 +161,8 @@ const GHL_USER_IDS = {
 // GHL User emails by userId (for Google Calendar invites)
 const GHL_USER_EMAILS = {
   "Wl24x1ZrucHuHatM0ODD": "l.jchavez@hotmail.com",       // Claudia
-  "O8ChoMYj1BmMWJJsDlvC": "andrew_fernandez1@icloud.com", // Joan
-  "1wuLf50VMODExBSJ9xPI": "cjoanmartinez73@gmail.com",    // Andrew
+  "O8ChoMYj1BmMWJJsDlvC": "andrew_fernandez1@icloud.com", // Andrew
+  "1wuLf50VMODExBSJ9xPI": "cjoanmartinez73@gmail.com",    // Joan
   "1kFG5FWdUDhXLUX46snG": "chavezctz@gmail.com",           // Lionel
   "uAWhIMemqUPJC1SqCyDR": "mariaaclaflin@gmail.com",       // Maria
 };

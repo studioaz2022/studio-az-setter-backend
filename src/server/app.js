@@ -23,6 +23,7 @@ const {
   addTranslatorAsFollower,
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
+const { verifyStaffEmail } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
   extractCustomFieldsFromPayload,
@@ -1752,10 +1753,10 @@ function createApp() {
         query = query.eq('location_id', locationId);
       }
       if (startDate) {
-        query = query.gte('created_at', startDate);
+        query = query.gte('session_date', startDate);
       }
       if (endDate) {
-        query = query.lte('created_at', endDate);
+        query = query.lte('session_date', endDate);
       }
 
       const { data: transactions, error } = await query.order('created_at', { ascending: false });
@@ -1777,10 +1778,18 @@ function createApp() {
         }
 
         if (tx.settlement_status !== 'settled') {
+          const unsettled = tx.settlement_status === 'partial'
+            ? (tx.payment_recipient === 'shop'
+              ? (parseFloat(tx.artist_amount) || 0) - (parseFloat(tx.settled_amount) || 0)
+              : (parseFloat(tx.shop_amount) || 0) - (parseFloat(tx.settled_amount) || 0))
+            : (tx.payment_recipient === 'shop'
+              ? (parseFloat(tx.artist_amount) || 0)
+              : (parseFloat(tx.shop_amount) || 0));
+
           if (tx.payment_recipient === 'shop') {
-            pendingFromShop += parseFloat(tx.artist_amount) || 0;
-          } else if (tx.payment_recipient === 'artist_direct') {
-            owedToShop += parseFloat(tx.shop_amount) || 0;
+            pendingFromShop += unsettled;
+          } else {
+            owedToShop += unsettled;
           }
         }
       }
@@ -2770,6 +2779,808 @@ function createApp() {
       });
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // MERGED WEBHOOK SERVER ROUTES
+  // (Previously in webhook_server/index.js — now part of unified backend)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  const {
+    handleAppointmentCreated,
+    handleAppointmentUpdated,
+    handleAppointmentDeleted,
+  } = require("../clients/appointmentWebhooks");
+
+  const apnsService = require("../services/apnsService");
+  const { TASK_TYPES, createCommandCenterTask } = require("../clients/commandCenter");
+  const { generateVenmoDescription } = require("../clients/financialTracking");
+  const { GHL_USER_IDS: GHL_IDS } = require("../config/constants");
+
+  // ═══ GHL APPOINTMENT WEBHOOK (Supabase sync + reschedule detection + push) ═══
+  app.post("/webhooks/ghl/appointments", async (req, res) => {
+    try {
+      console.log("📥 Received GHL appointment webhook");
+
+      const { type } = req.body;
+
+      switch (type) {
+        case "AppointmentCreate":
+        case "appointment.created":
+          await handleAppointmentCreated(req.body);
+          break;
+        case "AppointmentUpdate":
+        case "appointment.updated":
+          await handleAppointmentUpdated(req.body);
+          break;
+        case "AppointmentDelete":
+        case "appointment.deleted":
+          await handleAppointmentDeleted(req.body);
+          break;
+        default:
+          console.log(`⚠️ Unknown appointment event type: ${type}`);
+      }
+
+      res.status(200).json({ success: true });
+    } catch (error) {
+      console.error("❌ Error processing appointment webhook:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ AI SETTER EVENTS — iOS polling endpoints ═══
+
+  app.get("/api/ai-setter/events", async (req, res) => {
+    try {
+      if (!supabase) return res.status(503).json({ success: false, error: "Supabase not configured" });
+
+      const { contactId, since, limit = 50 } = req.query;
+
+      let query = supabase
+        .from("ai_setter_events")
+        .select("*")
+        .order("event_timestamp", { ascending: false })
+        .limit(parseInt(limit));
+
+      if (contactId) query = query.eq("contact_id", contactId);
+      if (since) query = query.gte("event_timestamp", since);
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      res.json({ success: true, events: data || [] });
+    } catch (error) {
+      console.error("❌ Error fetching AI Setter events:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/ai-setter/stats", async (req, res) => {
+    try {
+      if (!supabase) return res.status(503).json({ success: false, error: "Supabase not configured" });
+
+      const { data, error } = await supabase
+        .from("ai_setter_events")
+        .select("event_type")
+        .gte("event_timestamp", new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString());
+
+      if (error) throw error;
+
+      const stats = {
+        depositsThisWeek: data.filter((e) => e.event_type === "deposit_paid").length,
+        leadsQualifiedThisWeek: data.filter((e) => e.event_type === "lead_qualified").length,
+        appointmentsBookedThisWeek: data.filter((e) => e.event_type === "appointment_booked").length,
+        humanHandoffsThisWeek: data.filter((e) => e.event_type === "human_handoff").length,
+      };
+
+      res.json({ success: true, stats });
+    } catch (error) {
+      console.error("❌ Error fetching AI Setter stats:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ PUSH NOTIFICATIONS ═══
+
+  app.post("/api/notifications/queue", async (req, res) => {
+    try {
+      const { userId, title, body, type, data = {}, priority = "normal" } = req.body;
+
+      if (!userId || !title || !body || !type) {
+        return res.status(400).json({ success: false, error: "Missing required fields: userId, title, body, type" });
+      }
+
+      const notification = {
+        user_id: userId,
+        title,
+        body,
+        notification_type: type,
+        data,
+        priority,
+        status: "pending",
+        created_at: new Date().toISOString(),
+      };
+
+      const { data: result, error } = await supabase
+        .from("notification_queue")
+        .insert([notification])
+        .select()
+        .single();
+
+      if (error) throw error;
+      res.json({ success: true, notification: result });
+    } catch (error) {
+      console.error("❌ Error queuing notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/notifications/pending", async (req, res) => {
+    try {
+      const { limit = 100 } = req.query;
+
+      const { data: notifications, error: notifError } = await supabase
+        .from("notification_queue")
+        .select("*")
+        .eq("status", "pending")
+        .order("created_at", { ascending: true })
+        .limit(parseInt(limit));
+
+      if (notifError) throw notifError;
+
+      const userIds = [...new Set(notifications.map((n) => n.user_id))];
+
+      const { data: tokens, error: tokenError } = await supabase
+        .from("push_tokens")
+        .select("user_id, token, platform, device_model")
+        .in("user_id", userIds)
+        .eq("is_active", true);
+
+      if (tokenError) throw tokenError;
+
+      const tokensByUser = {};
+      for (const token of tokens || []) {
+        if (!tokensByUser[token.user_id]) tokensByUser[token.user_id] = [];
+        tokensByUser[token.user_id].push(token);
+      }
+
+      const result = notifications.map((n) => ({
+        ...n,
+        push_tokens: tokensByUser[n.user_id] || [],
+      }));
+
+      res.json({ success: true, notifications: result });
+    } catch (error) {
+      console.error("❌ Error fetching pending notifications:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/notifications/:id/sent", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { error } = await supabase
+        .from("notification_queue")
+        .update({ status: "sent", sent_at: new Date().toISOString() })
+        .eq("id", id);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error) {
+      console.error("❌ Error marking notification sent:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/notifications/:id/failed", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { error: errorMessage } = req.body;
+
+      const { error } = await supabase
+        .from("notification_queue")
+        .update({ status: "failed", error_message: errorMessage })
+        .eq("id", id);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error) {
+      console.error("❌ Error marking notification failed:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/push-tokens/:userId", async (req, res) => {
+    try {
+      const { userId } = req.params;
+      const { data, error } = await supabase
+        .from("push_tokens")
+        .select("*")
+        .eq("user_id", userId)
+        .eq("is_active", true);
+
+      if (error) throw error;
+      res.json({ success: true, tokens: data || [] });
+    } catch (error) {
+      console.error("❌ Error fetching push tokens:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/apns/status", (req, res) => {
+    const status = apnsService.getConfigStatus();
+    res.json({ success: true, ...status });
+  });
+
+  app.post("/api/apns/test", async (req, res) => {
+    try {
+      const { deviceToken, title, body, userId } = req.body;
+      let targetToken = deviceToken;
+
+      if (!targetToken && userId) {
+        const { data: tokens, error } = await supabase
+          .from("push_tokens")
+          .select("token")
+          .eq("user_id", userId)
+          .eq("is_active", true)
+          .limit(1);
+
+        if (error || !tokens || tokens.length === 0) {
+          return res.status(404).json({ success: false, error: "No push token found for user" });
+        }
+        targetToken = tokens[0].token;
+      }
+
+      if (!targetToken) {
+        return res.status(400).json({ success: false, error: "Either deviceToken or userId is required" });
+      }
+
+      const result = await apnsService.send(targetToken, {
+        title: title || "Test Notification",
+        body: body || "This is a test notification from Studio AZ",
+        type: "test",
+      });
+
+      res.json({ success: result.success, result });
+    } catch (error) {
+      console.error("❌ Error sending test notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ ARTIST EARNINGS SUMMARY (admin dashboard) ═══
+  // IMPORTANT: This must be defined BEFORE /api/artists/:artistId/earnings
+  // to prevent Express from matching "earnings" as :artistId
+  app.get("/api/artists/earnings/summary", async (req, res) => {
+    try {
+      if (!supabase) return res.status(503).json({ success: false, error: "Supabase not configured" });
+
+      const { locationId = "mUemx2jG4wly4kJWBkI4" } = req.query;
+
+      const { data: transactions, error: txError } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("location_id", locationId);
+
+      if (txError) throw txError;
+
+      const { data: rates, error: ratesError } = await supabase
+        .from("artist_commission_rates")
+        .select("artist_ghl_id, artist_name, shop_percentage, artist_percentage")
+        .eq("location_id", locationId)
+        .is("effective_to", null);
+
+      if (ratesError) throw ratesError;
+
+      const artistInfo = {};
+      for (const r of rates || []) {
+        artistInfo[r.artist_ghl_id] = {
+          name: r.artist_name,
+          shopPercentage: r.shop_percentage,
+          artistPercentage: r.artist_percentage,
+        };
+      }
+
+      const byArtist = {};
+      for (const t of transactions || []) {
+        if (!byArtist[t.artist_ghl_id]) byArtist[t.artist_ghl_id] = [];
+        byArtist[t.artist_ghl_id].push(t);
+      }
+
+      const artistsSummary = [];
+      for (const [artistId, artistTransactions] of Object.entries(byArtist)) {
+        let totalEarned = 0;
+        let pendingFromShop = 0;
+        let owedToShop = 0;
+
+        for (const t of artistTransactions) {
+          totalEarned += parseFloat(t.artist_amount);
+
+          if (t.settlement_status !== "settled") {
+            const unsettled =
+              t.settlement_status === "partial"
+                ? t.payment_recipient === "shop"
+                  ? parseFloat(t.artist_amount) - parseFloat(t.settled_amount || 0)
+                  : parseFloat(t.shop_amount) - parseFloat(t.settled_amount || 0)
+                : t.payment_recipient === "shop"
+                  ? parseFloat(t.artist_amount)
+                  : parseFloat(t.shop_amount);
+
+            if (t.payment_recipient === "shop") {
+              pendingFromShop += unsettled;
+            } else {
+              owedToShop += unsettled;
+            }
+          }
+        }
+
+        artistsSummary.push({
+          artistId,
+          artistName: artistInfo[artistId]?.name || "Unknown Artist",
+          shopPercentage: artistInfo[artistId]?.shopPercentage || 50,
+          artistPercentage: artistInfo[artistId]?.artistPercentage || 50,
+          totalEarned: parseFloat(totalEarned.toFixed(2)),
+          pendingFromShop: parseFloat(pendingFromShop.toFixed(2)),
+          owedToShop: parseFloat(owedToShop.toFixed(2)),
+          netBalance: parseFloat((pendingFromShop - owedToShop).toFixed(2)),
+          transactionCount: artistTransactions.length,
+        });
+      }
+
+      // Add artists with no transactions
+      for (const r of rates || []) {
+        if (!byArtist[r.artist_ghl_id]) {
+          artistsSummary.push({
+            artistId: r.artist_ghl_id,
+            artistName: r.artist_name,
+            shopPercentage: r.shop_percentage,
+            artistPercentage: r.artist_percentage,
+            totalEarned: 0,
+            pendingFromShop: 0,
+            owedToShop: 0,
+            netBalance: 0,
+            transactionCount: 0,
+          });
+        }
+      }
+
+      // Calculate shop totals
+      let shopTotalRevenue = 0;
+      let shopPendingPayouts = 0;
+      let shopPendingCollections = 0;
+
+      for (const t of transactions || []) {
+        shopTotalRevenue += parseFloat(t.shop_amount);
+        if (t.settlement_status !== "settled") {
+          if (t.payment_recipient === "shop") {
+            shopPendingPayouts += parseFloat(t.artist_amount) - parseFloat(t.settled_amount || 0);
+          } else {
+            shopPendingCollections += parseFloat(t.shop_amount) - parseFloat(t.settled_amount || 0);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        summary: {
+          artists: artistsSummary,
+          shopTotals: {
+            totalRevenue: parseFloat(shopTotalRevenue.toFixed(2)),
+            pendingPayouts: parseFloat(shopPendingPayouts.toFixed(2)),
+            pendingCollections: parseFloat(shopPendingCollections.toFixed(2)),
+            netBalance: parseFloat((shopPendingCollections - shopPendingPayouts).toFixed(2)),
+          },
+        },
+      });
+    } catch (error) {
+      console.error("❌ Error fetching earnings summary:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ PAYOUTS ═══
+
+  app.post("/api/payouts", async (req, res) => {
+    try {
+      const {
+        artistId,
+        artistName,
+        payoutType,
+        totalAmount,
+        payoutMethod,
+        transactionIds,
+        periodStart,
+        periodEnd,
+        notes,
+        locationId = "mUemx2jG4wly4kJWBkI4",
+      } = req.body;
+
+      if (!artistId || !artistName || !payoutType || !totalAmount) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: artistId, artistName, payoutType, totalAmount",
+        });
+      }
+
+      let venmoDescription = "";
+      if (transactionIds && transactionIds.length > 0) {
+        venmoDescription = await generateVenmoDescription(transactionIds, payoutType);
+      }
+
+      const payout = {
+        id: crypto.randomUUID(),
+        artist_ghl_id: artistId,
+        artist_name: artistName,
+        payout_type: payoutType,
+        total_amount: parseFloat(totalAmount),
+        payout_method: payoutMethod || null,
+        transaction_ids: transactionIds || [],
+        venmo_description: venmoDescription,
+        status: "pending",
+        period_start: periodStart || null,
+        period_end: periodEnd || null,
+        notes: notes || null,
+        location_id: locationId,
+        created_at: new Date().toISOString(),
+      };
+
+      const { data, error } = await supabase
+        .from("artist_payouts")
+        .insert([payout])
+        .select()
+        .single();
+
+      if (error) throw error;
+
+      console.log(`✅ Payout created: $${totalAmount} ${payoutType} for ${artistName}`);
+      res.json({ success: true, payout: data, venmoDescription });
+    } catch (error) {
+      console.error("❌ Error creating payout:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/payouts/:id/complete", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { completedBy } = req.body;
+
+      const { data: payout, error: fetchError } = await supabase
+        .from("artist_payouts")
+        .select("*")
+        .eq("id", id)
+        .single();
+
+      if (fetchError) throw fetchError;
+
+      const { error: updateError } = await supabase
+        .from("artist_payouts")
+        .update({
+          status: "completed",
+          completed_at: new Date().toISOString(),
+          completed_by: completedBy || null,
+        })
+        .eq("id", id);
+
+      if (updateError) throw updateError;
+
+      // Mark linked transactions as settled
+      if (payout.transaction_ids && payout.transaction_ids.length > 0) {
+        for (const txId of payout.transaction_ids) {
+          const { data: tx } = await supabase
+            .from("transactions")
+            .select("*")
+            .eq("id", txId)
+            .single();
+
+          if (tx) {
+            const amountToSettle =
+              payout.payout_type === "shop_to_artist"
+                ? parseFloat(tx.artist_amount)
+                : parseFloat(tx.shop_amount);
+
+            await supabase
+              .from("transactions")
+              .update({
+                settlement_status: "settled",
+                settled_amount: amountToSettle,
+                settled_at: new Date().toISOString(),
+              })
+              .eq("id", txId);
+          }
+        }
+      }
+
+      console.log(`✅ Payout ${id} completed`);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("❌ Error completing payout:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.get("/api/payouts", async (req, res) => {
+    try {
+      const { artistId, status, locationId = "mUemx2jG4wly4kJWBkI4", limit = 50 } = req.query;
+
+      let query = supabase
+        .from("artist_payouts")
+        .select("*")
+        .eq("location_id", locationId)
+        .order("created_at", { ascending: false })
+        .limit(parseInt(limit));
+
+      if (artistId) query = query.eq("artist_ghl_id", artistId);
+      if (status) query = query.eq("status", status);
+
+      const { data, error } = await query;
+      if (error) throw error;
+
+      res.json({ success: true, payouts: data || [] });
+    } catch (error) {
+      console.error("❌ Error fetching payouts:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ CONTACT COMMENTS (Route A Admin-Artist Communication) ═══
+
+  app.get("/api/contacts/:contactId/comments", async (req, res) => {
+    const { contactId } = req.params;
+    const { locationId } = req.query;
+
+    if (!locationId) {
+      return res.status(400).json({ success: false, error: "locationId is required" });
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from("contact_comments")
+        .select("*")
+        .eq("contact_id", contactId)
+        .eq("location_id", locationId)
+        .order("created_at", { ascending: true });
+
+      if (error) throw error;
+      res.json({ success: true, comments: data });
+    } catch (error) {
+      console.error("❌ Error fetching comments:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/contacts/:contactId/admin-update", async (req, res) => {
+    const { contactId } = req.params;
+    const { contactName, adminNotes, fieldChanges, artistGhlId, authorGhlId, authorName, locationId } = req.body;
+
+    if (!adminNotes || !artistGhlId || !authorGhlId || !locationId) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: adminNotes, artistGhlId, authorGhlId, locationId",
+      });
+    }
+
+    try {
+      const threadId = crypto.randomUUID();
+
+      const comment = {
+        id: crypto.randomUUID(),
+        contact_id: contactId,
+        author_ghl_id: authorGhlId,
+        author_name: authorName || "Admin",
+        author_role: "admin",
+        comment_type: "update",
+        message: adminNotes,
+        field_changes: fieldChanges && fieldChanges.length > 0 ? fieldChanges : null,
+        quote_change: null,
+        parent_comment_id: null,
+        thread_id: threadId,
+        is_read: false,
+        created_at: new Date().toISOString(),
+        location_id: locationId,
+      };
+
+      const { data: commentData, error: commentError } = await supabase
+        .from("contact_comments")
+        .insert([comment])
+        .select()
+        .single();
+
+      if (commentError) throw commentError;
+
+      const dueAt = new Date(Date.now() + 6 * 60 * 60 * 1000);
+
+      await createCommandCenterTask({
+        type: TASK_TYPES.ADMIN_UPDATE,
+        contactId,
+        contactName: contactName || "Unknown Contact",
+        assignedTo: [artistGhlId],
+        triggerEvent: "admin_update",
+        locationId,
+        customDueDate: dueAt,
+        metadata: {
+          comment_id: commentData.id,
+          thread_id: threadId,
+          admin_name: authorName || "Admin",
+        },
+      });
+
+      console.log(`✅ Created admin update comment and task for artist: ${artistGhlId}`);
+      res.json({ success: true, comment: commentData, taskCreated: true });
+    } catch (error) {
+      console.error("❌ Error creating admin update:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/contacts/:contactId/artist-response", async (req, res) => {
+    const { contactId } = req.params;
+    const { contactName, parentCommentId, threadId, artistNotes, quoteChange, fieldChangesConfirmed, authorGhlId, authorName, locationId } = req.body;
+
+    if (!artistNotes || !threadId || !authorGhlId || !locationId) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required fields: artistNotes, threadId, authorGhlId, locationId",
+      });
+    }
+
+    try {
+      const comment = {
+        id: crypto.randomUUID(),
+        contact_id: contactId,
+        author_ghl_id: authorGhlId,
+        author_name: authorName || "Artist",
+        author_role: "artist",
+        comment_type: "response",
+        message: artistNotes,
+        field_changes: fieldChangesConfirmed && fieldChangesConfirmed.length > 0 ? fieldChangesConfirmed : null,
+        quote_change: quoteChange || null,
+        parent_comment_id: parentCommentId || null,
+        thread_id: threadId,
+        is_read: false,
+        created_at: new Date().toISOString(),
+        location_id: locationId,
+      };
+
+      const { data: commentData, error: commentError } = await supabase
+        .from("contact_comments")
+        .insert([comment])
+        .select()
+        .single();
+
+      if (commentError) throw commentError;
+
+      const dueAt = new Date(Date.now() + 2 * 60 * 60 * 1000);
+
+      await createCommandCenterTask({
+        type: TASK_TYPES.ARTIST_RESPONSE,
+        contactId,
+        contactName: contactName || "Unknown Contact",
+        assignedTo: [GHL_IDS.MARIA],
+        triggerEvent: "artist_response",
+        locationId,
+        customDueDate: dueAt,
+        metadata: {
+          comment_id: commentData.id,
+          thread_id: threadId,
+          artist_name: authorName || "Artist",
+          quote_changed: quoteChange ? "true" : "false",
+        },
+      });
+
+      console.log("✅ Created artist response comment and task for admin");
+      res.json({ success: true, comment: commentData, taskCreated: true });
+    } catch (error) {
+      console.error("❌ Error creating artist response:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/comments/:commentId/read", async (req, res) => {
+    const { commentId } = req.params;
+    const { userGhlId } = req.body;
+
+    if (!userGhlId) {
+      return res.status(400).json({ success: false, error: "userGhlId is required" });
+    }
+
+    try {
+      const { error } = await supabase
+        .from("contact_comments")
+        .update({
+          is_read: true,
+          read_at: new Date().toISOString(),
+          read_by: userGhlId,
+        })
+        .eq("id", commentId);
+
+      if (error) throw error;
+      res.json({ success: true });
+    } catch (error) {
+      console.error("❌ Error marking comment as read:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STAFF EMAIL VERIFICATION (Sign-Up Flow)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // Simple rate limiter: 5 requests per minute per IP
+  const verifyEmailRateLimit = new Map();
+
+  app.post("/api/verify-email", async (req, res) => {
+    try {
+      // Rate limiting
+      const ip = req.ip || req.connection.remoteAddress;
+      const now = Date.now();
+      const windowMs = 60 * 1000;
+      const maxRequests = 5;
+
+      const entry = verifyEmailRateLimit.get(ip);
+      if (entry && now - entry.windowStart < windowMs) {
+        if (entry.count >= maxRequests) {
+          return res.status(429).json({
+            success: false,
+            error: "Too many requests. Please try again in a minute.",
+          });
+        }
+        entry.count++;
+      } else {
+        verifyEmailRateLimit.set(ip, { windowStart: now, count: 1 });
+      }
+
+      // Clean up old entries periodically
+      if (verifyEmailRateLimit.size > 1000) {
+        for (const [key, val] of verifyEmailRateLimit) {
+          if (now - val.windowStart > windowMs) verifyEmailRateLimit.delete(key);
+        }
+      }
+
+      const { email } = req.body;
+      if (!email || typeof email !== "string") {
+        return res.status(400).json({
+          success: false,
+          error: "Email is required.",
+        });
+      }
+
+      const result = await verifyStaffEmail(email);
+
+      if (!result.found) {
+        return res.json({
+          success: false,
+          error:
+            "This email is not associated with a Studio AZ staff account. Please contact your manager for access.",
+        });
+      }
+
+      // Auto-assign role based on email
+      const normalizedEmail = email.trim().toLowerCase();
+      let role = "artist";
+      if (normalizedEmail === "chavezctz@gmail.com") {
+        role = "owner";
+      } else if (normalizedEmail === "mariaaclaflin@gmail.com") {
+        role = "admin";
+      }
+
+      res.json({
+        success: true,
+        ghlUser: result.ghlUser,
+        locations: result.locations,
+        role,
+      });
+    } catch (error) {
+      console.error("❌ Error verifying staff email:", error);
+      res.status(500).json({
+        success: false,
+        error: "Failed to verify email. Please try again.",
+      });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // END MERGED WEBHOOK SERVER ROUTES
+  // ═══════════════════════════════════════════════════════════════════════════
 
   return app;
 }

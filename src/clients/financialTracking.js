@@ -354,6 +354,54 @@ async function handleSquarePaymentFinancials(payment, contactId, contactName, ar
   }
 }
 
+/**
+ * Generate Venmo payout description from transaction IDs
+ */
+async function generateVenmoDescription(transactionIds, payoutType) {
+  if (!supabase) return '';
+
+  const { data: transactions, error } = await supabase
+    .from('transactions')
+    .select('*')
+    .in('id', transactionIds);
+
+  if (error || !transactions || transactions.length === 0) {
+    return '';
+  }
+
+  // Group by client
+  const byClient = {};
+  for (const t of transactions) {
+    if (!byClient[t.contact_name]) {
+      byClient[t.contact_name] = { sessions: [], total: 0 };
+    }
+    if (t.session_date) {
+      const dateStr = new Date(t.session_date).toLocaleDateString('en-US', { month: '2-digit', day: '2-digit' });
+      if (!byClient[t.contact_name].sessions.includes(dateStr)) {
+        byClient[t.contact_name].sessions.push(dateStr);
+      }
+    }
+    byClient[t.contact_name].total += parseFloat(
+      payoutType === 'shop_to_artist' ? t.artist_amount : t.shop_amount
+    );
+  }
+
+  // Build description
+  let desc = payoutType === 'shop_to_artist'
+    ? 'Tattoo Commission Payout:\n'
+    : 'Shop Commission Settlement:\n';
+
+  for (const [name, data] of Object.entries(byClient)) {
+    const sessionStr = data.sessions.length > 0 ? ` (${data.sessions.join(', ')})` : '';
+    desc += `• ${name}${sessionStr}: $${data.total.toFixed(2)}\n`;
+  }
+
+  const totalAmount = Object.values(byClient).reduce((sum, d) => sum + d.total, 0);
+  desc += `\nTotal: $${totalAmount.toFixed(2)}`;
+
+  return desc;
+}
+
 module.exports = {
   getArtistCommissionRate,
   recordTransaction,
@@ -361,4 +409,5 @@ module.exports = {
   updateGHLClientFinancials,
   isPaymentAlreadyProcessed,
   handleSquarePaymentFinancials,
+  generateVenmoDescription,
 };
