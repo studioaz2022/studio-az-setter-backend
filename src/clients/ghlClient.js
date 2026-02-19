@@ -294,11 +294,14 @@ async function uploadFilesToTattooCustomField(contactId, files = []) {
  * Uses SDK getDuplicateContact (v2 equivalent of v1 lookup)
  */
 async function lookupContactIdByEmailOrPhone(email, phone) {
+  // Sanitize email — strip spaces (v2 API is strict)
+  const cleanEmail = email ? email.replace(/\s+/g, "").trim() : null;
+
   try {
-    if (email) {
+    if (cleanEmail) {
       const data = await ghlSdk.contacts.getDuplicateContact({
         locationId: GHL_LOCATION_ID,
-        email,
+        email: cleanEmail,
       });
 
       // Extract contact ID from response — handles various shapes
@@ -348,6 +351,16 @@ async function createContact(body) {
   // Ensure locationId is set
   if (!v2Body.locationId) v2Body.locationId = GHL_LOCATION_ID;
 
+  // Sanitize email — v2 API is strict about format (v1 was lenient)
+  if (v2Body.email) {
+    v2Body.email = v2Body.email.replace(/\s+/g, "").trim();
+    // If still not a valid email after cleanup, remove it to avoid 422
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v2Body.email)) {
+      console.warn(`⚠️ Invalid email removed from createContact: "${v2Body.email}"`);
+      delete v2Body.email;
+    }
+  }
+
   // SDK returns response.data directly
   return ghlSdk.contacts.createContact(v2Body);
 }
@@ -355,6 +368,15 @@ async function createContact(body) {
 async function updateContact(contactId, body) {
   // Transform customField → customFields for v2 API
   const v2Body = transformBodyForV2({ ...body });
+
+  // Sanitize email — v2 API is strict about format
+  if (v2Body.email) {
+    v2Body.email = v2Body.email.replace(/\s+/g, "").trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v2Body.email)) {
+      console.warn(`⚠️ Invalid email removed from updateContact: "${v2Body.email}"`);
+      delete v2Body.email;
+    }
+  }
 
   // SDK returns response.data directly
   return ghlSdk.contacts.updateContact({ contactId }, v2Body);
