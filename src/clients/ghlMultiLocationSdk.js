@@ -111,6 +111,18 @@ async function verifyStaffEmail(email) {
     return { found: false };
   }
 
+  // Fetch full user profile (includes profilePhoto) using the correct SDK instance
+  let profilePhoto = null;
+  const sdkForUser = locations.includes("tattoo_shop") ? ghlTattoo : ghlBarber;
+  if (sdkForUser && matchedUser.id) {
+    try {
+      const fullUser = await sdkForUser.users.getUser({ userId: matchedUser.id });
+      profilePhoto = fullUser.profilePhoto || null;
+    } catch (err) {
+      console.error("[MultiLocation] Failed to fetch user profile photo:", err.message);
+    }
+  }
+
   return {
     found: true,
     ghlUser: {
@@ -119,6 +131,7 @@ async function verifyStaffEmail(email) {
       firstName: matchedUser.firstName,
       lastName: matchedUser.lastName,
       email: matchedUser.email,
+      profilePhoto,
     },
     locations,
   };
