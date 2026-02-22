@@ -279,10 +279,77 @@ function formatAppointmentNotification(appointment, eventType) {
   };
 }
 
+/**
+ * Send push notification to assigned owner AND followers when a new inbound message arrives.
+ * Sends to both the contact's assignedTo user and any followers.
+ */
+async function sendMessagePushNotification(contactId, contactName, messageText, assignedUserId, followers) {
+  if (!apnsService.isConfigured()) {
+    return;
+  }
+
+  if (!assignedUserId && (!followers || followers.length === 0)) {
+    return;
+  }
+
+  try {
+    // Collect all GHL user IDs to notify (owner + followers)
+    const ghlUserIds = new Set();
+    if (assignedUserId) ghlUserIds.add(assignedUserId);
+    if (followers && Array.isArray(followers)) {
+      followers.forEach(id => ghlUserIds.add(id));
+    }
+
+    // Look up all profiles for these GHL users
+    const { data: profiles, error: profileError } = await supabase
+      .from('profiles')
+      .select('id, ghl_user_id')
+      .in('ghl_user_id', Array.from(ghlUserIds));
+
+    if (profileError || !profiles || profiles.length === 0) {
+      console.log(`⚠️ [MSG APN] No profiles found for GHL users ${Array.from(ghlUserIds).join(', ')}`);
+      return;
+    }
+
+    // Fetch active push tokens for all matched profiles
+    const profileIds = profiles.map(p => p.id);
+    const { data: tokens, error: tokenError } = await supabase
+      .from('push_tokens')
+      .select('token, user_id')
+      .in('user_id', profileIds)
+      .eq('is_active', true);
+
+    if (tokenError || !tokens || tokens.length === 0) {
+      return;
+    }
+
+    // Truncate message preview for notification body
+    const preview = messageText.length > 100
+      ? messageText.substring(0, 100) + '...'
+      : messageText;
+
+    const notification = {
+      type: 'new_message',
+      title: contactName || 'New Message',
+      body: preview || 'You have a new message',
+      contactId,
+    };
+
+    console.log(`📱 [MSG APN] Sending to ${tokens.length} device(s) for ${contactName} (owner + ${(followers || []).length} follower(s))`);
+
+    for (const tokenRecord of tokens) {
+      await apnsService.sendWithRefresh(tokenRecord.token, notification);
+    }
+  } catch (error) {
+    console.error('❌ [MSG APN] Error sending push notification:', error.message || error);
+  }
+}
+
 module.exports = {
   handleAppointmentCreated,
   handleAppointmentUpdated,
   handleAppointmentDeleted,
   mapGHLAppointmentToSupabase,
   formatAppointmentNotification,
+  sendMessagePushNotification,
 };

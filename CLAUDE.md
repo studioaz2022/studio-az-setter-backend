@@ -23,6 +23,7 @@
 - Singleton: `src/clients/ghlSdk.js` — import `{ ghl }` from `./ghlSdk` for the shared instance
 - All GHL API calls go through the SDK. Use `ghl.contacts.*`, `ghl.opportunities.*`, `ghl.calendars.*`, `ghl.conversations.*`
 - For new GHL features, check SDK method signatures in `node_modules/@gohighlevel/api-client/dist/lib/code/` — no need to look up REST endpoints manually
+- **IMPORTANT:** SDK TypeScript type definitions (`.d.ts`) are often incomplete — the actual GHL API returns more fields than the types declare. Always verify by checking real API responses (curl or `console.log`), not just the `.d.ts` files. Example: `ghl.users.getUser()` returns `profilePhoto` but `UserSchema` doesn't declare it.
 - 3 exceptions use raw HTTP (no SDK method): `addOpportunityNote`, `getConversationHistory` (uses `/conversations/messages/export`), `uploadFilesToTattooCustomField` (multipart FormData)
 - Custom fields: v2 API uses `customFields` array `[{ id, field_value }]`, NOT v1 `customField` object. The `transformBodyForV2()` helper in `ghlClient.js` handles this automatically.
 - `getContact()` returns contacts with BOTH `customField` (object) and `customFields` (array) via normalization, so callers can use either format.

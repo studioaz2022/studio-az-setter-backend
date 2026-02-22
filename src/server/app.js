@@ -692,7 +692,22 @@ function createApp() {
       
       // Derive channel context for message sending and pipeline sync (use latest payload)
       const channelContext = deriveChannelContext(latestPayload, contact);
-      
+
+      // Send push notification to assigned owner and followers (non-blocking, don't await)
+      // Skip email messages — they cause unclearable badge issues in the iOS app
+      const messageTypeCode = latestPayload?.message?.type;
+      const messageTypeStr = (latestPayload?.messageType || latestPayload?.message?.messageType || "").toUpperCase();
+      const isEmailMessage = messageTypeCode === 1 || messageTypeStr.includes("EMAIL");
+
+      const assignedUserId = contact?.assignedTo;
+      const contactFollowers = contact?.followers || [];
+      if (!isEmailMessage && (assignedUserId || contactFollowers.length > 0) && combinedMessageText) {
+        sendMessagePushNotification(contactId, contactName, combinedMessageText, assignedUserId, contactFollowers)
+          .catch(err => console.error('❌ [MSG APN] Error:', err.message || err));
+      } else if (isEmailMessage) {
+        if (!COMPACT_MODE) console.log('📧 [MSG APN] Skipping push notification for email message');
+      }
+
       if (!COMPACT_MODE) {
         console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
         console.log("👤 Contact:", contact?.firstName || "(no first name)", contact?.lastName || "(no last name)");
@@ -2746,14 +2761,14 @@ function createApp() {
         messages: [
           {
             role: "system",
-            content: `You are a translator for a tattoo studio. Translate the following message from ${sourceLabel} to ${targetLabel}. Keep the tone natural and conversational — this is a text message between a tattoo artist and a client. Return ONLY the translated text, nothing else.`,
+            content: `You are a strict text translator. Your ONLY job is to translate text from ${sourceLabel} to ${targetLabel}. Do NOT reply to the message. Do NOT interpret it. Do NOT add context or commentary. Return ONLY the direct translation of the input text, preserving the original meaning and tone. If the text already appears to be in ${targetLabel}, translate it literally anyway — do not generate a response.`,
           },
           {
             role: "user",
-            content: text.trim(),
+            content: `Translate this to ${targetLabel}: ${text.trim()}`,
           },
         ],
-        temperature: 0.3,
+        temperature: 0.2,
         max_tokens: 500,
       });
 
@@ -2789,6 +2804,7 @@ function createApp() {
     handleAppointmentCreated,
     handleAppointmentUpdated,
     handleAppointmentDeleted,
+    sendMessagePushNotification,
   } = require("../clients/appointmentWebhooks");
 
   const apnsService = require("../services/apnsService");
