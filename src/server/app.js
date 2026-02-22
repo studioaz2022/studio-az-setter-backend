@@ -701,8 +701,9 @@ function createApp() {
 
       const assignedUserId = contact?.assignedTo;
       const contactFollowers = contact?.followers || [];
+      const contactLocationId = contact?.locationId;
       if (!isEmailMessage && (assignedUserId || contactFollowers.length > 0) && combinedMessageText) {
-        sendMessagePushNotification(contactId, contactName, combinedMessageText, assignedUserId, contactFollowers)
+        sendMessagePushNotification(contactId, contactName, combinedMessageText, assignedUserId, contactFollowers, contactLocationId)
           .catch(err => console.error('❌ [MSG APN] Error:', err.message || err));
       } else if (isEmailMessage) {
         if (!COMPACT_MODE) console.log('📧 [MSG APN] Skipping push notification for email message');

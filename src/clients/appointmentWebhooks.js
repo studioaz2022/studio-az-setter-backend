@@ -283,7 +283,7 @@ function formatAppointmentNotification(appointment, eventType) {
  * Send push notification to assigned owner AND followers when a new inbound message arrives.
  * Sends to both the contact's assignedTo user and any followers.
  */
-async function sendMessagePushNotification(contactId, contactName, messageText, assignedUserId, followers) {
+async function sendMessagePushNotification(contactId, contactName, messageText, assignedUserId, followers, locationId) {
   if (!apnsService.isConfigured()) {
     return;
   }
@@ -292,11 +292,16 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
     return;
   }
 
+  // Tattoo shop location — followers get APNs too
+  // Barbershop — only the owner gets APNs (followers can still see conversations in-app)
+  const TATTOO_SHOP_LOCATION = 'mUemx2jG4wly4kJWBkI4';
+  const includeFollowers = locationId === TATTOO_SHOP_LOCATION;
+
   try {
-    // Collect all GHL user IDs to notify (owner + followers)
+    // Collect GHL user IDs to notify
     const ghlUserIds = new Set();
     if (assignedUserId) ghlUserIds.add(assignedUserId);
-    if (followers && Array.isArray(followers)) {
+    if (includeFollowers && followers && Array.isArray(followers)) {
       followers.forEach(id => ghlUserIds.add(id));
     }
 
@@ -335,7 +340,8 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
       contactId,
     };
 
-    console.log(`📱 [MSG APN] Sending to ${tokens.length} device(s) for ${contactName} (owner + ${(followers || []).length} follower(s))`);
+    const followerNote = includeFollowers ? `+ ${(followers || []).length} follower(s)` : 'owner only';
+    console.log(`📱 [MSG APN] Sending to ${tokens.length} device(s) for ${contactName} (${followerNote})`);
 
     for (const tokenRecord of tokens) {
       await apnsService.sendWithRefresh(tokenRecord.token, notification);
