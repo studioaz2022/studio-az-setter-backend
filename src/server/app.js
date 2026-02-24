@@ -26,6 +26,17 @@ const { handleInboundMessage } = require("../ai/controller");
 const { verifyStaffEmail } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
+  buildOAuthUrl,
+  exchangeCodeForToken,
+  getBarberToken,
+  disconnectBarber,
+  getAllBarberConnectionStatuses,
+} = require("../payments/squareOAuth");
+const {
+  syncBarberTransactions,
+  assignUnmatchedPayment,
+} = require("../payments/squareTransactionSync");
+const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
   formatThreadForLLM,
@@ -2732,6 +2743,155 @@ function createApp() {
         success: false,
         error: error.message || "Failed to generate payment link",
       });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // SQUARE OAUTH — PER-BARBER ACCOUNT CONNECTION
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /square/oauth/start?barberGhlId=xxx
+  // iOS opens this URL in an ASWebAuthenticationSession (Safari sheet).
+  // Returns a redirect to Square's OAuth authorization page.
+  app.get("/square/oauth/start", (req, res) => {
+    try {
+      const { barberGhlId } = req.query;
+      if (!barberGhlId) {
+        return res.status(400).send("Missing barberGhlId query parameter");
+      }
+      const url = buildOAuthUrl(barberGhlId);
+      res.redirect(url);
+    } catch (error) {
+      console.error("[SquareOAuth] Error building OAuth URL:", error.message);
+      res.status(500).send("Failed to initiate Square OAuth");
+    }
+  });
+
+  // GET /square/oauth/callback?code=xxx&state=barberGhlId
+  // Square redirects here after the barber authorizes.
+  // Exchanges code for token, stores in Supabase, then redirects to a deep link
+  // so the iOS app knows the connection succeeded.
+  app.get("/square/oauth/callback", async (req, res) => {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      console.error("[SquareOAuth] OAuth denied by user:", error);
+      return res.redirect(`studioaz://square-oauth?success=false&error=${encodeURIComponent(error)}`);
+    }
+
+    if (!code || !state) {
+      return res.status(400).send("Missing code or state in OAuth callback");
+    }
+
+    const barberGhlId = decodeURIComponent(state);
+
+    try {
+      const result = await exchangeCodeForToken(code, barberGhlId);
+      console.log(`[SquareOAuth] Connected barber ${barberGhlId} → merchant ${result.merchantId}`);
+      // Deep link back to the iOS app — the app listens for this URL scheme
+      res.redirect(
+        `studioaz://square-oauth?success=true&merchantName=${encodeURIComponent(result.merchantName || "")}`
+      );
+    } catch (err) {
+      console.error("[SquareOAuth] Token exchange failed:", err.message);
+      res.redirect(`studioaz://square-oauth?success=false&error=${encodeURIComponent(err.message)}`);
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/square/status
+  // Check if a barber has connected their Square account.
+  app.get("/api/barbers/:barberGhlId/square/status", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const tokenRow = await getBarberToken(barberGhlId);
+      if (!tokenRow) {
+        return res.json({ success: true, connected: false });
+      }
+      res.json({
+        success: true,
+        connected: true,
+        merchantName: tokenRow.square_merchant_name,
+        connectedAt: tokenRow.connected_at,
+        lastSyncedAt: tokenRow.last_synced_at,
+      });
+    } catch (error) {
+      console.error("[API] Error checking Square status:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // DELETE /api/barbers/:barberGhlId/square/disconnect
+  // Disconnect a barber's Square account.
+  app.delete("/api/barbers/:barberGhlId/square/disconnect", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      await disconnectBarber(barberGhlId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[API] Error disconnecting Square:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/square/connections
+  // Admin: list all barbers and their Square connection status.
+  app.get("/api/barbers/square/connections", async (req, res) => {
+    try {
+      const statuses = await getAllBarberConnectionStatuses();
+      res.json({ success: true, connections: statuses });
+    } catch (error) {
+      console.error("[API] Error listing barber connections:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/sync
+  // Pull and sync a barber's Square transactions.
+  // Body: { startDate?, endDate?, incremental? }
+  app.post("/api/barbers/:barberGhlId/square/sync", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { startDate, endDate, incremental } = req.body;
+      const result = await syncBarberTransactions(barberGhlId, {
+        startDate,
+        endDate,
+        incremental,
+      });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Error syncing barber transactions:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/assign
+  // Manually assign an unmatched payment to a GHL contact.
+  // Body: { squarePaymentId, contactId, amountCents, createdAt, note? }
+  app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { squarePaymentId, contactId, amountCents, createdAt, note } = req.body;
+
+      if (!squarePaymentId || !contactId || !amountCents) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: squarePaymentId, contactId, amountCents",
+        });
+      }
+
+      const result = await assignUnmatchedPayment({
+        barberGhlId,
+        squarePaymentId,
+        contactId,
+        amountCents,
+        createdAt,
+        note,
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Error assigning unmatched payment:", error.message);
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 
