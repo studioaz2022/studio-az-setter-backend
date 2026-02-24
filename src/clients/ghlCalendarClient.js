@@ -322,6 +322,35 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate) {
   }
 }
 
+/**
+ * Fetch all appointments for a location within a date range.
+ * Supports multi-location via optional sdkInstance param.
+ *
+ * @param {Object} params
+ * @param {string} params.locationId - GHL location ID
+ * @param {string} params.startTime - ISO datetime string
+ * @param {string} params.endTime - ISO datetime string
+ * @param {string} [params.userId] - Filter to a specific user's appointments
+ * @param {Object} [params.sdkInstance] - GHL SDK instance (defaults to tattoo shop SDK)
+ * @returns {Promise<Array>} Array of calendar event objects
+ */
+async function fetchAppointmentsForDateRange({ locationId, startTime, endTime, userId, sdkInstance }) {
+  const sdk = sdkInstance || ghl;
+
+  const params = { locationId, startTime, endTime };
+  if (userId) params.userId = userId;
+
+  try {
+    const result = await sdk.calendars.getCalendarEvents(params);
+    const events = result?.events || [];
+    console.log(`[GHL Calendar] Found ${events.length} events for location ${locationId} (${startTime} → ${endTime})`);
+    return events;
+  } catch (err) {
+    console.error("[GHL Calendar] Error fetching calendar events:", err.response?.data || err.message);
+    throw err;
+  }
+}
+
 module.exports = {
   createAppointment,
   listAppointmentsForContact,
@@ -329,4 +358,5 @@ module.exports = {
   getConsultAppointmentsForContact,
   rescheduleAppointment,
   getCalendarFreeSlots,
+  fetchAppointmentsForDateRange,
 };

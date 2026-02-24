@@ -54,7 +54,9 @@ async function recordTransaction({
   sessionDate,
   squarePaymentId,
   locationId,
-  notes
+  notes,
+  tipAmount,
+  servicePrice,
 }) {
   if (!supabase) {
     console.log('[Financial] Supabase not initialized, skipping transaction recording');
@@ -80,6 +82,10 @@ async function recordTransaction({
     settlementStatus = shopAmount === 0 ? 'settled' : 'pending';
   }
 
+  // Compute service_price from tipAmount if provided but servicePrice isn't
+  const computedServicePrice = servicePrice != null ? servicePrice
+    : (tipAmount != null ? grossAmount - tipAmount : null);
+
   const transaction = {
     contact_id: contactId,
     contact_name: contactName,
@@ -97,7 +103,9 @@ async function recordTransaction({
     square_payment_id: squarePaymentId,
     session_date: sessionDate,
     location_id: locationId,
-    notes: notes
+    notes: notes,
+    service_price: computedServicePrice,
+    tip_amount: tipAmount != null ? tipAmount : null,
   };
 
   const { data, error } = await supabase

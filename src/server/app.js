@@ -23,7 +23,7 @@ const {
   addTranslatorAsFollower,
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
-const { verifyStaffEmail } = require("../clients/ghlMultiLocationSdk");
+const { verifyStaffEmail, ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
   buildOAuthUrl,
@@ -37,6 +37,8 @@ const {
 const {
   syncBarberTransactions,
   assignUnmatchedPayment,
+  unmatchPayment,
+  recordWalkIn,
 } = require("../payments/squareTransactionSync");
 const {
   extractCustomFieldsFromPayload,
@@ -62,6 +64,7 @@ const {
   listAppointmentsForContact,
   updateAppointmentStatus,
   rescheduleAppointment,
+  fetchAppointmentsForDateRange,
 } = require("../clients/ghlCalendarClient");
 const {
   COMPACT_MODE,
@@ -1720,7 +1723,9 @@ function createApp() {
         grossAmount,
         sessionDate,
         notes,
-        locationId
+        locationId,
+        tipAmount,
+        servicePrice,
       } = req.body;
 
       // Validate required fields
@@ -1743,7 +1748,9 @@ function createApp() {
         sessionDate: sessionDate ? new Date(sessionDate) : new Date(),
         squarePaymentId: null,
         locationId: locationId || process.env.GHL_LOCATION_ID || 'studio_az_tattoo',
-        notes
+        notes,
+        tipAmount: tipAmount != null ? parseFloat(tipAmount) : null,
+        servicePrice: servicePrice != null ? parseFloat(servicePrice) : null,
       });
 
       res.json({
@@ -1797,6 +1804,10 @@ function createApp() {
       let pendingFromShop = 0;
       let owedToShop = 0;
       let revenueGenerated = 0;
+      let totalServiceRevenue = 0;
+      let totalTips = 0;
+      let transactionsWithTips = 0;
+      const revenueByMethod = { square: 0, cash: 0, venmo: 0, zelle: 0, other: 0 };
 
       for (const tx of transactions || []) {
         totalEarned += parseFloat(tx.artist_amount) || 0;
@@ -1804,6 +1815,25 @@ function createApp() {
         // Calculate revenue generated (sum of deposits + session payments)
         if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
           revenueGenerated += parseFloat(tx.gross_amount) || 0;
+        }
+
+        // Tip tracking (from service_price / tip_amount columns)
+        if (tx.service_price != null) {
+          totalServiceRevenue += parseFloat(tx.service_price) || 0;
+        }
+        if (tx.tip_amount != null) {
+          totalTips += parseFloat(tx.tip_amount) || 0;
+          if (parseFloat(tx.tip_amount) > 0) {
+            transactionsWithTips++;
+          }
+        }
+
+        // Revenue by payment method
+        const method = tx.payment_method || 'other';
+        if (revenueByMethod.hasOwnProperty(method)) {
+          revenueByMethod[method] += parseFloat(tx.gross_amount) || 0;
+        } else {
+          revenueByMethod.other += parseFloat(tx.gross_amount) || 0;
         }
 
         if (tx.settlement_status !== 'settled') {
@@ -1857,6 +1887,11 @@ function createApp() {
           owedToShop,
           netBalance: pendingFromShop - owedToShop,
           transactionCount: transactions?.length || 0,
+          totalServiceRevenue,
+          totalTips,
+          averageTipAmount: transactionsWithTips > 0 ? totalTips / transactionsWithTips : 0,
+          averageTipPercentage: totalServiceRevenue > 0 ? (totalTips / totalServiceRevenue) * 100 : 0,
+          revenueByMethod,
           transactions,
           topClients
         }
@@ -1868,6 +1903,91 @@ function createApp() {
         success: false,
         error: error.message
       });
+    }
+  });
+
+  // GET /api/artists/:artistId/unpaid-appointments - Recent appointments without transactions
+  app.get("/api/artists/:artistId/unpaid-appointments", async (req, res) => {
+    try {
+      const { supabase } = require("../clients/supabaseClient");
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const { artistId } = req.params;
+      const { locationId } = req.query;
+
+      if (!artistId || !locationId) {
+        return res.status(400).json({ success: false, error: "Missing artistId or locationId" });
+      }
+
+      // Use barbershop SDK if location matches
+      const BARBER_LOC = process.env.GHL_BARBER_LOCATION_ID;
+      const sdkInstance = (locationId === BARBER_LOC && ghlBarber) ? ghlBarber : undefined;
+
+      // Date range: last 14 days
+      const endTime = new Date().toISOString();
+      const startTime = new Date(Date.now() - 14 * 24 * 60 * 60 * 1000).toISOString();
+
+      // Fetch GHL appointments
+      const events = await fetchAppointmentsForDateRange({
+        locationId,
+        startTime,
+        endTime,
+        userId: artistId,
+        sdkInstance,
+      });
+
+      // Filter to confirmed/showed, assigned to this artist
+      const eligible = events.filter(e => {
+        const status = e.appointmentStatus || e.appoinmentStatus || e.status;
+        return ["showed", "confirmed"].includes(status) &&
+               (e.assignedUserId === artistId || e.userId === artistId);
+      });
+
+      if (eligible.length === 0) {
+        return res.json({ success: true, appointments: [] });
+      }
+
+      // Get already-paid appointment IDs from transactions
+      const apptIds = eligible.map(e => e.id);
+      const { data: paidRows } = await supabase
+        .from("transactions")
+        .select("appointment_id")
+        .in("appointment_id", apptIds);
+      const paidSet = new Set((paidRows || []).map(r => r.appointment_id));
+
+      // Load service prices and calendar names
+      const { data: priceRows } = await supabase
+        .from("barber_service_prices")
+        .select("calendar_id, calendar_name, price");
+      const priceMap = new Map();
+      const nameMap = new Map();
+      for (const row of priceRows || []) {
+        priceMap.set(row.calendar_id, parseFloat(row.price));
+        nameMap.set(row.calendar_id, row.calendar_name);
+      }
+
+      // Build unpaid list
+      const unpaid = eligible
+        .filter(e => !paidSet.has(e.id))
+        .map(e => ({
+          appointmentId: e.id,
+          contactId: e.contactId || null,
+          contactName: e.title || "Unknown",
+          calendarId: e.calendarId,
+          calendarName: nameMap.get(e.calendarId) || "Service",
+          servicePrice: priceMap.get(e.calendarId) || null,
+          startTime: e.startTime,
+          status: e.appointmentStatus || e.appoinmentStatus || e.status,
+        }))
+        .sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+
+      res.json({ success: true, appointments: unpaid });
+
+    } catch (error) {
+      console.error("[API] Error fetching unpaid appointments:", error);
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 
@@ -2868,11 +2988,11 @@ function createApp() {
 
   // POST /api/barbers/:barberGhlId/square/assign
   // Manually assign an unmatched payment to a GHL contact.
-  // Body: { squarePaymentId, contactId, amountCents, createdAt, note? }
+  // Body: { squarePaymentId, contactId, amountCents, createdAt, note?, appointmentId? }
   app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { squarePaymentId, contactId, amountCents, createdAt, note } = req.body;
+      const { squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
 
       if (!squarePaymentId || !contactId || !amountCents) {
         return res.status(400).json({
@@ -2888,11 +3008,57 @@ function createApp() {
         amountCents,
         createdAt,
         note,
+        appointmentId,
+        calendarId,
+        squareTipCents,
       });
 
       res.json({ success: true, ...result });
     } catch (error) {
       console.error("[API] Error assigning unmatched payment:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/unmatch
+  // Reverse an auto-matched payment (delete the transaction record).
+  // Body: { squarePaymentId }
+  app.post("/api/barbers/:barberGhlId/square/unmatch", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { squarePaymentId } = req.body;
+
+      if (!squarePaymentId) {
+        return res.status(400).json({ success: false, error: "Missing squarePaymentId" });
+      }
+
+      const result = await unmatchPayment({ barberGhlId, squarePaymentId });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Error unmatching payment:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/walk-in
+  // Record a payment as a walk-in (no GHL contact or appointment).
+  // Body: { squarePaymentId, amountCents, createdAt }
+  app.post("/api/barbers/:barberGhlId/square/walk-in", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { squarePaymentId, amountCents, createdAt } = req.body;
+
+      if (!squarePaymentId || !amountCents) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: squarePaymentId, amountCents",
+        });
+      }
+
+      const result = await recordWalkIn({ barberGhlId, squarePaymentId, amountCents, createdAt });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Error recording walk-in payment:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });

@@ -1,11 +1,15 @@
 // squareTransactionSync.js
 // Pulls a barber's Square payments and attempts to match them to GHL contacts.
+// Matching strategy: email/phone lookup → appointment proximity → manual review.
 // Unmatched payments are returned for the barber to manually review in the app.
 
 const axios = require("axios");
 const { createClient } = require("@supabase/supabase-js");
 const { getBarberToken } = require("./squareOAuth");
-const { lookupContactIdByEmailOrPhone } = require("../clients/ghlClient");
+const { lookupContactIdByEmailOrPhone, getContact } = require("../clients/ghlClient");
+const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
+const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+const { lookupServicePrice } = require("../config/barberServicePrices");
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -28,7 +32,7 @@ const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
  * @param {string} [options.endDate]    - ISO date string (default: now)
  * @param {boolean} [options.incremental] - Use stored cursor for incremental sync
  *
- * @returns {{ synced: number, matched: number, unmatched: SyncedPayment[] }}
+ * @returns {{ synced: number, matched: number, autoMatched: AutoMatchDetail[], unmatched: PaymentSummary[] }}
  */
 async function syncBarberTransactions(barberGhlId, options = {}) {
   const tokenRow = await getBarberToken(barberGhlId);
@@ -58,26 +62,53 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
   if (!payments.length) {
     console.log(`[SquareSync] No payments found for barber ${barberGhlId}`);
     await updateLastSynced(barberGhlId, null);
-    return { synced: 0, matched: 0, unmatched: [] };
+    return { synced: 0, matched: 0, autoMatched: [], unmatched: [] };
   }
 
   console.log(`[SquareSync] Found ${payments.length} payments for barber ${barberGhlId}`);
 
+  // Pre-fetch GHL appointments for the date range (for proximity matching)
+  let appointmentsForRange = [];
+  try {
+    if (ghlBarber) {
+      appointmentsForRange = await fetchAppointmentsForDateRange({
+        locationId: BARBER_LOCATION_ID,
+        startTime: startDate.toISOString(),
+        endTime: endDate.toISOString(),
+        userId: barberGhlId,
+        sdkInstance: ghlBarber,
+      });
+      // Filter to active appointments only (confirmed, showed, or new)
+      appointmentsForRange = appointmentsForRange.filter(
+        (apt) => ["confirmed", "showed", "new"].includes(apt.appointmentStatus)
+      );
+      console.log(`[SquareSync] Pre-fetched ${appointmentsForRange.length} active appointments for proximity matching`);
+    } else {
+      console.warn("[SquareSync] ghlBarber SDK not available — skipping appointment proximity matching");
+    }
+  } catch (err) {
+    console.warn(`[SquareSync] Failed to fetch appointments for proximity matching: ${err.message}`);
+    // Continue without appointment matching — graceful degradation
+  }
+
   // Attempt to match each payment to a GHL contact
   const results = await Promise.all(
-    payments.map((p) => matchAndRecordPayment(p, barberGhlId, access_token))
+    payments.map((p) => matchAndRecordPayment(p, barberGhlId, access_token, appointmentsForRange))
   );
 
   const synced = results.length;
   const matched = results.filter((r) => r.matched).length;
+  const autoMatched = results
+    .filter((r) => r.matched && r.autoMatchDetail)
+    .map((r) => r.autoMatchDetail);
   const unmatched = results.filter((r) => !r.matched).map((r) => r.payment);
 
   // Update last_synced_at on the token row
   await updateLastSynced(barberGhlId, null);
 
-  console.log(`[SquareSync] Barber ${barberGhlId}: ${matched} matched, ${unmatched.length} unmatched of ${synced} total`);
+  console.log(`[SquareSync] Barber ${barberGhlId}: ${matched} matched (${autoMatched.length} with details), ${unmatched.length} unmatched of ${synced} total`);
 
-  return { synced, matched, unmatched };
+  return { synced, matched, autoMatched, unmatched };
 }
 
 /**
@@ -120,9 +151,10 @@ async function fetchSquarePayments(accessToken, locationId, { startDate, endDate
  * Matching strategy (in order):
  *   1. Square customer email → GHL contact lookup
  *   2. Square customer phone → GHL contact lookup
- *   3. No match → return as unmatched for manual review
+ *   3. Appointment proximity — payment falls between apt start and apt end + 30min
+ *   4. No match → return as unmatched for manual review
  */
-async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
+async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, appointments = []) {
   const paymentId = squarePayment.id;
   const amountCents = squarePayment.amount_money?.amount || 0;
   const currency = squarePayment.amount_money?.currency || "USD";
@@ -136,7 +168,7 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
     .single();
 
   if (existing) {
-    return { matched: true, payment: null }; // Already synced
+    return { matched: true, payment: null, autoMatchDetail: null }; // Already synced
   }
 
   // Build a normalized payment summary for unmatched queue
@@ -150,12 +182,15 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
     customerEmail: squarePayment.buyer_email_address || null,
     customerPhone: null, // Square doesn't expose phone on payment; comes from customer lookup
     note: squarePayment.note || null,
+    squareTipCents: squarePayment.tip_money?.amount || null,
   };
 
   // Try to match via buyer email
   let contactId = null;
+  let matchMethod = null;
   if (squarePayment.buyer_email_address) {
     contactId = await lookupGhlContactByEmail(squarePayment.buyer_email_address);
+    if (contactId) matchMethod = "email";
   }
 
   // Try customer record if available and no email match yet
@@ -168,16 +203,41 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
     if (customerDetails?.email_address) {
       paymentSummary.customerEmail = customerDetails.email_address;
       contactId = await lookupGhlContactByEmail(customerDetails.email_address);
+      if (contactId) matchMethod = "email";
     }
     if (!contactId && customerDetails?.phone_number) {
       paymentSummary.customerPhone = customerDetails.phone_number;
       contactId = await lookupGhlContactByPhone(customerDetails.phone_number);
+      if (contactId) matchMethod = "phone";
+    }
+  }
+
+  // Appointment proximity matching (if email/phone failed)
+  let matchedAppointment = null;
+  if (!contactId && appointments.length > 0) {
+    const paymentTime = new Date(createdAt);
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+
+    const proximityMatches = appointments.filter((apt) => {
+      const aptStart = new Date(apt.startTime);
+      const aptEnd = new Date(apt.endTime);
+      // Payment must fall between appointment start and 30min after end
+      return paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + THIRTY_MIN_MS);
+    });
+
+    if (proximityMatches.length === 1 && proximityMatches[0].contactId) {
+      matchedAppointment = proximityMatches[0];
+      contactId = matchedAppointment.contactId;
+      matchMethod = "appointment_proximity";
+      console.log(`[SquareSync] Proximity match: payment ${paymentId} → appointment ${matchedAppointment.id} (contact ${contactId})`);
+    } else if (proximityMatches.length > 1) {
+      console.log(`[SquareSync] Ambiguous proximity: payment ${paymentId} matched ${proximityMatches.length} appointments — skipping auto-match`);
     }
   }
 
   if (!contactId) {
     // No match — return for manual review
-    return { matched: false, payment: paymentSummary };
+    return { matched: false, payment: paymentSummary, autoMatchDetail: null };
   }
 
   // Record as a transaction in Supabase
@@ -187,9 +247,33 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
     squarePayment,
     amountCents,
     createdAt,
+    appointmentId: matchedAppointment?.id || null,
+    calendarId: matchedAppointment?.calendarId || null,
+    squareTipCents: squarePayment.tip_money?.amount || null,
   });
 
-  return { matched: true, payment: null };
+  // Build auto-match detail for the response
+  let contactName = "";
+  try {
+    const contact = await getContact(contactId);
+    contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
+  } catch { /* ignore — name is nice-to-have */ }
+
+  const autoMatchDetail = {
+    squarePaymentId: paymentId,
+    contactId,
+    contactName,
+    appointmentId: matchedAppointment?.id || null,
+    appointmentTitle: matchedAppointment?.title || null,
+    appointmentStartTime: matchedAppointment?.startTime || null,
+    calendarId: matchedAppointment?.calendarId || null,
+    amountCents,
+    createdAt,
+    matchMethod,
+    squareTipCents: squarePayment.tip_money?.amount || null,
+  };
+
+  return { matched: true, payment: null, autoMatchDetail };
 }
 
 /**
@@ -241,14 +325,35 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
 /**
  * Insert a matched transaction into the transactions table.
  * Barbers at the barbershop are 100% artist (no shop commission split).
+ * If calendarId is provided, looks up service price and calculates tip.
  */
-async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt }) {
+async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents }) {
   const grossAmount = amountCents / 100;
+
+  // Tip calculation — prefer Square's tip_money, fall back to calendar-based lookup
+  let servicePrice = null;
+  let tipAmount = null;
+  if (squareTipCents != null && squareTipCents > 0) {
+    // Square reported an explicit tip
+    tipAmount = squareTipCents / 100;
+    servicePrice = grossAmount - tipAmount;
+    if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
+  } else if (calendarId) {
+    // Fall back to service price lookup
+    servicePrice = await lookupServicePrice(calendarId);
+    if (servicePrice != null) {
+      tipAmount = Math.max(0, grossAmount - servicePrice);
+      if (grossAmount < servicePrice) {
+        servicePrice = grossAmount;
+        tipAmount = 0;
+      }
+    }
+  }
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
     contact_name: "", // Enriched on display from GHL contact
-    appointment_id: null, // Could be matched later via calendar proximity
+    appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
     transaction_type: "session_payment",
     payment_method: "square",
@@ -264,6 +369,9 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
     session_date: createdAt,
     location_id: BARBER_LOCATION_ID,
     notes: squarePayment.note || null,
+    calendar_id: calendarId || null,
+    service_price: servicePrice,
+    tip_amount: tipAmount,
   });
 
   if (error) {
@@ -286,9 +394,9 @@ async function updateLastSynced(barberGhlId, cursor) {
 }
 
 /**
- * Manually assign an unmatched payment to a contact (called from iOS "needs review" UI).
+ * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, amountCents, createdAt, note }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents }) {
   // Check not already recorded
   const { data: existing } = await supabase
     .from("transactions")
@@ -300,10 +408,28 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
 
   const grossAmount = amountCents / 100;
 
+  // Tip calculation — prefer Square's tip_money, fall back to calendar-based lookup
+  let servicePrice = null;
+  let tipAmount = null;
+  if (squareTipCents != null && squareTipCents > 0) {
+    tipAmount = squareTipCents / 100;
+    servicePrice = grossAmount - tipAmount;
+    if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
+  } else if (calendarId) {
+    servicePrice = await lookupServicePrice(calendarId);
+    if (servicePrice != null) {
+      tipAmount = Math.max(0, grossAmount - servicePrice);
+      if (grossAmount < servicePrice) {
+        servicePrice = grossAmount;
+        tipAmount = 0;
+      }
+    }
+  }
+
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
     contact_name: "",
-    appointment_id: null,
+    appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
     transaction_type: "session_payment",
     payment_method: "square",
@@ -318,13 +444,76 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     session_date: createdAt,
     location_id: BARBER_LOCATION_ID,
     notes: note || null,
+    calendar_id: calendarId || null,
+    service_price: servicePrice,
+    tip_amount: tipAmount,
   });
 
   if (error) throw new Error(`Failed to record assigned payment: ${error.message}`);
   return { recorded: true };
 }
 
+/**
+ * Reverse an auto-matched transaction.
+ * Deletes the transaction record from Supabase by squarePaymentId.
+ * Called when a user "unmatches" an auto-matched payment in the review UI.
+ */
+async function unmatchPayment({ barberGhlId, squarePaymentId }) {
+  const { data, error } = await supabase
+    .from("transactions")
+    .delete()
+    .eq("square_payment_id", squarePaymentId)
+    .eq("artist_ghl_id", barberGhlId)
+    .select("id");
+
+  if (error) throw new Error(`Failed to unmatch payment: ${error.message}`);
+
+  return { deleted: (data?.length || 0) > 0 };
+}
+
+/**
+ * Record a payment as a walk-in (no GHL contact or appointment).
+ * The payment still counts toward earnings.
+ */
+async function recordWalkIn({ barberGhlId, squarePaymentId, amountCents, createdAt }) {
+  // Check not already recorded
+  const { data: existing } = await supabase
+    .from("transactions")
+    .select("id")
+    .eq("square_payment_id", squarePaymentId)
+    .single();
+
+  if (existing) return { alreadyRecorded: true };
+
+  const grossAmount = amountCents / 100;
+
+  const { error } = await supabase.from("transactions").insert({
+    contact_id: "walk_in",
+    contact_name: "Walk-in",
+    appointment_id: null,
+    artist_ghl_id: barberGhlId,
+    transaction_type: "session_payment",
+    payment_method: "square",
+    payment_recipient: "artist_direct",
+    gross_amount: grossAmount,
+    shop_percentage: 0,
+    artist_percentage: 100,
+    shop_amount: 0,
+    artist_amount: grossAmount,
+    settlement_status: "settled",
+    square_payment_id: squarePaymentId,
+    session_date: createdAt,
+    location_id: BARBER_LOCATION_ID,
+    notes: "Walk-in customer",
+  });
+
+  if (error) throw new Error(`Failed to record walk-in payment: ${error.message}`);
+  return { recorded: true };
+}
+
 module.exports = {
   syncBarberTransactions,
   assignUnmatchedPayment,
+  unmatchPayment,
+  recordWalkIn,
 };
