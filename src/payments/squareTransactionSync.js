@@ -9,7 +9,7 @@ const { getBarberToken } = require("./squareOAuth");
 const { lookupContactIdByEmailOrPhone, getContact } = require("../clients/ghlClient");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
-const { lookupServicePrice } = require("../config/barberServicePrices");
+const { lookupServicePrice, lookupDepositPercentage } = require("../config/barberServicePrices");
 
 const supabase = createClient(
   process.env.SUPABASE_URL,
@@ -240,6 +240,12 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     return { matched: false, payment: paymentSummary, autoMatchDetail: null };
   }
 
+  // Fetch Order discount info if the payment has an order_id
+  const { totalDiscountCents, discountName } = await fetchSquareOrderDiscount(
+    accessToken,
+    squarePayment.order_id
+  );
+
   // Record as a transaction in Supabase
   await recordTransaction({
     contactId,
@@ -250,6 +256,7 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     appointmentId: matchedAppointment?.id || null,
     calendarId: matchedAppointment?.calendarId || null,
     squareTipCents: squarePayment.tip_money?.amount || null,
+    discountCents: totalDiscountCents,
   });
 
   // Build auto-match detail for the response
@@ -300,6 +307,35 @@ async function lookupGhlContactByPhone(phone) {
 }
 
 /**
+ * Fetch a Square Order to get discount details.
+ * @param {string} accessToken - The barber's Square access token
+ * @param {string} orderId - The Square order ID from the payment
+ * @returns {{ totalDiscountCents: number|null, discountName: string|null }}
+ */
+async function fetchSquareOrderDiscount(accessToken, orderId) {
+  if (!orderId || !accessToken) return { totalDiscountCents: null, discountName: null };
+  try {
+    const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+    });
+    const order = res.data?.order;
+    if (!order) return { totalDiscountCents: null, discountName: null };
+
+    const totalDiscountCents = order.total_discount_money?.amount || null;
+    // Get the first discount name for display (e.g., "$10 Off")
+    const discountName = order.discounts?.[0]?.name || null;
+
+    if (totalDiscountCents) {
+      console.log(`[SquareSync] Order ${orderId}: discount ${discountName || "unnamed"} = $${totalDiscountCents / 100}`);
+    }
+    return { totalDiscountCents, discountName };
+  } catch (err) {
+    console.warn(`[SquareSync] Failed to fetch order ${orderId}: ${err.message}`);
+    return { totalDiscountCents: null, discountName: null };
+  }
+}
+
+/**
  * Fetch a Square customer record to get email/phone for matching.
  * Requires the barber's access token.
  */
@@ -325,16 +361,43 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
 /**
  * Insert a matched transaction into the transactions table.
  * Barbers at the barbershop are 100% artist (no shop commission split).
- * If calendarId is provided, looks up service price and calculates tip.
+ * If calendarId is provided, looks up service price, calculates tip,
+ * and detects whether the payment is a deposit or remaining balance.
+ *
+ * Deposit detection (for calendars with deposit_percentage):
+ *   - amount_money ≈ service_price × deposit% AND no tip → 'deposit'
+ *   - otherwise → 'session_payment' (remaining balance or full payment)
  */
-async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents }) {
+async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents }) {
   const grossAmount = amountCents / 100;
+  const discountAmount = discountCents ? discountCents / 100 : null;
 
-  // Tip calculation — prefer Square's tip_money, fall back to calendar-based lookup
+  // Look up deposit config for this calendar
+  const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
+  const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+
+  // Determine transaction type: deposit vs session_payment
+  let transactionType = "session_payment";
+  if (depositPct && listedPrice) {
+    const expectedDeposit = listedPrice * (depositPct / 100);
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    // Deposit = exact deposit amount with no tip (allow $1 tolerance for rounding)
+    if (!hasTip && Math.abs(grossAmount - expectedDeposit) <= 1) {
+      transactionType = "deposit";
+      console.log(`[SquareSync] Deposit detected: $${grossAmount} matches ${depositPct}% of $${listedPrice} for calendar ${calendarId}`);
+    }
+  }
+
+  // Tip & service price calculation
   let servicePrice = null;
   let tipAmount = null;
-  if (squareTipCents != null && squareTipCents > 0) {
-    // Square reported an explicit tip
+
+  if (transactionType === "deposit") {
+    // Deposits are pure service revenue, no tip
+    servicePrice = grossAmount;
+    tipAmount = 0;
+  } else if (squareTipCents != null && squareTipCents > 0) {
+    // Square reported an explicit tip — amount_money is already after discounts
     tipAmount = squareTipCents / 100;
     servicePrice = grossAmount - tipAmount;
     if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
@@ -350,12 +413,19 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
     }
   }
 
+  // Build notes with discount info if present
+  let notes = squarePayment.note || null;
+  if (discountAmount && transactionType !== "deposit") {
+    const discountNote = `Square discount: -$${discountAmount.toFixed(2)}`;
+    notes = notes ? `${notes} | ${discountNote}` : discountNote;
+  }
+
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
     contact_name: "", // Enriched on display from GHL contact
     appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
-    transaction_type: "session_payment",
+    transaction_type: transactionType,
     payment_method: "square",
     payment_recipient: "artist_direct", // Booth renters keep all their money
     gross_amount: grossAmount,
@@ -368,10 +438,11 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
     square_order_id: squarePayment.order_id || null,
     session_date: createdAt,
     location_id: BARBER_LOCATION_ID,
-    notes: squarePayment.note || null,
+    notes,
     calendar_id: calendarId || null,
     service_price: servicePrice,
     tip_amount: tipAmount,
+    discount_amount: discountAmount,
   });
 
   if (error) {
@@ -408,10 +479,27 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
 
   const grossAmount = amountCents / 100;
 
-  // Tip calculation — prefer Square's tip_money, fall back to calendar-based lookup
+  // Deposit detection for calendars with deposit_percentage
+  const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
+  const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+
+  let transactionType = "session_payment";
+  if (depositPct && listedPrice) {
+    const expectedDeposit = listedPrice * (depositPct / 100);
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    if (!hasTip && Math.abs(grossAmount - expectedDeposit) <= 1) {
+      transactionType = "deposit";
+    }
+  }
+
+  // Tip calculation
   let servicePrice = null;
   let tipAmount = null;
-  if (squareTipCents != null && squareTipCents > 0) {
+
+  if (transactionType === "deposit") {
+    servicePrice = grossAmount;
+    tipAmount = 0;
+  } else if (squareTipCents != null && squareTipCents > 0) {
     tipAmount = squareTipCents / 100;
     servicePrice = grossAmount - tipAmount;
     if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
@@ -431,7 +519,7 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     contact_name: "",
     appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
-    transaction_type: "session_payment",
+    transaction_type: transactionType,
     payment_method: "square",
     payment_recipient: "artist_direct",
     gross_amount: grossAmount,
