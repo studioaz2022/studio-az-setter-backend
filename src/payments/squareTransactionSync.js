@@ -174,6 +174,7 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   // Build a normalized payment summary for unmatched queue
   const paymentSummary = {
     squarePaymentId: paymentId,
+    squareOrderId: squarePayment.order_id || null,
     amountCents,
     currency,
     createdAt,
