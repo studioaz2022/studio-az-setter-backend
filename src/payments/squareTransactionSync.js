@@ -65,7 +65,7 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
 
   // Attempt to match each payment to a GHL contact
   const results = await Promise.all(
-    payments.map((p) => matchAndRecordPayment(p, barberGhlId))
+    payments.map((p) => matchAndRecordPayment(p, barberGhlId, access_token))
   );
 
   const synced = results.length;
@@ -122,7 +122,7 @@ async function fetchSquarePayments(accessToken, locationId, { startDate, endDate
  *   2. Square customer phone → GHL contact lookup
  *   3. No match → return as unmatched for manual review
  */
-async function matchAndRecordPayment(squarePayment, barberGhlId) {
+async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken) {
   const paymentId = squarePayment.id;
   const amountCents = squarePayment.amount_money?.amount || 0;
   const currency = squarePayment.amount_money?.currency || "USD";
@@ -161,7 +161,7 @@ async function matchAndRecordPayment(squarePayment, barberGhlId) {
   // Try customer record if available and no email match yet
   if (!contactId && squarePayment.customer_id) {
     const customerDetails = await fetchSquareCustomer(
-      squarePayment.source_type === "CARD" ? null : null, // access token needed
+      accessToken,
       squarePayment.customer_id,
       barberGhlId
     );

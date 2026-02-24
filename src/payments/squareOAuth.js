@@ -1,5 +1,5 @@
 // squareOAuth.js
-// Handles per-barber Square OAuth connection and token storage.
+// Handles per-barber Square OAuth connection, token storage, and token refresh.
 // Each barber connects their own personal Square account so we can
 // pull their transactions independently.
 
@@ -38,7 +38,6 @@ const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
  * Scopes requested:
  *   PAYMENTS_READ       — list payments/transactions
  *   CUSTOMERS_READ      — read customer email/phone for contact matching
- *   MERCHANT_PROFILE_READ — get merchant name/ID after connection
  */
 function buildOAuthUrl(barberGhlId) {
   if (!APP_ID) throw new Error("Square Application ID not configured");
@@ -51,11 +50,14 @@ function buildOAuthUrl(barberGhlId) {
 
   const state = encodeURIComponent(barberGhlId);
 
+  // session=false is required for production; omit in sandbox (defaults to true)
+  const sessionParam = IS_PROD ? "&session=false" : "";
+
   return (
     `${SQUARE_BASE_URL}/oauth2/authorize` +
     `?client_id=${APP_ID}` +
     `&scope=${scopes}` +
-    `&session=false` +
+    sessionParam +
     `&state=${state}` +
     `&redirect_uri=${encodeURIComponent(OAUTH_REDIRECT_URI)}`
   );
@@ -191,10 +193,88 @@ async function getAllBarberConnectionStatuses() {
   return data || [];
 }
 
+/**
+ * Refresh a barber's Square access token using their stored refresh token.
+ * Square docs recommend refreshing every 7 days or less (access tokens expire in 30 days).
+ * Returns the new token data.
+ */
+async function refreshBarberToken(barberGhlId) {
+  if (!APP_SECRET) throw new Error("Square Application Secret not configured");
+
+  const tokenRow = await getBarberToken(barberGhlId);
+  if (!tokenRow) throw new Error(`No Square account connected for barber ${barberGhlId}`);
+  if (!tokenRow.refresh_token) throw new Error(`No refresh token stored for barber ${barberGhlId}`);
+
+  const response = await axios.post(
+    `${SQUARE_BASE_URL}/oauth2/token`,
+    {
+      client_id: APP_ID,
+      client_secret: APP_SECRET,
+      grant_type: "refresh_token",
+      refresh_token: tokenRow.refresh_token,
+    },
+    { headers: { "Content-Type": "application/json" } }
+  );
+
+  const { access_token, refresh_token, expires_at } = response.data;
+
+  const { error } = await supabase
+    .from("barber_square_tokens")
+    .update({
+      access_token,
+      refresh_token: refresh_token || tokenRow.refresh_token, // keep old if not rotated
+      expires_at: expires_at || null,
+    })
+    .eq("barber_ghl_id", barberGhlId);
+
+  if (error) throw new Error(`Failed to update refreshed token: ${error.message}`);
+
+  console.log(`[SquareOAuth] Refreshed token for barber ${barberGhlId}, expires ${expires_at}`);
+  return { access_token, expires_at };
+}
+
+/**
+ * Refresh tokens for all barbers whose access token expires within 8 days.
+ * Call this from a daily cron job to stay within Square's 7-day refresh recommendation.
+ */
+async function refreshAllExpiringTokens() {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() + 8); // refresh anything expiring within 8 days
+
+  const { data: rows, error } = await supabase
+    .from("barber_square_tokens")
+    .select("barber_ghl_id, expires_at")
+    .eq("location_id", BARBER_LOCATION_ID);
+
+  if (error) throw new Error(`Failed to list tokens for refresh: ${error.message}`);
+
+  const results = { refreshed: 0, failed: 0, errors: [] };
+
+  for (const row of rows || []) {
+    // Refresh if expiring soon OR if expires_at is unknown (be safe)
+    const expiresAt = row.expires_at ? new Date(row.expires_at) : null;
+    if (!expiresAt || expiresAt <= cutoff) {
+      try {
+        await refreshBarberToken(row.barber_ghl_id);
+        results.refreshed++;
+      } catch (err) {
+        console.error(`[SquareOAuth] Failed to refresh token for ${row.barber_ghl_id}:`, err.message);
+        results.failed++;
+        results.errors.push({ barberGhlId: row.barber_ghl_id, error: err.message });
+      }
+    }
+  }
+
+  console.log(`[SquareOAuth] Token refresh run: ${results.refreshed} refreshed, ${results.failed} failed`);
+  return results;
+}
+
 module.exports = {
   buildOAuthUrl,
   exchangeCodeForToken,
   getBarberToken,
   disconnectBarber,
   getAllBarberConnectionStatuses,
+  refreshBarberToken,
+  refreshAllExpiringTokens,
 };

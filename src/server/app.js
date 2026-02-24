@@ -31,6 +31,8 @@ const {
   getBarberToken,
   disconnectBarber,
   getAllBarberConnectionStatuses,
+  refreshBarberToken,
+  refreshAllExpiringTokens,
 } = require("../payments/squareOAuth");
 const {
   syncBarberTransactions,
@@ -2756,12 +2758,6 @@ function createApp() {
   app.get("/square/oauth/start", (req, res) => {
     try {
       const { barberGhlId } = req.query;
-      console.log("[SquareOAuth] /start called, env check:", {
-        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT,
-        APP_ID_SET: !!process.env.SQUARE_APPLICATION_ID,
-        SANDBOX_ID_SET: !!process.env.SQUARE_SANDBOX_APPLICATION_ID,
-        REDIRECT_URI: process.env.SQUARE_OAUTH_REDIRECT_URI,
-      });
       if (!barberGhlId) {
         return res.status(400).send("Missing barberGhlId query parameter");
       }
@@ -2897,6 +2893,32 @@ function createApp() {
       res.json({ success: true, ...result });
     } catch (error) {
       console.error("[API] Error assigning unmatched payment:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/refresh-token
+  // Manually refresh a single barber's Square access token.
+  app.post("/api/barbers/:barberGhlId/square/refresh-token", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const result = await refreshBarberToken(barberGhlId);
+      res.json({ success: true, expiresAt: result.expires_at });
+    } catch (error) {
+      console.error("[API] Error refreshing Square token:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/square/refresh-all-tokens
+  // Refresh tokens for all barbers expiring within 8 days.
+  // Intended to be called by a daily cron job (e.g., Render Cron or an external scheduler).
+  app.post("/api/barbers/square/refresh-all-tokens", async (req, res) => {
+    try {
+      const results = await refreshAllExpiringTokens();
+      res.json({ success: true, ...results });
+    } catch (error) {
+      console.error("[API] Error in batch token refresh:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
