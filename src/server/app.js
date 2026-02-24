@@ -2756,6 +2756,12 @@ function createApp() {
   app.get("/square/oauth/start", (req, res) => {
     try {
       const { barberGhlId } = req.query;
+      console.log("[SquareOAuth] /start called, env check:", {
+        SQUARE_ENVIRONMENT: process.env.SQUARE_ENVIRONMENT,
+        APP_ID_SET: !!process.env.SQUARE_APPLICATION_ID,
+        SANDBOX_ID_SET: !!process.env.SQUARE_SANDBOX_APPLICATION_ID,
+        REDIRECT_URI: process.env.SQUARE_OAUTH_REDIRECT_URI,
+      });
       if (!barberGhlId) {
         return res.status(400).send("Missing barberGhlId query parameter");
       }
