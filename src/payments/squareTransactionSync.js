@@ -236,16 +236,22 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     }
   }
 
-  if (!contactId) {
-    // No match — return for manual review
-    return { matched: false, payment: paymentSummary, autoMatchDetail: null };
-  }
-
-  // Fetch Order discount info if the payment has an order_id
-  const { totalDiscountCents, discountName } = await fetchSquareOrderDiscount(
+  // Fetch Order details (discount info, line item type, product detection)
+  // Do this before match check so unmatched payments also have order info
+  const orderDetails = await fetchSquareOrderDetails(
     accessToken,
     squarePayment.order_id
   );
+
+  if (!contactId) {
+    // No match — return for manual review with order details
+    paymentSummary.itemType = orderDetails.itemType;
+    paymentSummary.lineItemName = orderDetails.lineItemName;
+    paymentSummary.isProductSale = orderDetails.isProductSale;
+    paymentSummary.discountCents = orderDetails.totalDiscountCents;
+    paymentSummary.discountName = orderDetails.discountName;
+    return { matched: false, payment: paymentSummary, autoMatchDetail: null };
+  }
 
   // Record as a transaction in Supabase
   await recordTransaction({
@@ -257,7 +263,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     appointmentId: matchedAppointment?.id || null,
     calendarId: matchedAppointment?.calendarId || null,
     squareTipCents: squarePayment.tip_money?.amount || null,
-    discountCents: totalDiscountCents,
+    discountCents: orderDetails.totalDiscountCents,
+    orderDetails,
   });
 
   // Build auto-match detail for the response
@@ -308,31 +315,54 @@ async function lookupGhlContactByPhone(phone) {
 }
 
 /**
- * Fetch a Square Order to get discount details.
+ * Fetch a Square Order to get line item details and discounts.
+ * Returns itemType (CUSTOM_AMOUNT vs ITEM), line item names, and discount info.
+ * This is critical for deposit detection:
+ *   - Deposits are keyed as CUSTOM_AMOUNT (no catalog item)
+ *   - Services/products are ITEM with a catalogObjectId
+ *
  * @param {string} accessToken - The barber's Square access token
  * @param {string} orderId - The Square order ID from the payment
- * @returns {{ totalDiscountCents: number|null, discountName: string|null }}
+ * @returns {{ totalDiscountCents: number|null, discountName: string|null, itemType: string|null, lineItemName: string|null, isProductSale: boolean }}
  */
-async function fetchSquareOrderDiscount(accessToken, orderId) {
-  if (!orderId || !accessToken) return { totalDiscountCents: null, discountName: null };
+async function fetchSquareOrderDetails(accessToken, orderId) {
+  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false };
+  if (!orderId || !accessToken) return empty;
   try {
     const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
       headers: { Authorization: `Bearer ${accessToken}` },
     });
     const order = res.data?.order;
-    if (!order) return { totalDiscountCents: null, discountName: null };
+    if (!order) return empty;
 
     const totalDiscountCents = order.total_discount_money?.amount || null;
-    // Get the first discount name for display (e.g., "$10 Off")
     const discountName = order.discounts?.[0]?.name || null;
+
+    // Extract line item info from the first (primary) line item
+    const lineItem = order.line_items?.[0];
+    const itemType = lineItem?.item_type || null;
+    const lineItemName = lineItem?.name || null;
+    const hasCatalogId = !!lineItem?.catalog_object_id;
+
+    // Product sale = ITEM type with a catalog ID and NOT a known service name
+    // Known service names: "Haircut", "Haircut + Beard", etc.
+    const knownServiceNames = ["haircut", "haircut + beard", "beard"];
+    const isKnownService = lineItemName && knownServiceNames.some(
+      (sn) => lineItemName.toLowerCase().includes(sn)
+    );
+    const isProductSale = itemType === "ITEM" && hasCatalogId && !isKnownService;
 
     if (totalDiscountCents) {
       console.log(`[SquareSync] Order ${orderId}: discount ${discountName || "unnamed"} = $${totalDiscountCents / 100}`);
     }
-    return { totalDiscountCents, discountName };
+    if (isProductSale) {
+      console.log(`[SquareSync] Order ${orderId}: product sale detected — "${lineItemName}" (${itemType})`);
+    }
+
+    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale };
   } catch (err) {
     console.warn(`[SquareSync] Failed to fetch order ${orderId}: ${err.message}`);
-    return { totalDiscountCents: null, discountName: null };
+    return empty;
   }
 }
 
@@ -369,23 +399,37 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
  *   - amount_money ≈ service_price × deposit% AND no tip → 'deposit'
  *   - otherwise → 'session_payment' (remaining balance or full payment)
  */
-async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents }) {
+async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents, orderDetails }) {
   const grossAmount = amountCents / 100;
   const discountAmount = discountCents ? discountCents / 100 : null;
+  const itemType = orderDetails?.itemType || null;
+  const isProductSale = orderDetails?.isProductSale || false;
 
   // Look up deposit config for this calendar
   const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
   const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
 
-  // Determine transaction type: deposit vs session_payment
+  // Determine transaction type: deposit vs session_payment vs product_sale
   let transactionType = "session_payment";
-  if (depositPct && listedPrice) {
+
+  if (isProductSale) {
+    // Product sales (e.g., pomade, styling products) — never a deposit
+    transactionType = "product_sale";
+    console.log(`[SquareSync] Product sale: $${grossAmount} — "${orderDetails.lineItemName}"`);
+  } else if (depositPct && listedPrice) {
     const expectedDeposit = listedPrice * (depositPct / 100);
     const hasTip = squareTipCents != null && squareTipCents > 0;
-    // Deposit = exact deposit amount with no tip (allow $1 tolerance for rounding)
-    if (!hasTip && Math.abs(grossAmount - expectedDeposit) <= 1) {
+    // Deposit detection requires ALL of:
+    //   1. Amount ≈ service_price × deposit% (within $1 tolerance)
+    //   2. No tip on the payment
+    //   3. Line item is CUSTOM_AMOUNT (manually keyed, not a catalog item)
+    //      — if we couldn't fetch the Order (itemType is null), we still allow the match
+    //        but only with the amount + no-tip checks as fallback
+    const amountMatches = Math.abs(grossAmount - expectedDeposit) <= 1;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    if (!hasTip && amountMatches && isCustomAmount) {
       transactionType = "deposit";
-      console.log(`[SquareSync] Deposit detected: $${grossAmount} matches ${depositPct}% of $${listedPrice} for calendar ${calendarId}`);
+      console.log(`[SquareSync] Deposit detected: $${grossAmount} matches ${depositPct}% of $${listedPrice} (itemType=${itemType}) for calendar ${calendarId}`);
     }
   }
 
@@ -393,8 +437,8 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
   let servicePrice = null;
   let tipAmount = null;
 
-  if (transactionType === "deposit") {
-    // Deposits are pure service revenue, no tip
+  if (transactionType === "deposit" || transactionType === "product_sale") {
+    // Deposits and product sales are pure revenue, no tip
     servicePrice = grossAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
@@ -414,8 +458,11 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
     }
   }
 
-  // Build notes with discount info if present
+  // Build notes with product name / discount info
   let notes = squarePayment.note || null;
+  if (transactionType === "product_sale" && orderDetails?.lineItemName) {
+    notes = `Product: ${orderDetails.lineItemName}`;
+  }
   if (discountAmount && transactionType !== "deposit") {
     const discountNote = `Square discount: -$${discountAmount.toFixed(2)}`;
     notes = notes ? `${notes} | ${discountNote}` : discountNote;
@@ -468,7 +515,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
   // Check not already recorded
   const { data: existing } = await supabase
     .from("transactions")
@@ -485,10 +532,15 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
   const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
 
   let transactionType = "session_payment";
-  if (depositPct && listedPrice) {
+
+  if (isProductSale) {
+    transactionType = "product_sale";
+  } else if (depositPct && listedPrice) {
     const expectedDeposit = listedPrice * (depositPct / 100);
     const hasTip = squareTipCents != null && squareTipCents > 0;
-    if (!hasTip && Math.abs(grossAmount - expectedDeposit) <= 1) {
+    const amountMatches = Math.abs(grossAmount - expectedDeposit) <= 1;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    if (!hasTip && amountMatches && isCustomAmount) {
       transactionType = "deposit";
     }
   }
@@ -497,7 +549,7 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
   let servicePrice = null;
   let tipAmount = null;
 
-  if (transactionType === "deposit") {
+  if (transactionType === "deposit" || transactionType === "product_sale") {
     servicePrice = grossAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
