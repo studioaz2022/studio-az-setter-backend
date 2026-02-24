@@ -247,7 +247,7 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
-    contact_name: null, // Frontend can enrich this on display
+    contact_name: "", // Enriched on display from GHL contact
     appointment_id: null, // Could be matched later via calendar proximity
     artist_ghl_id: barberGhlId,
     transaction_type: "session_payment",
@@ -301,7 +301,7 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
-    contact_name: null,
+    contact_name: "",
     appointment_id: null,
     artist_ghl_id: barberGhlId,
     transaction_type: "session_payment",
