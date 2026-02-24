@@ -267,7 +267,8 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
   });
 
   if (error) {
-    console.error(`[SquareSync] Failed to record transaction ${squarePayment.id}:`, error.message);
+    console.error(`[SquareSync] Failed to record transaction ${squarePayment.id}: code=${error.code} msg=${error.message} details=${error.details} hint=${error.hint}`);
+    throw new Error(`Supabase insert failed: ${error.message} (${error.code})`);
   }
 }
 
