@@ -3089,6 +3089,58 @@ function createApp() {
     }
   });
 
+  // GET /api/barbers/:barberGhlId/square/order/:orderId
+  // Fetch a Square Order's full details (line items, discounts, etc.)
+  app.get("/api/barbers/:barberGhlId/square/order/:orderId", async (req, res) => {
+    try {
+      const { barberGhlId, orderId } = req.params;
+      const tokenRow = await getBarberToken(barberGhlId);
+      if (!tokenRow) {
+        return res.status(404).json({ success: false, error: "No Square connection for this barber" });
+      }
+
+      const IS_PROD = process.env.SQUARE_ENVIRONMENT === "production";
+      const BASE_URL = IS_PROD ? "https://connect.squareup.com" : "https://connect.squareupsandbox.com";
+
+      const orderRes = await axios.get(`${BASE_URL}/v2/orders/${orderId}`, {
+        headers: { Authorization: `Bearer ${tokenRow.access_token}` },
+      });
+
+      const order = orderRes.data?.order;
+      if (!order) {
+        return res.status(404).json({ success: false, error: "Order not found" });
+      }
+
+      // Return a clean summary
+      res.json({
+        success: true,
+        order: {
+          id: order.id,
+          state: order.state,
+          totalMoney: order.total_money,
+          totalDiscountMoney: order.total_discount_money,
+          totalTipMoney: order.total_tip_money,
+          lineItems: (order.line_items || []).map(li => ({
+            name: li.name,
+            quantity: li.quantity,
+            basePriceMoney: li.base_price_money,
+            totalMoney: li.total_money,
+            totalDiscountMoney: li.total_discount_money,
+            appliedDiscounts: li.applied_discounts,
+            itemType: li.item_type,
+            catalogObjectId: li.catalog_object_id,
+          })),
+          discounts: order.discounts,
+          referenceId: order.reference_id,
+          createdAt: order.created_at,
+        },
+      });
+    } catch (error) {
+      console.error("[API] Error fetching Square order:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // TRANSLATION (iOS in-app message translation via OpenAI)
   // ═══════════════════════════════════════════════════════════════════════════
