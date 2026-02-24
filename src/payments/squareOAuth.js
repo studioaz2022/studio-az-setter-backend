@@ -47,7 +47,6 @@ function buildOAuthUrl(barberGhlId) {
   const scopes = [
     "PAYMENTS_READ",
     "CUSTOMERS_READ",
-    "MERCHANT_PROFILE_READ",
   ].join("+");
 
   const state = encodeURIComponent(barberGhlId);
@@ -89,8 +88,8 @@ async function exchangeCodeForToken(code, barberGhlId) {
     merchant_id,
   } = response.data;
 
-  // Fetch merchant name + primary location ID from Square
-  const merchantName = await fetchMerchantName(access_token, merchant_id);
+  // Fetch merchant name + primary location ID from Square (best-effort, non-fatal)
+  const merchantName = await fetchMerchantName(access_token, merchant_id) || merchant_id;
   const squareLocationId = await fetchPrimaryLocationId(access_token);
 
   // Upsert into Supabase (insert or update if barber reconnects)
