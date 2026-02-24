@@ -46,6 +46,7 @@ function buildOAuthUrl(barberGhlId) {
   const scopes = [
     "PAYMENTS_READ",
     "CUSTOMERS_READ",
+    "ORDERS_READ",
   ].join("+");
 
   const state = encodeURIComponent(barberGhlId);
