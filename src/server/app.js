@@ -1805,10 +1805,12 @@ function createApp() {
       );
       if (emptyNameTxs.length > 0) {
         const uniqueContactIds = [...new Set(emptyNameTxs.map(tx => tx.contact_id))];
+        console.log(`[Earnings] Enriching ${uniqueContactIds.length} contacts with empty names (locationId=${locationId})`);
         const nameCache = {};
         // Use the correct SDK based on location (barbershop vs tattoo shop)
         const isBarberLocation = locationId === process.env.GHL_BARBER_LOCATION_ID;
         const sdkForLookup = isBarberLocation && ghlBarber ? ghlBarber : null;
+        console.log(`[Earnings] isBarberLocation=${isBarberLocation}, ghlBarber available=${!!ghlBarber}, sdkForLookup=${!!sdkForLookup}`);
         await Promise.all(uniqueContactIds.map(async (cid) => {
           try {
             let contact;
@@ -1820,10 +1822,19 @@ function createApp() {
               // Tattoo shop: use existing getContact helper
               contact = await getContact(cid);
             }
-            nameCache[cid] = contact?.contactName || contact?.name
+            const resolvedName = contact?.contactName || contact?.name
               || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "";
-          } catch { nameCache[cid] = ""; }
+            nameCache[cid] = resolvedName;
+            if (!resolvedName) {
+              console.log(`[Earnings] Could not resolve name for contact ${cid}`);
+            }
+          } catch (err) {
+            console.warn(`[Earnings] Failed to fetch contact ${cid}: ${err.message}`);
+            nameCache[cid] = "";
+          }
         }));
+
+        console.log(`[Earnings] Resolved names: ${Object.entries(nameCache).filter(([,n]) => n).length}/${uniqueContactIds.length}`);
 
         // Update transactions in memory and persist non-empty names to DB
         for (const tx of transactions || []) {
@@ -1838,8 +1849,12 @@ function createApp() {
               .update({ contact_name: name })
               .eq('contact_id', cid)
               .eq('contact_name', '')
-              .then(() => {})
-              .catch(() => {});
+              .then(({ error: updateErr }) => {
+                if (updateErr) console.warn(`[Earnings] DB update failed for ${cid}: ${updateErr.message}`);
+              })
+              .catch((err) => {
+                console.warn(`[Earnings] DB update error for ${cid}: ${err.message}`);
+              });
           }
         }
       }
@@ -1898,29 +1913,43 @@ function createApp() {
         }
       }
 
-      // Get top clients from client_financials
+      // Build top clients directly from transactions (works for both tattoo + barbershop)
       let topClients = [];
-      const uniqueContactIds = [...new Set((transactions || []).map(t => t.contact_id).filter(Boolean))];
-      if (uniqueContactIds.length > 0) {
-        const { data: clientFinancials } = await supabase
-          .from('client_financials')
-          .select('*')
-          .in('contact_id', uniqueContactIds)
-          .order('total_spent', { ascending: false })
-          .limit(10);
-
-        if (clientFinancials) {
-          topClients = clientFinancials.map(cf => ({
-            contact_id: cf.contact_id,
-            contact_name: cf.contact_name,
-            total_spent: parseFloat(cf.total_spent) || 0,
-            quote_amount: cf.quote_amount ? parseFloat(cf.quote_amount) : null,
-            completed_tattoos: cf.completed_tattoos || 0,
-            is_returning_client: cf.is_returning_client || false,
-            last_appointment_date: cf.last_appointment_date
-          }));
+      const clientMap = {};
+      for (const tx of transactions || []) {
+        if (!tx.contact_id || tx.contact_id === 'walk_in') continue;
+        if (!clientMap[tx.contact_id]) {
+          clientMap[tx.contact_id] = {
+            contact_id: tx.contact_id,
+            contact_name: tx.contact_name || '',
+            total_spent: 0,
+            completed_tattoos: 0,  // reused field name for appointment count
+            is_returning_client: false,
+            last_appointment_date: tx.session_date || tx.created_at,
+          };
+        }
+        const c = clientMap[tx.contact_id];
+        c.total_spent += parseFloat(tx.gross_amount) || 0;
+        if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
+          c.completed_tattoos++;
+        }
+        // Track most recent date
+        const txDate = tx.session_date || tx.created_at;
+        if (txDate && (!c.last_appointment_date || txDate > c.last_appointment_date)) {
+          c.last_appointment_date = txDate;
+        }
+        // Use the best available name
+        if (!c.contact_name && tx.contact_name) {
+          c.contact_name = tx.contact_name;
         }
       }
+      topClients = Object.values(clientMap)
+        .sort((a, b) => b.total_spent - a.total_spent)
+        .slice(0, 10)
+        .map(c => ({
+          ...c,
+          is_returning_client: c.completed_tattoos > 1,
+        }));
 
       res.json({
         success: true,
