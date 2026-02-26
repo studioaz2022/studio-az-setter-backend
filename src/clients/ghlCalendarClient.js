@@ -337,7 +337,11 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate) {
 async function fetchAppointmentsForDateRange({ locationId, startTime, endTime, userId, sdkInstance }) {
   const sdk = sdkInstance || ghl;
 
-  const params = { locationId, startTime, endTime };
+  // GHL /calendars/events requires epoch milliseconds, not ISO strings
+  const startMs = typeof startTime === "number" ? startTime : new Date(startTime).getTime();
+  const endMs = typeof endTime === "number" ? endTime : new Date(endTime).getTime();
+
+  const params = { locationId, startTime: startMs, endTime: endMs };
   if (userId) params.userId = userId;
 
   try {

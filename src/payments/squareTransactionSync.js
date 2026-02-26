@@ -239,6 +239,37 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     }
   }
 
+  // If contact was found via email/phone (not proximity), still try to find their appointment
+  // so we can link the transaction to the correct appointment_id and calendar_id
+  if (contactId && !matchedAppointment && appointments.length > 0) {
+    const paymentTime = new Date(createdAt);
+    const THIRTY_MIN_MS = 30 * 60 * 1000;
+
+    // Find appointments for this specific contact around payment time
+    const contactAppts = appointments.filter((apt) => {
+      if (apt.contactId !== contactId) return false;
+      const aptStart = new Date(apt.startTime);
+      const aptEnd = new Date(apt.endTime);
+      return paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + THIRTY_MIN_MS);
+    });
+
+    if (contactAppts.length === 1) {
+      matchedAppointment = contactAppts[0];
+      console.log(`[SquareSync] Linked email/phone-matched contact ${contactId} to appointment ${matchedAppointment.id}`);
+    } else if (contactAppts.length === 0) {
+      // Broaden: find any appointment for this contact on the same day
+      const paymentDay = paymentTime.toISOString().slice(0, 10);
+      const sameDayAppts = appointments.filter((apt) => {
+        if (apt.contactId !== contactId) return false;
+        return new Date(apt.startTime).toISOString().slice(0, 10) === paymentDay;
+      });
+      if (sameDayAppts.length === 1) {
+        matchedAppointment = sameDayAppts[0];
+        console.log(`[SquareSync] Linked contact ${contactId} to same-day appointment ${matchedAppointment.id}`);
+      }
+    }
+  }
+
   // Fetch Order details (discount info, line item type, product detection)
   // Do this before match check so unmatched payments also have order info
   const orderDetails = await fetchSquareOrderDetails(
