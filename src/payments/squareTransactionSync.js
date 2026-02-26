@@ -156,7 +156,8 @@ async function fetchSquarePayments(accessToken, locationId, { startDate, endDate
  */
 async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, appointments = []) {
   const paymentId = squarePayment.id;
-  const amountCents = squarePayment.amount_money?.amount || 0;
+  const totalCents = squarePayment.total_money?.amount || squarePayment.amount_money?.amount || 0;
+  const serviceCents = squarePayment.amount_money?.amount || 0;
   const currency = squarePayment.amount_money?.currency || "USD";
   const createdAt = squarePayment.created_at;
 
@@ -175,7 +176,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   const paymentSummary = {
     squarePaymentId: paymentId,
     squareOrderId: squarePayment.order_id || null,
-    amountCents,
+    amountCents: totalCents, // total_money (service + tip) — what the client actually paid
+    serviceCents, // amount_money (base charge before tip)
     currency,
     createdAt,
     cardBrand: squarePayment.card_details?.card?.card_brand || null,
@@ -272,7 +274,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     contactName,
     barberGhlId,
     squarePayment,
-    amountCents,
+    totalCents,
+    serviceCents,
     createdAt,
     appointmentId: matchedAppointment?.id || null,
     calendarId: matchedAppointment?.calendarId || null,
@@ -289,7 +292,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     appointmentTitle: matchedAppointment?.title || null,
     appointmentStartTime: matchedAppointment?.startTime || null,
     calendarId: matchedAppointment?.calendarId || null,
-    amountCents,
+    amountCents: totalCents, // total_money (service + tip)
+    serviceCents,
     createdAt,
     matchMethod,
     squareTipCents: squarePayment.tip_money?.amount || null,
@@ -421,8 +425,11 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
  *   - amount_money ≈ service_price × deposit% AND no tip → 'deposit'
  *   - otherwise → 'session_payment' (remaining balance or full payment)
  */
-async function recordTransaction({ contactId, contactName, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents, orderDetails }) {
-  const grossAmount = amountCents / 100;
+async function recordTransaction({ contactId, contactName, barberGhlId, squarePayment, totalCents, serviceCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents, orderDetails }) {
+  // grossAmount = total_money (what the client actually paid, including tip)
+  // serviceAmount = amount_money (base charge before tip)
+  const grossAmount = totalCents / 100;
+  const serviceAmount = serviceCents / 100;
   const discountAmount = discountCents ? discountCents / 100 : null;
   const itemType = orderDetails?.itemType || null;
   const isProductSale = orderDetails?.isProductSale || false;
@@ -432,6 +439,7 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
 
   // Determine transaction type: deposit vs session_payment vs product_sale
+  // Deposit detection compares against serviceAmount (amount_money), not grossAmount (total_money)
   let transactionType = "session_payment";
 
   if (isProductSale) {
@@ -441,43 +449,36 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   } else if (depositPct && listedPrice) {
     const expectedDeposit = listedPrice * (depositPct / 100);
     const hasTip = squareTipCents != null && squareTipCents > 0;
-    // Deposit detection requires ALL of:
-    //   1. Amount ≈ service_price × deposit% (within $1 tolerance)
+    // Deposit detection uses serviceAmount (amount_money, the base charge):
+    //   1. Base charge ≈ service_price × deposit% (within $1 tolerance)
     //   2. No tip on the payment
     //   3. Line item is CUSTOM_AMOUNT (manually keyed, not a catalog item)
-    //      — if we couldn't fetch the Order (itemType is null), we still allow the match
-    //        but only with the amount + no-tip checks as fallback
-    const amountMatches = Math.abs(grossAmount - expectedDeposit) <= 1;
+    const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
     if (!hasTip && amountMatches && isCustomAmount) {
       transactionType = "deposit";
-      console.log(`[SquareSync] Deposit detected: $${grossAmount} matches ${depositPct}% of $${listedPrice} (itemType=${itemType}) for calendar ${calendarId}`);
+      console.log(`[SquareSync] Deposit detected: $${serviceAmount} matches ${depositPct}% of $${listedPrice} (itemType=${itemType}) for calendar ${calendarId}`);
     }
   }
 
   // Tip & service price calculation
+  // Square gives us explicit tip_money and amount_money, so we use those directly
   let servicePrice = null;
   let tipAmount = null;
 
   if (transactionType === "deposit" || transactionType === "product_sale") {
     // Deposits and product sales are pure revenue, no tip
-    servicePrice = grossAmount;
+    servicePrice = serviceAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
-    // Square reported an explicit tip — amount_money is already after discounts
+    // Square reported an explicit tip
+    // servicePrice = amount_money (base charge), tipAmount = tip_money
     tipAmount = squareTipCents / 100;
-    servicePrice = grossAmount - tipAmount;
-    if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
-  } else if (calendarId) {
-    // Fall back to service price lookup
-    servicePrice = await lookupServicePrice(calendarId);
-    if (servicePrice != null) {
-      tipAmount = Math.max(0, grossAmount - servicePrice);
-      if (grossAmount < servicePrice) {
-        servicePrice = grossAmount;
-        tipAmount = 0;
-      }
-    }
+    servicePrice = serviceAmount;
+  } else {
+    // No tip — the full amount is service revenue
+    servicePrice = serviceAmount;
+    tipAmount = 0;
   }
 
   // Build notes with product name / discount info
@@ -537,7 +538,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
   // Check not already recorded
   const { data: existing } = await supabase
     .from("transactions")
@@ -562,9 +563,13 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     } catch { /* ignore */ }
   }
 
+  // amountCents = total_money (service + tip), serviceCents = amount_money (base charge)
+  // For backwards compat: if serviceCents not provided, derive from amountCents - tip
   const grossAmount = amountCents / 100;
+  const tipCentsDerived = squareTipCents || 0;
+  const serviceAmount = serviceCents ? serviceCents / 100 : (amountCents - tipCentsDerived) / 100;
 
-  // Deposit detection for calendars with deposit_percentage
+  // Deposit detection uses serviceAmount (base charge)
   const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
   const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
 
@@ -575,33 +580,26 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
   } else if (depositPct && listedPrice) {
     const expectedDeposit = listedPrice * (depositPct / 100);
     const hasTip = squareTipCents != null && squareTipCents > 0;
-    const amountMatches = Math.abs(grossAmount - expectedDeposit) <= 1;
+    const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
     if (!hasTip && amountMatches && isCustomAmount) {
       transactionType = "deposit";
     }
   }
 
-  // Tip calculation
+  // Tip calculation — use Square's explicit values
   let servicePrice = null;
   let tipAmount = null;
 
   if (transactionType === "deposit" || transactionType === "product_sale") {
-    servicePrice = grossAmount;
+    servicePrice = serviceAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
     tipAmount = squareTipCents / 100;
-    servicePrice = grossAmount - tipAmount;
-    if (servicePrice < 0) { servicePrice = 0; tipAmount = grossAmount; }
-  } else if (calendarId) {
-    servicePrice = await lookupServicePrice(calendarId);
-    if (servicePrice != null) {
-      tipAmount = Math.max(0, grossAmount - servicePrice);
-      if (grossAmount < servicePrice) {
-        servicePrice = grossAmount;
-        tipAmount = 0;
-      }
-    }
+    servicePrice = serviceAmount;
+  } else {
+    servicePrice = serviceAmount;
+    tipAmount = 0;
   }
 
   const { error } = await supabase.from("transactions").insert({

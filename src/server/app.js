@@ -1923,7 +1923,8 @@ function createApp() {
             contact_id: tx.contact_id,
             contact_name: tx.contact_name || '',
             total_spent: 0,
-            completed_tattoos: 0,  // reused field name for appointment count
+            appointment_ids: new Set(), // track distinct appointments
+            completed_tattoos: 0,
             is_returning_client: false,
             last_appointment_date: tx.session_date || tx.created_at,
           };
@@ -1931,7 +1932,12 @@ function createApp() {
         const c = clientMap[tx.contact_id];
         c.total_spent += parseFloat(tx.gross_amount) || 0;
         if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
-          c.completed_tattoos++;
+          if (tx.appointment_id) {
+            c.appointment_ids.add(tx.appointment_id);
+          } else {
+            // No appointment_id (walk-in etc.) — count as separate
+            c.completed_tattoos++;
+          }
         }
         // Track most recent date
         const txDate = tx.session_date || tx.created_at;
@@ -1948,7 +1954,8 @@ function createApp() {
         .slice(0, 10)
         .map(c => ({
           ...c,
-          is_returning_client: c.completed_tattoos > 1,
+          completed_tattoos: c.appointment_ids.size + c.completed_tattoos,
+          is_returning_client: (c.appointment_ids.size + c.completed_tattoos) > 1,
         }));
 
       res.json({
@@ -3160,7 +3167,7 @@ function createApp() {
   app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { squarePaymentId, contactId, contactName, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
+      const { squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
 
       if (!squarePaymentId || !contactId || !amountCents) {
         return res.status(400).json({
@@ -3175,6 +3182,7 @@ function createApp() {
         contactId,
         contactName,
         amountCents,
+        serviceCents,
         createdAt,
         note,
         appointmentId,
