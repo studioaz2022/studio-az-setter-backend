@@ -6,7 +6,7 @@
 const axios = require("axios");
 const { createClient } = require("@supabase/supabase-js");
 const { getBarberToken } = require("./squareOAuth");
-const { lookupContactIdByEmailOrPhone, getContact } = require("../clients/ghlClient");
+const { getContact } = require("../clients/ghlClient");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const { lookupServicePrice, lookupDepositPercentage } = require("../config/barberServicePrices");
@@ -253,9 +253,23 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     return { matched: false, payment: paymentSummary, autoMatchDetail: null };
   }
 
+  // Fetch contact name for storage and response (use barber SDK for barbershop contacts)
+  let contactName = "";
+  try {
+    let contact;
+    if (ghlBarber) {
+      const data = await ghlBarber.contacts.getContact({ contactId });
+      contact = data?.contact || data;
+    } else {
+      contact = await getContact(contactId);
+    }
+    contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
+  } catch { /* ignore — name is nice-to-have */ }
+
   // Record as a transaction in Supabase
   await recordTransaction({
     contactId,
+    contactName,
     barberGhlId,
     squarePayment,
     amountCents,
@@ -266,13 +280,6 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     discountCents: orderDetails.totalDiscountCents,
     orderDetails,
   });
-
-  // Build auto-match detail for the response
-  let contactName = "";
-  try {
-    const contact = await getContact(contactId);
-    contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
-  } catch { /* ignore — name is nice-to-have */ }
 
   const autoMatchDetail = {
     squarePaymentId: paymentId,
@@ -292,24 +299,39 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
 }
 
 /**
- * Look up a GHL contact by email via the existing GHL client.
+ * Look up a GHL contact by email in the barbershop location.
+ * Uses ghlBarber SDK directly since lookupContactIdByEmailOrPhone uses tattoo shop SDK.
  * Returns contactId string or null.
  */
 async function lookupGhlContactByEmail(email) {
+  if (!email || !ghlBarber) return null;
   try {
-    return await lookupContactIdByEmailOrPhone({ email, locationId: BARBER_LOCATION_ID });
-  } catch {
+    const cleanEmail = email.replace(/\s+/g, "").trim();
+    const data = await ghlBarber.contacts.getDuplicateContact({
+      locationId: BARBER_LOCATION_ID,
+      email: cleanEmail,
+    });
+    return data?.contact?.id || data?.contact?._id || data?.id || data?._id || null;
+  } catch (err) {
+    console.warn(`[SquareSync] Email lookup failed for ${email}: ${err.message}`);
     return null;
   }
 }
 
 /**
- * Look up a GHL contact by phone number.
+ * Look up a GHL contact by phone in the barbershop location.
+ * Uses ghlBarber SDK directly.
  */
 async function lookupGhlContactByPhone(phone) {
+  if (!phone || !ghlBarber) return null;
   try {
-    return await lookupContactIdByEmailOrPhone({ phone, locationId: BARBER_LOCATION_ID });
-  } catch {
+    const data = await ghlBarber.contacts.getDuplicateContact({
+      locationId: BARBER_LOCATION_ID,
+      number: phone,
+    });
+    return data?.contact?.id || data?.contact?._id || data?.id || data?._id || null;
+  } catch (err) {
+    console.warn(`[SquareSync] Phone lookup failed for ${phone}: ${err.message}`);
     return null;
   }
 }
@@ -399,7 +421,7 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
  *   - amount_money ≈ service_price × deposit% AND no tip → 'deposit'
  *   - otherwise → 'session_payment' (remaining balance or full payment)
  */
-async function recordTransaction({ contactId, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents, orderDetails }) {
+async function recordTransaction({ contactId, contactName, barberGhlId, squarePayment, amountCents, createdAt, appointmentId, calendarId, squareTipCents, discountCents, orderDetails }) {
   const grossAmount = amountCents / 100;
   const discountAmount = discountCents ? discountCents / 100 : null;
   const itemType = orderDetails?.itemType || null;
@@ -470,7 +492,7 @@ async function recordTransaction({ contactId, barberGhlId, squarePayment, amount
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
-    contact_name: "", // Enriched on display from GHL contact
+    contact_name: contactName || "",
     appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
     transaction_type: transactionType,
@@ -515,7 +537,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
   // Check not already recorded
   const { data: existing } = await supabase
     .from("transactions")
@@ -524,6 +546,21 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     .single();
 
   if (existing) return { alreadyRecorded: true };
+
+  // Resolve contact name if not provided (use barber SDK for barbershop contacts)
+  let resolvedName = contactName || "";
+  if (!resolvedName && contactId) {
+    try {
+      let contact;
+      if (ghlBarber) {
+        const data = await ghlBarber.contacts.getContact({ contactId });
+        contact = data?.contact || data;
+      } else {
+        contact = await getContact(contactId);
+      }
+      resolvedName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
+    } catch { /* ignore */ }
+  }
 
   const grossAmount = amountCents / 100;
 
@@ -569,7 +606,7 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
-    contact_name: "",
+    contact_name: resolvedName,
     appointment_id: appointmentId || null,
     artist_ghl_id: barberGhlId,
     transaction_type: transactionType,

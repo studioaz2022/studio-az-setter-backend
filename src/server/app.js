@@ -11,6 +11,7 @@ const {
   getContact,
   getContactV2,
   updateSystemFields,
+  getContact,
   createContact,
   updateContact,
   lookupContactIdByEmailOrPhone,
@@ -1799,6 +1800,51 @@ function createApp() {
 
       if (error) throw error;
 
+      // Enrich empty contact_name fields from GHL (batch lookup, then persist)
+      const emptyNameTxs = (transactions || []).filter(
+        tx => tx.contact_id && tx.contact_id !== 'walk_in' && (!tx.contact_name || tx.contact_name.trim() === '')
+      );
+      if (emptyNameTxs.length > 0) {
+        const uniqueContactIds = [...new Set(emptyNameTxs.map(tx => tx.contact_id))];
+        const nameCache = {};
+        // Use the correct SDK based on location (barbershop vs tattoo shop)
+        const isBarberLocation = locationId === process.env.GHL_BARBER_LOCATION_ID;
+        const sdkForLookup = isBarberLocation && ghlBarber ? ghlBarber : null;
+        await Promise.all(uniqueContactIds.map(async (cid) => {
+          try {
+            let contact;
+            if (sdkForLookup) {
+              // Barbershop: use barber SDK directly
+              const data = await sdkForLookup.contacts.getContact({ contactId: cid });
+              contact = data?.contact || data;
+            } else {
+              // Tattoo shop: use existing getContact helper
+              contact = await getContact(cid);
+            }
+            nameCache[cid] = contact?.contactName || contact?.name
+              || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "";
+          } catch { nameCache[cid] = ""; }
+        }));
+
+        // Update transactions in memory and persist non-empty names to DB
+        for (const tx of transactions || []) {
+          if (nameCache[tx.contact_id] && (!tx.contact_name || tx.contact_name.trim() === '')) {
+            tx.contact_name = nameCache[tx.contact_id];
+          }
+        }
+        // Fire-and-forget DB updates for enriched names
+        for (const [cid, name] of Object.entries(nameCache)) {
+          if (name) {
+            supabase.from('transactions')
+              .update({ contact_name: name })
+              .eq('contact_id', cid)
+              .eq('contact_name', '')
+              .then(() => {})
+              .catch(() => {});
+          }
+        }
+      }
+
       // Calculate summary
       let totalEarned = 0;
       let pendingFromShop = 0;
@@ -2992,7 +3038,7 @@ function createApp() {
   app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { squarePaymentId, contactId, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
+      const { squarePaymentId, contactId, contactName, amountCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
 
       if (!squarePaymentId || !contactId || !amountCents) {
         return res.status(400).json({
@@ -3005,6 +3051,7 @@ function createApp() {
         barberGhlId,
         squarePaymentId,
         contactId,
+        contactName,
         amountCents,
         createdAt,
         note,
