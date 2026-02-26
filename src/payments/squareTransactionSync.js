@@ -162,11 +162,12 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   const createdAt = squarePayment.created_at;
 
   // Check if we've already recorded this payment to avoid duplicates
+  // Use maybeSingle() — .single() throws when 0 rows match, bypassing the check
   const { data: existing } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", paymentId)
-    .single();
+    .maybeSingle();
 
   if (existing) {
     return { matched: true, payment: null, autoMatchDetail: null }; // Already synced
@@ -539,12 +540,12 @@ async function updateLastSynced(barberGhlId, cursor) {
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
 async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
-  // Check not already recorded
+  // Check not already recorded (maybeSingle to avoid throw on 0 rows)
   const { data: existing } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", squarePaymentId)
-    .single();
+    .maybeSingle();
 
   if (existing) return { alreadyRecorded: true };
 
@@ -652,12 +653,12 @@ async function unmatchPayment({ barberGhlId, squarePaymentId }) {
  * The payment still counts toward earnings.
  */
 async function recordWalkIn({ barberGhlId, squarePaymentId, amountCents, createdAt }) {
-  // Check not already recorded
+  // Check not already recorded (maybeSingle to avoid throw on 0 rows)
   const { data: existing } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", squarePaymentId)
-    .single();
+    .maybeSingle();
 
   if (existing) return { alreadyRecorded: true };
 
