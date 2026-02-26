@@ -2101,6 +2101,100 @@ function createApp() {
     }
   });
 
+  // GET /api/contacts/:contactId/transactions - Get all transactions for a contact
+  app.get("/api/contacts/:contactId/transactions", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const { contactId } = req.params;
+      const { artistId, locationId } = req.query;
+
+      let query = supabase
+        .from("transactions")
+        .select("*")
+        .eq("contact_id", contactId);
+
+      if (artistId) query = query.eq("artist_ghl_id", artistId);
+      if (locationId) query = query.eq("location_id", locationId);
+
+      const { data: transactions, error } = await query.order("session_date", { ascending: false });
+      if (error) throw error;
+
+      // Enrich empty contact_name from GHL if needed
+      const needsEnrichment = (transactions || []).some(
+        tx => !tx.contact_name || tx.contact_name.trim() === ""
+      );
+      if (needsEnrichment && contactId !== "walk_in") {
+        const isBarberLocation = locationId === process.env.GHL_BARBER_LOCATION_ID;
+        let resolvedName = "";
+        try {
+          let contact;
+          if (isBarberLocation && ghlBarber) {
+            const data = await ghlBarber.contacts.getContact({ contactId });
+            contact = data?.contact || data;
+          } else {
+            contact = await getContact(contactId);
+          }
+          resolvedName = contact?.contactName || contact?.name
+            || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "";
+        } catch { /* ignore */ }
+
+        if (resolvedName) {
+          for (const tx of transactions || []) {
+            if (!tx.contact_name || tx.contact_name.trim() === "") {
+              tx.contact_name = resolvedName;
+            }
+          }
+          // Persist enriched names
+          supabase.from("transactions")
+            .update({ contact_name: resolvedName })
+            .eq("contact_id", contactId)
+            .eq("contact_name", "")
+            .then(() => {}).catch(() => {});
+        }
+      }
+
+      res.json({ success: true, transactions: transactions || [] });
+    } catch (error) {
+      console.error("[API] Error fetching contact transactions:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/contacts/:contactId/appointments - Get appointment history for a contact
+  app.get("/api/contacts/:contactId/appointments", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { locationId } = req.query;
+
+      if (!contactId) {
+        return res.status(400).json({ success: false, error: "contactId is required" });
+      }
+
+      const isBarberLocation = locationId === process.env.GHL_BARBER_LOCATION_ID;
+      let events = [];
+
+      if (isBarberLocation && ghlBarber) {
+        // Barbershop: use barber SDK
+        const result = await ghlBarber.contacts.getAppointmentsForContact({ contactId });
+        events = result?.events || [];
+      } else {
+        // Tattoo shop: use existing helper
+        events = await listAppointmentsForContact(contactId);
+      }
+
+      // Sort by startTime descending (most recent first)
+      events.sort((a, b) => new Date(b.startTime) - new Date(a.startTime));
+
+      res.json({ success: true, appointments: events });
+    } catch (error) {
+      console.error("[API] Error fetching contact appointments:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // PUT /api/contacts/:contactId/quote - Update contact's quote_to_client custom field
   app.put("/api/contacts/:contactId/quote", async (req, res) => {
     try {
