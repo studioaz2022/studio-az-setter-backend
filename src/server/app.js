@@ -11,7 +11,6 @@ const {
   getContact,
   getContactV2,
   updateSystemFields,
-  getContact,
   createContact,
   updateContact,
   lookupContactIdByEmailOrPhone,
