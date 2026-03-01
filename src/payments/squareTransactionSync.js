@@ -350,29 +350,37 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   }
 
   // If contact matched but no same-day appointment, check if this is a deposit
-  // by looking for the contact's future appointment on barbershop calendars
-  if (contactId && !matchedAppointment && !orderDetails.isProductSale && ghlBarber) {
+  // by querying the Supabase appointments table for the contact's future appointment.
+  // GHL appointment webhooks already persist appointments to Supabase in real time,
+  // so we can look up future appointments without calling the GHL API.
+  if (contactId && !matchedAppointment && !orderDetails.isProductSale) {
     const hasTip = squarePayment.tip_money?.amount > 0;
     const isCustomAmount = orderDetails.itemType === "CUSTOM_AMOUNT" || orderDetails.itemType === null;
     const isLikelyDeposit = !hasTip && isCustomAmount && (serviceCents / 100 === 40 || serviceCents / 100 === 50);
 
     if (isLikelyDeposit) {
       try {
-        const contactAppts = await ghlBarber.contacts.getAppointmentsForContact({ contactId });
-        const futureAppts = (contactAppts?.events || [])
-          .filter((apt) => {
-            const aptStart = new Date(apt.startTime);
-            const paymentTime = new Date(createdAt);
-            return aptStart > paymentTime && ["confirmed", "showed", "new"].includes(apt.appointmentStatus);
-          })
-          .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+        const { data: futureAppts } = await supabase
+          .from("appointments")
+          .select("id, calendar_id, start_time, contact_id")
+          .eq("contact_id", contactId)
+          .gt("start_time", createdAt)
+          .in("status", ["confirmed", "showed", "new"])
+          .order("start_time", { ascending: true })
+          .limit(1);
 
-        if (futureAppts.length > 0) {
-          matchedAppointment = futureAppts[0];
-          console.log(`[SquareSync] Deposit linked to future appointment ${matchedAppointment.id} on ${toLocalDate(matchedAppointment.startTime)} (payment on ${toLocalDate(createdAt)})`);
+        if (futureAppts && futureAppts.length > 0) {
+          const apt = futureAppts[0];
+          matchedAppointment = {
+            id: apt.id,
+            calendarId: apt.calendar_id,
+            startTime: apt.start_time,
+            contactId: apt.contact_id,
+          };
+          console.log(`[SquareSync] Deposit linked to future appointment ${apt.id} on ${toLocalDate(apt.start_time)} (payment on ${toLocalDate(createdAt)})`);
         }
       } catch (err) {
-        console.warn(`[SquareSync] Failed to fetch future appointments for deposit linking: ${err.message}`);
+        console.warn(`[SquareSync] Failed to find future appointment for deposit: ${err.message}`);
       }
     }
   }
