@@ -316,6 +316,39 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     }
   }
 
+  // Fallback: if contactId-based matching failed (common with duplicate GHL contacts),
+  // try matching by contact name in appointment titles on the same day
+  if (contactId && !matchedAppointment && appointments.length > 0) {
+    // We'll resolve the name first for this fallback
+    let tempName = "";
+    try {
+      let contact;
+      if (ghlBarber) {
+        const data = await ghlBarber.contacts.getContact({ contactId });
+        contact = data?.contact || data;
+      } else {
+        contact = await getContact(contactId);
+      }
+      tempName = (contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim()).toLowerCase();
+    } catch { /* ignore */ }
+
+    if (tempName) {
+      const paymentDay = toLocalDate(createdAt);
+      const nameAppts = appointments.filter((apt) => {
+        if (toLocalDate(apt.startTime) !== paymentDay) return false;
+        const aptTitle = (apt.title || "").toLowerCase();
+        // GHL title format: "Service: Contact Name" or "Contact Name - Service"
+        const colonIdx = aptTitle.indexOf(":");
+        const aptName = colonIdx !== -1 ? aptTitle.slice(colonIdx + 1).trim() : aptTitle.split(" - ")[0]?.trim();
+        return aptName && (aptName.includes(tempName) || tempName.includes(aptName));
+      });
+      if (nameAppts.length === 1) {
+        matchedAppointment = nameAppts[0];
+        console.log(`[SquareSync] Linked by name "${tempName}" to appointment ${matchedAppointment.id} (contactId mismatch: apt=${matchedAppointment.contactId}, lookup=${contactId})`);
+      }
+    }
+  }
+
   if (!contactId) {
     // No match — return for manual review (order details already on paymentSummary)
     // Include squarePayment + orderDetails so batch proximity matching can record if it finds a match
@@ -646,6 +679,17 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
       transactionType = "deposit";
       console.log(`[SquareSync] Deposit detected: $${serviceAmount} matches ${depositPct}% of $${listedPrice} (itemType=${itemType}) for calendar ${calendarId}`);
     }
+  } else if (!calendarId && !isProductSale) {
+    // Fallback deposit detection when no calendarId is available
+    // (e.g., deposit made at booking time, appointment not yet linked)
+    // Known deposit amounts: $40 (50% of $80 haircut), $50 (50% of $100 haircut+beard)
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
+    if (!hasTip && isCustomAmount && isKnownDepositAmount) {
+      transactionType = "deposit";
+      console.log(`[SquareSync] Deposit detected (no calendar): $${serviceAmount} is a known deposit amount (itemType=${itemType})`);
+    }
   }
 
   // Tip & service price calculation
@@ -787,6 +831,14 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
     if (!hasTip && amountMatches && isCustomAmount) {
+      transactionType = "deposit";
+    }
+  } else if (!calendarId && !isProductSale) {
+    // Fallback deposit detection without calendarId
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
+    if (!hasTip && isCustomAmount && isKnownDepositAmount) {
       transactionType = "deposit";
     }
   }
