@@ -388,7 +388,7 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   } catch { /* ignore — name is nice-to-have */ }
 
   // Record as a transaction in Supabase
-  await recordTransaction({
+  const { transactionType } = await recordTransaction({
     contactId,
     contactName,
     barberGhlId,
@@ -402,6 +402,12 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     discountCents: orderDetails.totalDiscountCents,
     orderDetails,
   });
+
+  // Deposits are saved to Supabase but excluded from the Review Payments screen.
+  // The Review Payments screen is only for matching appointments to after-service payments.
+  if (transactionType === "deposit") {
+    return { matched: true, payment: null, autoMatchDetail: null };
+  }
 
   const autoMatchDetail = {
     squarePaymentId: paymentId,
@@ -496,7 +502,7 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
       const totalCents = sp.total_money?.amount || sp.amount_money?.amount || 0;
       const serviceCents = sp.amount_money?.amount || 0;
 
-      await recordTransaction({
+      const { transactionType } = await recordTransaction({
         contactId,
         contactName,
         barberGhlId,
@@ -510,6 +516,9 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         discountCents: candidate.orderDetails?.totalDiscountCents || null,
         orderDetails: candidate.orderDetails,
       });
+
+      // Skip deposits — they're saved but don't belong in the Review Payments screen
+      if (transactionType === "deposit") continue;
 
       const autoMatchDetail = {
         squarePaymentId: sp.id,
@@ -764,6 +773,8 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     console.error(`[SquareSync] Failed to record transaction ${squarePayment.id}: code=${error.code} msg=${error.message} details=${error.details} hint=${error.hint}`);
     throw new Error(`Supabase insert failed: ${error.message} (${error.code})`);
   }
+
+  return { transactionType };
 }
 
 /**
