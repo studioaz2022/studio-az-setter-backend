@@ -1824,13 +1824,13 @@ function createApp() {
             }
             const resolvedName = contact?.contactName || contact?.name
               || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "";
-            nameCache[cid] = resolvedName;
+            nameCache[cid] = resolvedName || "Unknown";
             if (!resolvedName) {
-              console.log(`[Earnings] Could not resolve name for contact ${cid}`);
+              console.log(`[Earnings] Could not resolve name for contact ${cid}, storing "Unknown"`);
             }
           } catch (err) {
             console.warn(`[Earnings] Failed to fetch contact ${cid}: ${err.message}`);
-            nameCache[cid] = "";
+            nameCache[cid] = "Unknown";
           }
         }));
 

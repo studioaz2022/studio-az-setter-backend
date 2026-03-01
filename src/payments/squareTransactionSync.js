@@ -727,14 +727,12 @@ async function updateLastSynced(barberGhlId, cursor) {
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
 async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
-  // Check not already recorded (maybeSingle to avoid throw on 0 rows)
+  // Check if already recorded — if so, update instead of insert (handles re-assignment)
   const { data: existing } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", squarePaymentId)
     .maybeSingle();
-
-  if (existing) return { alreadyRecorded: true };
 
   // Resolve contact name if not provided (use barber SDK for barbershop contacts)
   let resolvedName = contactName || "";
@@ -749,6 +747,24 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
       }
       resolvedName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
     } catch { /* ignore */ }
+  }
+
+  // If transaction already exists, update it (re-assignment from review UI)
+  if (existing) {
+    const { error: updateErr } = await supabase
+      .from("transactions")
+      .update({
+        contact_id: contactId,
+        contact_name: resolvedName || undefined,
+        appointment_id: appointmentId || null,
+        calendar_id: calendarId || null,
+        notes: note || null,
+      })
+      .eq("id", existing.id);
+
+    if (updateErr) throw new Error(`Failed to reassign payment: ${updateErr.message}`);
+    console.log(`[SquareSync] Reassigned existing payment ${squarePaymentId} to contact ${contactId}, appointment ${appointmentId || "none"}`);
+    return { reassigned: true };
   }
 
   // amountCents = total_money (service + tip), serviceCents = amount_money (base charge)
