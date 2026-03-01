@@ -349,6 +349,34 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     }
   }
 
+  // If contact matched but no same-day appointment, check if this is a deposit
+  // by looking for the contact's future appointment on barbershop calendars
+  if (contactId && !matchedAppointment && !orderDetails.isProductSale && ghlBarber) {
+    const hasTip = squarePayment.tip_money?.amount > 0;
+    const isCustomAmount = orderDetails.itemType === "CUSTOM_AMOUNT" || orderDetails.itemType === null;
+    const isLikelyDeposit = !hasTip && isCustomAmount && (serviceCents / 100 === 40 || serviceCents / 100 === 50);
+
+    if (isLikelyDeposit) {
+      try {
+        const contactAppts = await ghlBarber.contacts.getAppointmentsForContact({ contactId });
+        const futureAppts = (contactAppts?.events || [])
+          .filter((apt) => {
+            const aptStart = new Date(apt.startTime);
+            const paymentTime = new Date(createdAt);
+            return aptStart > paymentTime && ["confirmed", "showed", "new"].includes(apt.appointmentStatus);
+          })
+          .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+        if (futureAppts.length > 0) {
+          matchedAppointment = futureAppts[0];
+          console.log(`[SquareSync] Deposit linked to future appointment ${matchedAppointment.id} on ${toLocalDate(matchedAppointment.startTime)} (payment on ${toLocalDate(createdAt)})`);
+        }
+      } catch (err) {
+        console.warn(`[SquareSync] Failed to fetch future appointments for deposit linking: ${err.message}`);
+      }
+    }
+  }
+
   if (!contactId) {
     // No match — return for manual review (order details already on paymentSummary)
     // Include squarePayment + orderDetails so batch proximity matching can record if it finds a match
