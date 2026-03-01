@@ -1,6 +1,12 @@
 // squareTransactionSync.js
 // Pulls a barber's Square payments and attempts to match them to GHL contacts.
-// Matching strategy: email/phone lookup → appointment proximity → manual review.
+// Matching strategy:
+//   1. Email/phone lookup via Square customer → GHL contact
+//   2. ContactId-based appointment linking (same-day or name fallback)
+//   3. Deposit detection → future appointment linking via Supabase
+//   4. Batch sequential matching: remaining unmatched payments paired with unclaimed
+//      appointments in chronological order (Nth payment → Nth appointment)
+//   5. Manual review for anything still unmatched
 // Unmatched payments are returned for the barber to manually review in the app.
 
 const axios = require("axios");
@@ -259,31 +265,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     }
   }
 
-  // Appointment proximity matching (if email/phone failed)
-  // Skip for product sales — they aren't tied to appointments
+  // If contact was found via email/phone, try to find their appointment
   let matchedAppointment = null;
-  if (!contactId && !orderDetails.isProductSale && appointments.length > 0) {
-    const paymentTime = new Date(createdAt);
-    const THIRTY_MIN_MS = 30 * 60 * 1000;
-
-    const proximityMatches = appointments.filter((apt) => {
-      const aptStart = new Date(apt.startTime);
-      const aptEnd = new Date(apt.endTime);
-      // Payment must fall between appointment start and 30min after end
-      return paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + THIRTY_MIN_MS);
-    });
-
-    if (proximityMatches.length === 1 && proximityMatches[0].contactId) {
-      matchedAppointment = proximityMatches[0];
-      contactId = matchedAppointment.contactId;
-      matchMethod = "appointment_proximity";
-      console.log(`[SquareSync] Proximity match: payment ${paymentId} → appointment ${matchedAppointment.id} (contact ${contactId})`);
-    } else if (proximityMatches.length > 1) {
-      console.log(`[SquareSync] Ambiguous proximity: payment ${paymentId} matched ${proximityMatches.length} appointments — skipping auto-match`);
-    }
-  }
-
-  // If contact was found via email/phone (not proximity), still try to find their appointment
   // so we can link the transaction to the correct appointment_id and calendar_id
   if (contactId && !matchedAppointment && appointments.length > 0) {
     const paymentTime = new Date(createdAt);
@@ -439,18 +422,17 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
 }
 
 /**
- * Batch per-day sequential proximity matching.
- * For unmatched non-product payments, groups them by day and matches sequentially
- * against appointments sorted by start time. This handles back-to-back barbershop
- * appointments where window-based matching creates ambiguous overlaps.
+ * Batch per-day sequential matching.
+ * Groups unmatched non-product payments by day, sorts them chronologically,
+ * and pairs them with unclaimed appointments in chronological order.
  *
- * Algorithm: walk through payments in time order; each payment claims the best
- * matching appointment (aptStart ≤ paymentTime ≤ aptEnd + 30min, earliest first,
- * not already claimed). This naturally pairs payments with appointments in order.
+ * Algorithm: for each day, sort payments by time and appointments by start time,
+ * then pair the Nth payment with the Nth unclaimed appointment. This is more
+ * reliable than time-window matching because payments naturally come in the same
+ * order as appointments (1st client pays first, 2nd client pays second, etc.).
  */
 async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, accessToken) {
-  const THIRTY_MIN_MS = 30 * 60 * 1000;
-  const newlyMatched = []; // indices into unmatchedResults that got matched
+  const newlyMatched = [];
 
   // Filter to non-product unmatched payments that have timestamps
   const candidates = unmatchedResults
@@ -481,25 +463,19 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
     );
     const dayAppts = (aptsByDay[day] || [])
       .slice()
+      .filter((apt) => apt.contactId)
       .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
-    const claimedAptIds = new Set();
+    if (dayAppts.length === 0) continue;
 
+    // Sequential pairing: Nth unmatched payment → Nth unclaimed appointment
+    let aptIdx = 0;
     for (const candidate of dayPayments) {
-      const paymentTime = new Date(candidate.payment.createdAt);
+      if (aptIdx >= dayAppts.length) break;
 
-      // Find the best unclaimed appointment for this payment
-      const match = dayAppts.find((apt) => {
-        if (claimedAptIds.has(apt.id)) return false;
-        if (!apt.contactId) return false;
-        const aptStart = new Date(apt.startTime);
-        const aptEnd = new Date(apt.endTime);
-        return paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + THIRTY_MIN_MS);
-      });
+      const match = dayAppts[aptIdx];
+      aptIdx++;
 
-      if (!match) continue;
-
-      claimedAptIds.add(match.id);
       const contactId = match.contactId;
 
       // Fetch contact name
@@ -546,11 +522,11 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         amountCents: totalCents,
         serviceCents,
         createdAt: sp.created_at,
-        matchMethod: "batch_proximity",
+        matchMethod: "batch_sequential",
         squareTipCents: sp.tip_money?.amount || null,
       };
 
-      console.log(`[SquareSync] Batch match: payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
+      console.log(`[SquareSync] Sequential match: payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
       newlyMatched.push({ idx: candidate._idx, autoMatchDetail });
     }
   }
