@@ -23,6 +23,25 @@ const SQUARE_BASE_URL = IS_PROD
 
 const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 
+// Barbershop timezone (America/Chicago — CST/CDT)
+const BARBER_TZ = "America/Chicago";
+
+/**
+ * Convert a UTC ISO string to a local YYYY-MM-DD date string.
+ * Uses Intl.DateTimeFormat to handle CST/CDT automatically.
+ */
+function toLocalDate(utcIsoString) {
+  const dt = new Date(utcIsoString);
+  // Format as YYYY-MM-DD in the barbershop timezone
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: BARBER_TZ,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(dt);
+  return parts; // "en-CA" locale gives "YYYY-MM-DD" format
+}
+
 /**
  * Sync a barber's Square payments into our transactions table.
  *
@@ -284,11 +303,11 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
       matchedAppointment = contactAppts[0];
       console.log(`[SquareSync] Linked email/phone-matched contact ${contactId} to appointment ${matchedAppointment.id}`);
     } else {
-      // Broaden: find any appointment for this contact on the same day
-      const paymentDay = paymentTime.toISOString().slice(0, 10);
+      // Broaden: find any appointment for this contact on the same local day
+      const paymentDay = toLocalDate(paymentTime.toISOString());
       const sameDayAppts = appointments.filter((apt) => {
         if (apt.contactId !== contactId) return false;
-        return new Date(apt.startTime).toISOString().slice(0, 10) === paymentDay;
+        return toLocalDate(apt.startTime) === paymentDay;
       });
       if (sameDayAppts.length === 1) {
         matchedAppointment = sameDayAppts[0];
@@ -371,18 +390,18 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
 
   if (candidates.length === 0 || appointments.length === 0) return newlyMatched;
 
-  // Group candidates by day (UTC date string)
+  // Group candidates by local date (barbershop timezone)
   const byDay = {};
   for (const c of candidates) {
-    const day = new Date(c.payment.createdAt).toISOString().slice(0, 10);
+    const day = toLocalDate(c.payment.createdAt);
     if (!byDay[day]) byDay[day] = [];
     byDay[day].push(c);
   }
 
-  // Group appointments by day
+  // Group appointments by local date
   const aptsByDay = {};
   for (const apt of appointments) {
-    const day = new Date(apt.startTime).toISOString().slice(0, 10);
+    const day = toLocalDate(apt.startTime);
     if (!aptsByDay[day]) aptsByDay[day] = [];
     aptsByDay[day].push(apt);
   }
@@ -675,7 +694,7 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     settlement_status: "settled", // Already paid directly to barber
     square_payment_id: squarePayment.id,
     square_order_id: squarePayment.order_id || null,
-    session_date: createdAt,
+    session_date: toLocalDate(createdAt),
     square_payment_time: createdAt,
     location_id: BARBER_LOCATION_ID,
     notes,
@@ -786,7 +805,7 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     artist_amount: grossAmount,
     settlement_status: "settled",
     square_payment_id: squarePaymentId,
-    session_date: createdAt,
+    session_date: toLocalDate(createdAt),
     square_payment_time: createdAt,
     location_id: BARBER_LOCATION_ID,
     notes: note || null,
@@ -848,7 +867,7 @@ async function recordWalkIn({ barberGhlId, squarePaymentId, amountCents, created
     artist_amount: grossAmount,
     settlement_status: "settled",
     square_payment_id: squarePaymentId,
-    session_date: createdAt,
+    session_date: toLocalDate(createdAt),
     square_payment_time: createdAt,
     location_id: BARBER_LOCATION_ID,
     notes: "Walk-in customer",
