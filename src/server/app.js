@@ -4697,10 +4697,19 @@ function createApp() {
 
   /**
    * POST /api/kiosk/check-in
-   * Appointment check-in — marks appointment as "showed" + sends push notification
+   * Appointment check-in — sets "Here" custom field on contact, marks appointment
+   * as "showed", and sends push notification to the barber/artist.
+   *
+   * Body params:
+   *   ghlUserId     — barber/artist GHL user ID
+   *   customerName  — display name for push notification
+   *   location      — "barbershop" or "tattoo"
+   *   type          — "appointment" (normal) or "name_only" (fallback with custom field alert)
+   *   appointmentId — (optional) if known from carousel, skip name-based matching
+   *   contactId     — (optional) for setting custom fields on the contact
    */
   app.post("/api/kiosk/check-in", async (req, res) => {
-    const { ghlUserId, customerName, location } = req.body;
+    const { ghlUserId, customerName, location, type, appointmentId: knownApptId, contactId } = req.body;
 
     if (!ghlUserId || !customerName || !location) {
       return res.status(400).json({
@@ -4714,56 +4723,102 @@ function createApp() {
       const apnsService = require("../services/apnsService");
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
-      // 1. Find today's appointment for this customer on the barber/artist's calendar
-      //    and mark it as "showed"
-      let matchedAppointmentId = null;
-      try {
-        const isBarbershop = location === "barbershop";
-        const locationId = isBarbershop
-          ? BARBER_LOCATION_ID
-          : process.env.GHL_LOCATION_ID;
-        const sdkInstance = isBarbershop ? ghlBarber : undefined;
+      const isBarbershop = location === "barbershop";
+      const sdkInstance = isBarbershop ? ghlBarber : undefined;
+      const sdk = sdkInstance || require("../clients/ghlSdk").ghl;
 
-        const now = new Date();
-        const startOfDay = new Date(now);
-        startOfDay.setHours(0, 0, 0, 0);
-        const endOfDay = new Date(now);
-        endOfDay.setHours(23, 59, 59, 999);
+      const CHECK_IN_FIELD_ID = "J78FOcL9lie4BKji08gs";
+      const WALK_IN_SERVICE_FIELD_ID = "ez95QC6Ois2V2uAFQUGY";
 
-        const events = await fetchAppointmentsForDateRange({
-          locationId,
-          startTime: startOfDay.toISOString(),
-          endTime: endOfDay.toISOString(),
-          userId: ghlUserId,
-          sdkInstance,
-        });
+      let matchedAppointmentId = knownApptId || null;
+      let matchedContactId = contactId || null;
 
-        // Match by customer name (case-insensitive first name)
-        const inputFirst = customerName.trim().split(/\s+/)[0].toLowerCase();
-        const match = events.find((evt) => {
-          // Only match non-cancelled, future or current appointments
-          if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
-          const contactName = evt.contact?.name || evt.title || "";
-          const contactFirst = contactName.trim().split(/\s+/)[0].toLowerCase();
-          return contactFirst === inputFirst;
-        });
-
-        if (match) {
-          matchedAppointmentId = match.id;
-          const sdk = sdkInstance || require("../clients/ghlSdk").ghl;
+      // 1. If appointmentId is provided (from carousel), use it directly.
+      //    Otherwise fall back to name-based matching for tattoo check-ins.
+      if (matchedAppointmentId) {
+        // Mark appointment as "showed"
+        try {
           await sdk.calendars.editAppointment(
-            { eventId: match.id },
+            { eventId: matchedAppointmentId },
             { appointmentStatus: "showed", toNotify: false }
           );
-          console.log(`✅ [KIOSK] Marked appointment ${match.id} as showed for ${customerName}`);
-        } else {
-          console.log(`⚠️ [KIOSK] No matching appointment found today for ${customerName} with user ${ghlUserId}`);
+          console.log(`✅ [KIOSK] Marked appointment ${matchedAppointmentId} as showed for ${customerName}`);
+        } catch (apptErr) {
+          console.error("⚠️ [KIOSK] Appointment status update failed:", apptErr.message);
         }
-      } catch (apptErr) {
-        console.error("⚠️ [KIOSK] Appointment lookup/update failed (continuing with push):", apptErr.message);
+      } else if (type !== "name_only") {
+        // Legacy fallback: match by name (used by tattoo check-in)
+        try {
+          const locationId = isBarbershop ? BARBER_LOCATION_ID : process.env.GHL_LOCATION_ID;
+          const now = new Date();
+          const startOfDay = new Date(now);
+          startOfDay.setHours(0, 0, 0, 0);
+          const endOfDay = new Date(now);
+          endOfDay.setHours(23, 59, 59, 999);
+
+          const events = await fetchAppointmentsForDateRange({
+            locationId,
+            startTime: startOfDay.toISOString(),
+            endTime: endOfDay.toISOString(),
+            userId: ghlUserId,
+            sdkInstance,
+          });
+
+          const inputFirst = customerName.trim().split(/\s+/)[0].toLowerCase();
+          const match = events.find((evt) => {
+            if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
+            const contactName = evt.contact?.name || evt.title || "";
+            const contactFirst = contactName.trim().split(/\s+/)[0].toLowerCase();
+            return contactFirst === inputFirst;
+          });
+
+          if (match) {
+            matchedAppointmentId = match.id;
+            matchedContactId = matchedContactId || match.contact?.id;
+            await sdk.calendars.editAppointment(
+              { eventId: match.id },
+              { appointmentStatus: "showed", toNotify: false }
+            );
+            console.log(`✅ [KIOSK] Marked appointment ${match.id} as showed for ${customerName}`);
+          }
+        } catch (apptErr) {
+          console.error("⚠️ [KIOSK] Appointment lookup/update failed:", apptErr.message);
+        }
       }
 
-      // 2. Send push notification to barber/artist
+      // 2. Set custom field on the contact
+      if (matchedContactId && isBarbershop) {
+        try {
+          if (type === "name_only") {
+            // Fallback flow — alert barber with walk-in service field
+            await ghlBarber.contacts.updateContact(
+              { contactId: matchedContactId },
+              {
+                assignedTo: ghlUserId,
+                customFields: [
+                  { id: WALK_IN_SERVICE_FIELD_ID, field_value: "question. Check with them quick" },
+                ],
+              }
+            );
+            console.log(`✅ [KIOSK] Set alert custom field on contact ${matchedContactId}`);
+          } else {
+            // Normal appointment check-in — set "Here" field
+            await ghlBarber.contacts.updateContact(
+              { contactId: matchedContactId },
+              {
+                customFields: [
+                  { id: CHECK_IN_FIELD_ID, field_value: "Here" },
+                ],
+              }
+            );
+            console.log(`✅ [KIOSK] Set 'Here' custom field on contact ${matchedContactId}`);
+          }
+        } catch (cfErr) {
+          console.error("⚠️ [KIOSK] Custom field update failed:", cfErr.message);
+        }
+      }
+
+      // 3. Send push notification to barber/artist
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("id")
@@ -4804,6 +4859,175 @@ function createApp() {
       return res.json({ success: true, notified: true, appointmentId: matchedAppointmentId });
     } catch (error) {
       console.error("❌ [KIOSK] Check-in error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/kiosk/barber-appointments?ghlUserId=X
+   * Returns today's appointments for a specific barber — used by the kiosk
+   * appointment carousel so clients can tap their name/time to check in.
+   */
+  app.get("/api/kiosk/barber-appointments", async (req, res) => {
+    const { ghlUserId } = req.query;
+
+    if (!ghlUserId) {
+      return res.status(400).json({ success: false, error: "ghlUserId is required" });
+    }
+
+    try {
+      const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
+
+      const now = new Date();
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const events = await fetchAppointmentsForDateRange({
+        locationId: BARBER_LOCATION_ID,
+        startTime: startOfDay.toISOString(),
+        endTime: endOfDay.toISOString(),
+        userId: ghlUserId,
+        sdkInstance: ghlBarber,
+      });
+
+      // Filter to active appointments only, extract key fields
+      const appointments = events
+        .filter((evt) => {
+          const status = evt.appointmentStatus;
+          return status !== "cancelled" && status !== "noshow" && status !== "invalid";
+        })
+        .map((evt) => ({
+          id: evt.id,
+          contactId: evt.contact?.id || null,
+          contactName: evt.contact?.name || evt.title || "Unknown",
+          contactPhone: evt.contact?.phone || evt.contact?.phoneNumber || null,
+          startTime: evt.startTime,
+          endTime: evt.endTime,
+          status: evt.appointmentStatus,
+          calendarId: evt.calendarId || null,
+        }))
+        .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+      console.log(`✅ [KIOSK] Found ${appointments.length} appointments today for barber ${ghlUserId}`);
+      return res.json({ success: true, appointments });
+    } catch (error) {
+      console.error("❌ [KIOSK] Barber appointments error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/kiosk/phone-lookup?phone=X&ghlUserId=X
+   * Searches for a contact by phone number on the barbershop location,
+   * then checks if they have an appointment today or on another day.
+   */
+  app.get("/api/kiosk/phone-lookup", async (req, res) => {
+    const { phone, ghlUserId } = req.query;
+
+    if (!phone || !ghlUserId) {
+      return res.status(400).json({ success: false, error: "phone and ghlUserId are required" });
+    }
+
+    try {
+      const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
+
+      // 1. Find contact by phone
+      let contact = null;
+      try {
+        const dupeData = await ghlBarber.contacts.getDuplicateContact({
+          locationId: BARBER_LOCATION_ID,
+          number: phone,
+        });
+        contact = dupeData?.contact || null;
+      } catch (err) {
+        // Not found
+      }
+
+      if (!contact) {
+        return res.json({ success: true, found: false, reason: "no_contact" });
+      }
+
+      // 2. Check for appointments today with this barber
+      const now = new Date();
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      const todayEvents = await fetchAppointmentsForDateRange({
+        locationId: BARBER_LOCATION_ID,
+        startTime: startOfDay.toISOString(),
+        endTime: endOfDay.toISOString(),
+        userId: ghlUserId,
+        sdkInstance: ghlBarber,
+      });
+
+      // Find this contact's appointment today
+      const todayMatch = todayEvents.find((evt) => {
+        if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
+        return evt.contact?.id === contact.id;
+      });
+
+      if (todayMatch) {
+        return res.json({
+          success: true,
+          found: true,
+          reason: "found_today",
+          appointment: {
+            id: todayMatch.id,
+            contactId: contact.id,
+            contactName: contact.name || `${contact.firstName || ""} ${contact.lastName || ""}`.trim(),
+            startTime: todayMatch.startTime,
+            endTime: todayMatch.endTime,
+          },
+        });
+      }
+
+      // 3. Check next 7 days for appointments with this barber
+      const endWeek = new Date(now);
+      endWeek.setDate(endWeek.getDate() + 7);
+      endWeek.setHours(23, 59, 59, 999);
+
+      const weekEvents = await fetchAppointmentsForDateRange({
+        locationId: BARBER_LOCATION_ID,
+        startTime: endOfDay.toISOString(),
+        endTime: endWeek.toISOString(),
+        userId: ghlUserId,
+        sdkInstance: ghlBarber,
+      });
+
+      const futureMatch = weekEvents.find((evt) => {
+        if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
+        return evt.contact?.id === contact.id;
+      });
+
+      if (futureMatch) {
+        return res.json({
+          success: true,
+          found: true,
+          reason: "wrong_day",
+          appointment: {
+            id: futureMatch.id,
+            contactId: contact.id,
+            contactName: contact.name || `${contact.firstName || ""} ${contact.lastName || ""}`.trim(),
+            startTime: futureMatch.startTime,
+            endTime: futureMatch.endTime,
+          },
+        });
+      }
+
+      // Contact exists but no appointment found with this barber
+      return res.json({
+        success: true,
+        found: true,
+        reason: "no_appointment",
+        contactId: contact.id,
+        contactName: contact.name || `${contact.firstName || ""} ${contact.lastName || ""}`.trim(),
+      });
+    } catch (error) {
+      console.error("❌ [KIOSK] Phone lookup error:", error);
       return res.status(500).json({ success: false, error: error.message });
     }
   });
