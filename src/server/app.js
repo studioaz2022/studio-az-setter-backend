@@ -1868,6 +1868,8 @@ function createApp() {
       let totalServiceRevenue = 0;
       let totalTips = 0;
       let transactionsWithTips = 0;
+      let productRevenue = 0;
+      let productSaleCount = 0;
       const revenueByMethod = { square: 0, cash: 0, venmo: 0, zelle: 0, other: 0 };
 
       for (const tx of transactions || []) {
@@ -1876,6 +1878,12 @@ function createApp() {
         // Calculate revenue generated (sum of deposits + session payments)
         if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
           revenueGenerated += parseFloat(tx.gross_amount) || 0;
+        }
+
+        // Product sale tracking
+        if (tx.transaction_type === 'product_sale') {
+          productRevenue += parseFloat(tx.gross_amount) || 0;
+          productSaleCount++;
         }
 
         // Tip tracking (from service_price / tip_amount columns)
@@ -1974,6 +1982,8 @@ function createApp() {
           averageTipAmount: transactionsWithTips > 0 ? totalTips / transactionsWithTips : 0,
           averageTipPercentage: totalServiceRevenue > 0 ? (totalTips / totalServiceRevenue) * 100 : 0,
           revenueByMethod,
+          productRevenue,
+          productSaleCount,
           transactions,
           topClients
         }
@@ -3270,6 +3280,7 @@ function createApp() {
             squareTipCents: match.squareTipCents,
             itemType: match.itemType,
             isProductSale: match.isProductSale,
+            basePriceCents: match.basePriceCents,
           });
           results.confirmed++;
         } catch (err) {

@@ -144,6 +144,32 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
     }
   }
 
+  // Auto-record unmatched product sales (they won't appear in Review Payments)
+  const productSales = unmatchedResults.filter((r) => r.payment?.isProductSale);
+  for (const ps of productSales) {
+    try {
+      await recordTransaction({
+        contactId: "walk_in",
+        contactName: "Walk-in",
+        barberGhlId,
+        squarePayment: { id: ps.payment.squarePaymentId, order_id: ps.payment.squareOrderId, tip_money: { amount: ps.payment.squareTipCents || 0 }, note: ps.payment.note },
+        totalCents: ps.payment.amountCents,
+        serviceCents: ps.payment.serviceCents || ps.payment.amountCents,
+        createdAt: ps.payment.createdAt,
+        appointmentId: null,
+        calendarId: null,
+        squareTipCents: ps.payment.squareTipCents || null,
+        discountCents: ps.payment.discountCents,
+        orderDetails: { itemType: ps.payment.itemType, lineItemName: ps.payment.lineItemName, isProductSale: true, basePriceCents: ps.payment.basePriceCents, totalTaxCents: null },
+      });
+      console.log(`[SquareSync] Auto-recorded product sale: ${ps.payment.squarePaymentId} ($${(ps.payment.basePriceCents || ps.payment.amountCents) / 100})`);
+    } catch (err) {
+      console.warn(`[SquareSync] Failed to auto-record product sale ${ps.payment.squarePaymentId}: ${err.message}`);
+    }
+  }
+  // Remove auto-recorded products from unmatched list
+  unmatchedResults = unmatchedResults.filter((r) => !r.payment?.isProductSale);
+
   const matched = synced - unmatchedResults.length;
   const unmatched = unmatchedResults.map((r) => r.payment);
 
@@ -438,6 +464,8 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     last4: squarePayment.card_details?.card?.last_4 || null,
     itemType: orderDetails?.itemType || null,
     isProductSale: orderDetails?.isProductSale || false,
+    basePriceCents: orderDetails?.basePriceCents || null,
+    totalTaxCents: orderDetails?.totalTaxCents || null,
     discountCents: orderDetails?.totalDiscountCents || null,
     note: squarePayment.note || null,
   };
@@ -578,6 +606,8 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         last4: sp.card_details?.card?.last_4 || null,
         itemType: candidate.orderDetails?.itemType || null,
         isProductSale: candidate.orderDetails?.isProductSale || false,
+        basePriceCents: candidate.orderDetails?.basePriceCents || null,
+        totalTaxCents: candidate.orderDetails?.totalTaxCents || null,
         discountCents: candidate.orderDetails?.totalDiscountCents || null,
         note: sp.note || null,
       };
@@ -640,7 +670,7 @@ async function lookupGhlContactByPhone(phone) {
  * @returns {{ totalDiscountCents: number|null, discountName: string|null, itemType: string|null, lineItemName: string|null, isProductSale: boolean }}
  */
 async function fetchSquareOrderDetails(accessToken, orderId) {
-  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false };
+  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false, basePriceCents: null, totalTaxCents: null };
   if (!orderId || !accessToken) return empty;
   try {
     const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
@@ -666,14 +696,18 @@ async function fetchSquareOrderDetails(accessToken, orderId) {
     );
     const isProductSale = itemType === "ITEM" && hasCatalogId && !isKnownService;
 
+    // Extract base price (listing price before tax) and tax for product sales
+    const basePriceCents = lineItem?.base_price_money?.amount || null;
+    const totalTaxCents = order.total_tax_money?.amount || null;
+
     if (totalDiscountCents) {
       console.log(`[SquareSync] Order ${orderId}: discount ${discountName || "unnamed"} = $${totalDiscountCents / 100}`);
     }
     if (isProductSale) {
-      console.log(`[SquareSync] Order ${orderId}: product sale detected — "${lineItemName}" (${itemType})`);
+      console.log(`[SquareSync] Order ${orderId}: product sale detected — "${lineItemName}" (${itemType}), base $${(basePriceCents || 0) / 100}, tax $${(totalTaxCents || 0) / 100}`);
     }
 
-    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale };
+    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale, basePriceCents, totalTaxCents };
   } catch (err) {
     console.warn(`[SquareSync] Failed to fetch order ${orderId}: ${err.message}`);
     return empty;
@@ -757,8 +791,11 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   // Determine transaction type using shared classifier
   const transactionType = await classifyTransactionType({ serviceCents, squareTipCents, calendarId, orderDetails });
 
-  if (transactionType === "product_sale") {
-    console.log(`[SquareSync] Product sale: $${grossAmount} — "${orderDetails?.lineItemName}"`);
+  // For product sales, use the listing price (before tax) as the revenue amount
+  if (transactionType === "product_sale" && orderDetails?.basePriceCents) {
+    const listingPrice = orderDetails.basePriceCents / 100;
+    const taxAmount = orderDetails.totalTaxCents ? orderDetails.totalTaxCents / 100 : 0;
+    console.log(`[SquareSync] Product sale: $${listingPrice} listing + $${taxAmount} tax = $${grossAmount} total — "${orderDetails?.lineItemName}"`);
   } else if (transactionType === "deposit") {
     const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
     const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
@@ -774,8 +811,11 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   let servicePrice = null;
   let tipAmount = null;
 
-  if (transactionType === "deposit" || transactionType === "product_sale") {
-    // Deposits and product sales are pure revenue, no tip
+  if (transactionType === "product_sale") {
+    // Product sales: use listing price (before tax) as revenue
+    servicePrice = orderDetails?.basePriceCents ? orderDetails.basePriceCents / 100 : serviceAmount;
+    tipAmount = 0;
+  } else if (transactionType === "deposit") {
     servicePrice = serviceAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
@@ -799,6 +839,11 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     notes = notes ? `${notes} | ${discountNote}` : discountNote;
   }
 
+  // For product sales, record listing price as gross_amount (exclude sales tax)
+  const recordedGross = (transactionType === "product_sale" && orderDetails?.basePriceCents)
+    ? orderDetails.basePriceCents / 100
+    : grossAmount;
+
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
     contact_name: contactName || "",
@@ -807,11 +852,11 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     transaction_type: transactionType,
     payment_method: "square",
     payment_recipient: "artist_direct", // Booth renters keep all their money
-    gross_amount: grossAmount,
+    gross_amount: recordedGross,
     shop_percentage: 0,
     artist_percentage: 100,
     shop_amount: 0,
-    artist_amount: grossAmount,
+    artist_amount: recordedGross,
     settlement_status: "settled", // Already paid directly to barber
     square_payment_id: squarePayment.id,
     square_order_id: squarePayment.order_id || null,
@@ -849,7 +894,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents }) {
   // Check if already recorded — if so, update instead of insert (handles re-assignment)
   const { data: existing } = await supabase
     .from("transactions")
@@ -926,7 +971,11 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
   let servicePrice = null;
   let tipAmount = null;
 
-  if (transactionType === "deposit" || transactionType === "product_sale") {
+  if (transactionType === "product_sale") {
+    // Use listing price (before tax) if available
+    servicePrice = basePriceCents ? basePriceCents / 100 : serviceAmount;
+    tipAmount = 0;
+  } else if (transactionType === "deposit") {
     servicePrice = serviceAmount;
     tipAmount = 0;
   } else if (squareTipCents != null && squareTipCents > 0) {
@@ -937,6 +986,11 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     tipAmount = 0;
   }
 
+  // For product sales, record listing price as gross_amount (exclude sales tax)
+  const recordedGross = (transactionType === "product_sale" && basePriceCents)
+    ? basePriceCents / 100
+    : grossAmount;
+
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,
     contact_name: resolvedName,
@@ -945,11 +999,11 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     transaction_type: transactionType,
     payment_method: "square",
     payment_recipient: "artist_direct",
-    gross_amount: grossAmount,
+    gross_amount: recordedGross,
     shop_percentage: 0,
     artist_percentage: 100,
     shop_amount: 0,
-    artist_amount: grossAmount,
+    artist_amount: recordedGross,
     settlement_status: "settled",
     square_payment_id: squarePaymentId,
     session_date: toLocalDate(createdAt),
