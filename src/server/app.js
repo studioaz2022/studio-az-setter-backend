@@ -4719,8 +4719,7 @@ function createApp() {
       try {
         const priceMap = await getServicePriceMap();
         for (const slot of allSlots) {
-          const priceEntry = priceMap[slot.calendarId];
-          slot.price = priceEntry ? priceEntry.price : 0;
+          slot.price = priceMap.get(slot.calendarId) || 0;
         }
       } catch (priceErr) {
         console.error("⚠️ [KIOSK] Price lookup failed:", priceErr.message);
