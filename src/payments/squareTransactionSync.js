@@ -678,32 +678,49 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
 
     if (dayAppts.length === 0) continue;
 
-    // Time-aware sequential pairing: for each unmatched payment, find the closest
-    // unclaimed appointment that falls within a reasonable time window.
-    // Payment must occur during the appointment or within 45 min after it ends.
+    // Time-aware matching: for each unmatched payment, find the best unclaimed
+    // appointment. Barbers often run behind, so payments come after the appointment ends.
+    //
+    // Scoring: prefer appointments that already ended before the payment was made.
+    // Among those, pick the one whose end time is closest to the payment time
+    // (most recently ended = most likely match). If no ended appointment fits,
+    // fall back to appointments currently in progress at payment time.
+    //
+    // Window: payment must be within 15 min before apt start → 60 min after apt end.
     const claimedAptIndices = new Set();
     for (const candidate of dayPayments) {
       const paymentTime = new Date(candidate.payment.createdAt);
 
-      // Find the best unclaimed appointment: closest in time, payment during or after apt
       let bestIdx = -1;
-      let bestDiff = Infinity;
+      let bestScore = Infinity; // lower = better
       for (let i = 0; i < dayAppts.length; i++) {
         if (claimedAptIndices.has(i)) continue;
         const aptStart = new Date(dayAppts[i].startTime);
-        const aptEnd = dayAppts[i].endTime ? new Date(dayAppts[i].endTime) : new Date(aptStart.getTime() + 60 * 60 * 1000); // default 1hr
-        const WINDOW_MS = 45 * 60 * 1000; // 45 min after appointment ends
-        // Payment must be >= appointment start and <= appointment end + 45min
-        if (paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + WINDOW_MS)) {
-          const diff = Math.abs(paymentTime - aptEnd);
-          if (diff < bestDiff) {
-            bestDiff = diff;
-            bestIdx = i;
-          }
+        const aptEnd = dayAppts[i].endTime ? new Date(dayAppts[i].endTime) : new Date(aptStart.getTime() + 60 * 60 * 1000);
+        const BEFORE_MS = 15 * 60 * 1000;
+        const AFTER_MS = 60 * 60 * 1000;
+        if (paymentTime < new Date(aptStart.getTime() - BEFORE_MS) ||
+            paymentTime > new Date(aptEnd.getTime() + AFTER_MS)) continue;
+
+        // Prefer appointments that ended before the payment (natural "pay after service")
+        // Score: time since apt ended (lower = better). Appointments not yet ended get a penalty.
+        let score;
+        if (paymentTime >= aptEnd) {
+          // Appointment already ended — ideal match. Score = minutes since end.
+          score = (paymentTime - aptEnd) / 60000;
+        } else {
+          // Appointment still in progress or hasn't started — unlikely match.
+          // Penalty: 1000 + minutes until end (so ended apts always win).
+          score = 1000 + (aptEnd - paymentTime) / 60000;
+        }
+
+        if (score < bestScore) {
+          bestScore = score;
+          bestIdx = i;
         }
       }
 
-      if (bestIdx === -1) continue; // No appointment within time window
+      if (bestIdx === -1) continue;
       claimedAptIndices.add(bestIdx);
       const match = dayAppts[bestIdx];
 
