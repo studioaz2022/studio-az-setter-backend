@@ -182,6 +182,66 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
 }
 
 /**
+ * Backfill a barber's Square transactions over a wide date range.
+ * Processes in monthly chunks to stay under the 500-payment safety cap
+ * per call to syncBarberTransactions().
+ *
+ * @param {string} barberGhlId
+ * @param {object} options
+ * @param {string} [options.startDate] - ISO date string (default: "2026-01-01")
+ * @param {string} [options.endDate]   - ISO date string (default: now)
+ * @returns {{ synced, matched, autoMatched, unmatched, chunksProcessed }}
+ */
+async function backfillBarberTransactions(barberGhlId, options = {}) {
+  const endDate = options.endDate ? new Date(options.endDate) : new Date();
+  const startDate = options.startDate
+    ? new Date(options.startDate)
+    : new Date("2026-01-01T00:00:00Z");
+
+  // Build monthly chunks: [Jan 1 → Feb 1], [Feb 1 → Mar 1], …
+  const chunks = [];
+  let chunkStart = new Date(startDate);
+  while (chunkStart < endDate) {
+    const chunkEnd = new Date(chunkStart);
+    chunkEnd.setUTCMonth(chunkEnd.getUTCMonth() + 1);
+    if (chunkEnd > endDate) chunkEnd.setTime(endDate.getTime());
+    chunks.push({ startDate: new Date(chunkStart), endDate: new Date(chunkEnd) });
+    chunkStart = new Date(chunkEnd);
+  }
+
+  const totals = {
+    synced: 0,
+    matched: 0,
+    autoMatched: [],
+    unmatched: [],
+    chunksProcessed: 0,
+  };
+
+  // Process chunks sequentially to respect API rate limits
+  for (const chunk of chunks) {
+    console.log(
+      `[Backfill] Processing chunk ${chunk.startDate.toISOString()} → ${chunk.endDate.toISOString()}`
+    );
+    const result = await syncBarberTransactions(barberGhlId, {
+      startDate: chunk.startDate.toISOString(),
+      endDate: chunk.endDate.toISOString(),
+      incremental: false,
+    });
+    totals.synced += result.synced;
+    totals.matched += result.matched;
+    totals.autoMatched.push(...result.autoMatched);
+    totals.unmatched.push(...result.unmatched);
+    totals.chunksProcessed++;
+  }
+
+  console.log(
+    `[Backfill] Complete: ${totals.synced} synced, ${totals.matched} matched, ` +
+      `${totals.unmatched.length} unmatched across ${totals.chunksProcessed} chunks`
+  );
+  return totals;
+}
+
+/**
  * Fetch payments from Square /v2/payments with pagination.
  */
 async function fetchSquarePayments(accessToken, locationId, { startDate, endDate, cursor }) {
@@ -1101,6 +1161,7 @@ async function recordWalkIn({ barberGhlId, squarePaymentId, amountCents, created
 
 module.exports = {
   syncBarberTransactions,
+  backfillBarberTransactions,
   assignUnmatchedPayment,
   unmatchPayment,
   recordWalkIn,

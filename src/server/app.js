@@ -36,6 +36,7 @@ const {
 } = require("../payments/squareOAuth");
 const {
   syncBarberTransactions,
+  backfillBarberTransactions,
   assignUnmatchedPayment,
   unmatchPayment,
   recordWalkIn,
@@ -3193,6 +3194,28 @@ function createApp() {
       res.json({ success: true, ...result });
     } catch (error) {
       console.error("[API] Error syncing barber transactions:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/backfill
+  // Backfill historical Square transactions (from 2026-01-01 by default).
+  // Processes in monthly chunks to handle large volumes.
+  // Body: { startDate?, endDate? }
+  app.post("/api/barbers/:barberGhlId/square/backfill", async (req, res) => {
+    req.setTimeout(300000);
+    res.setTimeout(300000);
+
+    try {
+      const { barberGhlId } = req.params;
+      const { startDate, endDate } = req.body;
+      const result = await backfillBarberTransactions(barberGhlId, {
+        startDate,
+        endDate,
+      });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Error backfilling barber transactions:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
