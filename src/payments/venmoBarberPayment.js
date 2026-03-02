@@ -216,6 +216,28 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     (appointmentId ? ` → apt: ${appointmentId}` : "")
   );
 
+  // Mirror to InstantDB for rent tracker income view (non-fatal)
+  try {
+    const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
+    const { weekOfDate } = require("../rentTracker/tenantMatcher");
+    await writeServiceIncome({
+      senderName: contactName || parsed.senderName,
+      amount: parsed.amount,
+      method: "venmo",
+      type: "service",
+      paidAt: paymentDate,
+      notes: parsed.note || null,
+      venmoTxId,
+      weekOf: weekOfDate(paymentDate),
+      location: "barbershop",
+      tipAmount: 0,
+      servicePriceAmount: parsed.amount,
+      barberGhlId,
+    });
+  } catch (err) {
+    console.warn(`  [VenmoBarber] InstantDB write failed (non-fatal): ${err.message}`);
+  }
+
   return { recorded: true, matched, contactName, appointmentId, venmoTxId };
 }
 

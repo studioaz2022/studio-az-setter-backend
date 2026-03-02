@@ -875,6 +875,27 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     throw new Error(`Supabase insert failed: ${error.message} (${error.code})`);
   }
 
+  // Mirror to InstantDB for rent tracker income view (non-fatal)
+  try {
+    const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
+    await writeServiceIncome({
+      senderName: contactName || "Walk-in",
+      amount: recordedGross,
+      method: "square",
+      type: transactionType === "session_payment" ? "service" : transactionType,
+      paidAt: new Date(createdAt),
+      notes,
+      squarePaymentId: squarePayment.id,
+      weekOf: require("../rentTracker/tenantMatcher").weekOfDate(new Date(createdAt)),
+      location: "barbershop",
+      tipAmount: tipAmount || 0,
+      servicePriceAmount: servicePrice,
+      barberGhlId,
+    });
+  } catch (err) {
+    console.warn(`[SquareSync] InstantDB write failed (non-fatal): ${err.message}`);
+  }
+
   return { transactionType };
 }
 

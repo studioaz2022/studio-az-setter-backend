@@ -1202,6 +1202,29 @@ function createApp() {
               console.log(`[Financial] Successfully recorded payment for contact ${contactId} (${checkStatus})`);
             }
           }
+
+          // Mirror tattoo deposit to InstantDB for rent tracker (non-fatal)
+          if (!alreadyProcessed) {
+            try {
+              const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
+              const { weekOfDate } = require("../rentTracker/tenantMatcher");
+              await writeServiceIncome({
+                senderName: contactName,
+                amount: amount / 100,
+                method: "square",
+                type: "deposit",
+                paidAt: new Date(),
+                notes: `Tattoo deposit`,
+                squarePaymentId: payment.id,
+                weekOf: weekOfDate(new Date()),
+                location: "tattoo",
+                tipAmount: 0,
+                servicePriceAmount: amount / 100,
+              });
+            } catch (instantErr) {
+              console.warn("[SquareWebhook] InstantDB write failed (non-fatal):", instantErr.message);
+            }
+          }
         } catch (financialErr) {
           console.error('[Financial] Error recording payment:', financialErr.message || financialErr);
           // Don't fail the webhook - deposit was already processed
