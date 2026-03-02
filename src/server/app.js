@@ -3369,6 +3369,103 @@ function createApp() {
     }
   });
 
+  // GET /api/barbers/:barberGhlId/venmo/unreviewed
+  // Fetch Venmo payments that need manual review (unmatched contact or no appointment).
+  app.get("/api/barbers/:barberGhlId/venmo/unreviewed", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { supabase } = require("../clients/supabaseClient");
+
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("artist_ghl_id", barberGhlId)
+        .eq("payment_method", "venmo")
+        .or("contact_id.eq.venmo_unmatched,appointment_id.is.null")
+        .order("session_date", { ascending: false });
+
+      if (error) throw new Error(error.message);
+
+      const payments = (data || []).map((tx) => ({
+        supabaseId: tx.id,
+        venmoTransactionId: tx.venmo_transaction_id,
+        amountCents: Math.round((tx.gross_amount || 0) * 100),
+        serviceCents: tx.service_price ? Math.round(tx.service_price * 100) : null,
+        createdAt: tx.created_at,
+        senderName: tx.contact_name,
+        note: tx.notes,
+        contactId: tx.contact_id,
+        contactName: tx.contact_name,
+        appointmentId: tx.appointment_id,
+        sessionDate: tx.session_date,
+      }));
+
+      console.log(`[API] Venmo unreviewed for ${barberGhlId}: ${payments.length} payments`);
+      res.json({ success: true, payments });
+    } catch (error) {
+      console.error("[API] Error fetching unreviewed Venmo payments:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/venmo/confirm
+  // Confirm/match Venmo payments by updating existing Supabase records.
+  // Body: { matches: [{ supabaseId, contactId, contactName, appointmentId?, calendarId? }], walkIns: [{ supabaseId }] }
+  app.post("/api/barbers/:barberGhlId/venmo/confirm", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { matches = [], walkIns = [] } = req.body;
+      const { supabase } = require("../clients/supabaseClient");
+
+      const results = { confirmed: 0, walkInsRecorded: 0, errors: [] };
+
+      // Process matches — update contact and appointment on existing records
+      for (const match of matches) {
+        try {
+          const updateFields = {
+            contact_id: match.contactId,
+            contact_name: match.contactName || null,
+          };
+          if (match.appointmentId) updateFields.appointment_id = match.appointmentId;
+          if (match.calendarId) updateFields.calendar_id = match.calendarId;
+
+          const { error } = await supabase
+            .from("transactions")
+            .update(updateFields)
+            .eq("id", match.supabaseId)
+            .eq("artist_ghl_id", barberGhlId);
+
+          if (error) throw new Error(error.message);
+          results.confirmed++;
+        } catch (err) {
+          results.errors.push({ supabaseId: match.supabaseId, error: err.message });
+        }
+      }
+
+      // Process walk-ins — mark as walk-in
+      for (const walkIn of walkIns) {
+        try {
+          const { error } = await supabase
+            .from("transactions")
+            .update({ contact_id: "walk_in", contact_name: "Walk-in" })
+            .eq("id", walkIn.supabaseId)
+            .eq("artist_ghl_id", barberGhlId);
+
+          if (error) throw new Error(error.message);
+          results.walkInsRecorded++;
+        } catch (err) {
+          results.errors.push({ supabaseId: walkIn.supabaseId, error: err.message });
+        }
+      }
+
+      console.log(`[API] Venmo confirm for ${barberGhlId}: ${results.confirmed} confirmed, ${results.walkInsRecorded} walk-ins, ${results.errors.length} errors`);
+      res.json({ success: results.errors.length === 0, ...results });
+    } catch (error) {
+      console.error("[API] Error confirming Venmo payments:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // POST /api/barbers/:barberGhlId/square/refresh-token
   // Manually refresh a single barber's Square access token.
   app.post("/api/barbers/:barberGhlId/square/refresh-token", async (req, res) => {
