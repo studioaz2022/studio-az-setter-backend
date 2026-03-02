@@ -35,6 +35,52 @@ const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 // Barbershop timezone (America/Chicago — CST/CDT)
 const BARBER_TZ = "America/Chicago";
 
+// Rate-limit helpers for GHL API (≤5 req/sec to stay under limits)
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Retry a function on 429 (Too Many Requests) errors with exponential backoff.
+ * @param {Function} fn - Async function to call
+ * @param {number} maxRetries - Maximum retry attempts (default: 3)
+ */
+async function withRetry(fn, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (err) {
+      const is429 = err?.statusCode === 429 || err?.response?.statusCode === 429 || err?.status === 429;
+      if (is429 && attempt < maxRetries) {
+        const delayMs = 1000 * (attempt + 1); // 1s, 2s, 3s
+        console.warn(`[SquareSync] GHL 429 — retrying in ${delayMs}ms (attempt ${attempt + 1}/${maxRetries})`);
+        await sleep(delayMs);
+        continue;
+      }
+      throw err;
+    }
+  }
+}
+
+/**
+ * Process items in small batches with a delay between batches.
+ * Prevents overwhelming external APIs with concurrent requests.
+ * @param {Array} items - Items to process
+ * @param {Function} fn - Async function to call for each item
+ * @param {number} batchSize - Concurrent items per batch (default: 3)
+ * @param {number} delayMs - Pause between batches in ms (default: 300)
+ */
+async function throttledMap(items, fn, batchSize = 3, delayMs = 300) {
+  const results = [];
+  for (let i = 0; i < items.length; i += batchSize) {
+    const batch = items.slice(i, i + batchSize);
+    const batchResults = await Promise.all(batch.map(fn));
+    results.push(...batchResults);
+    if (i + batchSize < items.length) {
+      await sleep(delayMs);
+    }
+  }
+  return results;
+}
+
 /**
  * Convert a UTC ISO string to a local YYYY-MM-DD date string.
  * Uses Intl.DateTimeFormat to handle CST/CDT automatically.
@@ -120,8 +166,13 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
   }
 
   // Attempt to match each payment to a GHL contact
-  const results = await Promise.all(
-    payments.map((p) => matchAndRecordPayment(p, barberGhlId, access_token, appointmentsForRange))
+  // Process payments in throttled batches (3 concurrent, 300ms between batches)
+  // to avoid 429 rate limits on GHL API during backfill
+  const results = await throttledMap(
+    payments,
+    (p) => matchAndRecordPayment(p, barberGhlId, access_token, appointmentsForRange),
+    3,
+    300
   );
 
   const synced = results.length;
@@ -396,10 +447,10 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     try {
       let contact;
       if (ghlBarber) {
-        const data = await ghlBarber.contacts.getContact({ contactId });
+        const data = await withRetry(() => ghlBarber.contacts.getContact({ contactId }));
         contact = data?.contact || data;
       } else {
-        contact = await getContact(contactId);
+        contact = await withRetry(() => getContact(contactId));
       }
       tempName = (contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim()).toLowerCase();
     } catch { /* ignore */ }
@@ -468,10 +519,10 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   try {
     let contact;
     if (ghlBarber) {
-      const data = await ghlBarber.contacts.getContact({ contactId });
+      const data = await withRetry(() => ghlBarber.contacts.getContact({ contactId }));
       contact = data?.contact || data;
     } else {
-      contact = await getContact(contactId);
+      contact = await withRetry(() => getContact(contactId));
     }
     contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
   } catch { /* ignore — name is nice-to-have */ }
@@ -608,10 +659,10 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         try {
           let contact;
           if (ghlBarber) {
-            const data = await ghlBarber.contacts.getContact({ contactId });
+            const data = await withRetry(() => ghlBarber.contacts.getContact({ contactId }));
             contact = data?.contact || data;
           } else {
-            contact = await getContact(contactId);
+            contact = await withRetry(() => getContact(contactId));
           }
           depositContactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
         } catch { /* ignore */ }
@@ -638,10 +689,10 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
       try {
         let contact;
         if (ghlBarber) {
-          const data = await ghlBarber.contacts.getContact({ contactId });
+          const data = await withRetry(() => ghlBarber.contacts.getContact({ contactId }));
           contact = data?.contact || data;
         } else {
-          contact = await getContact(contactId);
+          contact = await withRetry(() => getContact(contactId));
         }
         contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
       } catch { /* ignore */ }
@@ -689,10 +740,12 @@ async function lookupGhlContactByEmail(email) {
   if (!email || !ghlBarber) return null;
   try {
     const cleanEmail = email.replace(/\s+/g, "").trim();
-    const data = await ghlBarber.contacts.getDuplicateContact({
-      locationId: BARBER_LOCATION_ID,
-      email: cleanEmail,
-    });
+    const data = await withRetry(() =>
+      ghlBarber.contacts.getDuplicateContact({
+        locationId: BARBER_LOCATION_ID,
+        email: cleanEmail,
+      })
+    );
     return data?.contact?.id || data?.contact?._id || data?.id || data?._id || null;
   } catch (err) {
     console.warn(`[SquareSync] Email lookup failed for ${email}: ${err.message}`);
@@ -707,10 +760,12 @@ async function lookupGhlContactByEmail(email) {
 async function lookupGhlContactByPhone(phone) {
   if (!phone || !ghlBarber) return null;
   try {
-    const data = await ghlBarber.contacts.getDuplicateContact({
-      locationId: BARBER_LOCATION_ID,
-      number: phone,
-    });
+    const data = await withRetry(() =>
+      ghlBarber.contacts.getDuplicateContact({
+        locationId: BARBER_LOCATION_ID,
+        number: phone,
+      })
+    );
     return data?.contact?.id || data?.contact?._id || data?.id || data?._id || null;
   } catch (err) {
     console.warn(`[SquareSync] Phone lookup failed for ${phone}: ${err.message}`);
@@ -989,10 +1044,10 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     try {
       let contact;
       if (ghlBarber) {
-        const data = await ghlBarber.contacts.getContact({ contactId });
+        const data = await withRetry(() => ghlBarber.contacts.getContact({ contactId }));
         contact = data?.contact || data;
       } else {
-        contact = await getContact(contactId);
+        contact = await withRetry(() => getContact(contactId));
       }
       resolvedName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
     } catch { /* ignore */ }
