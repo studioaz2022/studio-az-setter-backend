@@ -4761,7 +4761,13 @@ function createApp() {
 
   /**
    * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard
-   * Real-time availability for all barbers for a given service
+   * Tiered real-time availability for all barbers, grouped per barber.
+   *
+   * Returns barbers sorted by earliest availability with tier labels:
+   *   "now"   — earliest slot starts within 2 min of current time
+   *   "5-10"  — earliest slot starts 2–10 min from now
+   *   "10-20" — earliest slot starts 10–20 min from now
+   *   "later" — everything 20+ min out, shown with actual times
    */
   app.get("/api/kiosk/walk-in-slots", async (req, res) => {
     const { service } = req.query;
@@ -4777,56 +4783,117 @@ function createApp() {
       const { BARBER_DATA } = require("../config/kioskConfig");
       const { getCalendarFreeSlots } = require("../clients/ghlCalendarClient");
 
-      // Date range: rest of today
       const now = new Date();
       const endOfDay = new Date(now);
       endOfDay.setHours(23, 59, 59, 999);
 
-      // Fetch slots for all barbers in parallel
+      // Fetch slots + calendar duration for all barbers in parallel
       const promises = BARBER_DATA.map(async (barber) => {
         const calendarId = barber.calendars[service];
-        if (!calendarId) return [];
+        if (!calendarId) return null;
 
         try {
-          const slots = await getCalendarFreeSlots(calendarId, now, endOfDay, ghlBarber);
-          return slots.map((slot) => ({
+          // Fetch free slots and calendar config in parallel
+          const [slots, calendarInfo] = await Promise.all([
+            getCalendarFreeSlots(calendarId, now, endOfDay, ghlBarber),
+            ghlBarber.calendars.getCalendar({ calendarId }).catch((err) => {
+              console.warn(`⚠️ [KIOSK] Calendar info fetch failed for ${barber.name}:`, err.message);
+              return null;
+            }),
+          ]);
+
+          if (!slots || slots.length === 0) return null;
+
+          // Extract slot duration from calendar config (default 30 min)
+          let slotDurationMinutes = 30;
+          if (calendarInfo) {
+            const cal = calendarInfo.calendar || calendarInfo;
+            if (cal.slotDuration) {
+              const unit = (cal.slotDurationUnit || "mins").toLowerCase();
+              if (unit === "hours" || unit === "hour") {
+                slotDurationMinutes = cal.slotDuration * 60;
+              } else {
+                slotDurationMinutes = cal.slotDuration;
+              }
+            }
+          }
+
+          // Classify each slot into a tier
+          const classifiedSlots = slots.map((slot) => {
+            const startTime = new Date(slot.startTime);
+            const diffMs = startTime.getTime() - now.getTime();
+            const diffMin = diffMs / 60000;
+
+            let tier;
+            if (diffMin <= 2) tier = "now";
+            else if (diffMin <= 10) tier = "5-10";
+            else if (diffMin <= 20) tier = "10-20";
+            else tier = "later";
+
+            // Recompute endTime using actual calendar duration
+            const endTime = new Date(startTime);
+            endTime.setMinutes(endTime.getMinutes() + slotDurationMinutes);
+
+            return {
+              startTime: slot.startTime,
+              endTime: endTime.toISOString(),
+              tier,
+            };
+          });
+
+          // Determine the barber's best (earliest) tier
+          const tierOrder = { now: 0, "5-10": 1, "10-20": 2, later: 3 };
+          const bestTier = classifiedSlots.reduce(
+            (best, s) => (tierOrder[s.tier] < tierOrder[best] ? s.tier : best),
+            "later"
+          );
+
+          return {
             barberName: barber.name,
             barberGhlUserId: barber.ghlUserId,
             barberPhoto: barber.photoUrl,
             calendarId,
-            startTime: slot.startTime,
-            endTime: slot.endTime,
-            service,
-          }));
+            slotDuration: slotDurationMinutes,
+            tier: bestTier,
+            slots: classifiedSlots,
+          };
         } catch (err) {
           console.error(`⚠️ [KIOSK] Slot fetch failed for ${barber.name}:`, err.message);
-          return [];
+          return null;
         }
       });
 
       const results = await Promise.allSettled(promises);
-      let allSlots = [];
+      let barbers = [];
       for (const result of results) {
-        if (result.status === "fulfilled") {
-          allSlots = allSlots.concat(result.value);
+        if (result.status === "fulfilled" && result.value) {
+          barbers.push(result.value);
         }
       }
 
       // Enrich with prices
       try {
         const priceMap = await getServicePriceMap();
-        for (const slot of allSlots) {
-          slot.price = priceMap.get(slot.calendarId) || 0;
+        for (const barber of barbers) {
+          barber.price = priceMap.get(barber.calendarId) || 0;
         }
       } catch (priceErr) {
         console.error("⚠️ [KIOSK] Price lookup failed:", priceErr.message);
       }
 
-      // Sort by time
-      allSlots.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      // Sort barbers: by tier priority first, then by earliest slot time
+      const tierOrder = { now: 0, "5-10": 1, "10-20": 2, later: 3 };
+      barbers.sort((a, b) => {
+        const tierDiff = tierOrder[a.tier] - tierOrder[b.tier];
+        if (tierDiff !== 0) return tierDiff;
+        // Within same tier, sort by earliest slot
+        const aFirst = new Date(a.slots[0]?.startTime || "9999");
+        const bFirst = new Date(b.slots[0]?.startTime || "9999");
+        return aFirst - bFirst;
+      });
 
-      console.log(`✅ [KIOSK] Found ${allSlots.length} walk-in slots for ${service}`);
-      return res.json({ success: true, slots: allSlots });
+      console.log(`✅ [KIOSK] Found ${barbers.length} available barbers for ${service} (tiers: ${barbers.map(b => b.tier).join(', ')})`);
+      return res.json({ success: true, barbers });
     } catch (error) {
       console.error("❌ [KIOSK] Walk-in slots error:", error);
       return res.status(500).json({ success: false, error: error.message });
