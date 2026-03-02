@@ -3,11 +3,14 @@
 // Matching strategy:
 //   1. Email/phone lookup via Square customer → GHL contact
 //   2. ContactId-based appointment linking (same-day or name fallback)
-//   3. Deposit detection → future appointment linking via Supabase
+//   3. Deposit detection → future appointment linking via Supabase (auto-saved)
 //   4. Batch sequential matching: remaining unmatched payments paired with unclaimed
 //      appointments in chronological order (Nth payment → Nth appointment)
 //   5. Manual review for anything still unmatched
-// Unmatched payments are returned for the barber to manually review in the app.
+//
+// IMPORTANT: Only deposits are auto-saved during sync. All other matched payments
+// are returned as "suggested matches" — they are NOT saved to Supabase until the
+// barber explicitly confirms them in the Review Payments screen.
 
 const axios = require("axios");
 const { createClient } = require("@supabase/supabase-js");
@@ -387,28 +390,35 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
   } catch { /* ignore — name is nice-to-have */ }
 
-  // Record as a transaction in Supabase
-  const { transactionType } = await recordTransaction({
-    contactId,
-    contactName,
-    barberGhlId,
-    squarePayment,
-    totalCents,
+  // Classify the payment to decide whether to auto-save or defer
+  const transactionType = await classifyTransactionType({
     serviceCents,
-    createdAt,
-    appointmentId: matchedAppointment?.id || null,
-    calendarId: matchedAppointment?.calendarId || null,
     squareTipCents: squarePayment.tip_money?.amount || null,
-    discountCents: orderDetails.totalDiscountCents,
+    calendarId: matchedAppointment?.calendarId || null,
     orderDetails,
   });
 
-  // Deposits are saved to Supabase but excluded from the Review Payments screen.
-  // The Review Payments screen is only for matching appointments to after-service payments.
+  // Deposits are auto-saved to Supabase immediately (excluded from Review Payments screen).
+  // All other types are deferred — returned as suggested matches for barber confirmation.
   if (transactionType === "deposit") {
+    await recordTransaction({
+      contactId,
+      contactName,
+      barberGhlId,
+      squarePayment,
+      totalCents,
+      serviceCents,
+      createdAt,
+      appointmentId: matchedAppointment?.id || null,
+      calendarId: matchedAppointment?.calendarId || null,
+      squareTipCents: squarePayment.tip_money?.amount || null,
+      discountCents: orderDetails.totalDiscountCents,
+      orderDetails,
+    });
     return { matched: true, payment: null, autoMatchDetail: null };
   }
 
+  // Non-deposit: return as suggested match (NOT saved to Supabase yet)
   const autoMatchDetail = {
     squarePaymentId: paymentId,
     contactId,
@@ -422,6 +432,14 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     createdAt,
     matchMethod,
     squareTipCents: squarePayment.tip_money?.amount || null,
+    // Extended fields for deferred confirmation
+    squareOrderId: squarePayment.order_id || null,
+    cardBrand: squarePayment.card_details?.card?.card_brand || null,
+    last4: squarePayment.card_details?.card?.last_4 || null,
+    itemType: orderDetails?.itemType || null,
+    isProductSale: orderDetails?.isProductSale || false,
+    discountCents: orderDetails?.totalDiscountCents || null,
+    note: squarePayment.note || null,
   };
 
   return { matched: true, payment: null, autoMatchDetail };
@@ -483,8 +501,51 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
       aptIdx++;
 
       const contactId = match.contactId;
+      const sp = candidate.squarePayment;
+      const totalCents = sp.total_money?.amount || sp.amount_money?.amount || 0;
+      const serviceCents = sp.amount_money?.amount || 0;
 
-      // Fetch contact name
+      // Classify before deciding — deposits are auto-saved, everything else is suggested
+      const transactionType = await classifyTransactionType({
+        serviceCents,
+        squareTipCents: sp.tip_money?.amount || null,
+        calendarId: match.calendarId || null,
+        orderDetails: candidate.orderDetails,
+      });
+
+      // Auto-save deposits (they don't appear in Review Payments)
+      if (transactionType === "deposit") {
+        // Fetch contact name for the deposit record
+        let depositContactName = "";
+        try {
+          let contact;
+          if (ghlBarber) {
+            const data = await ghlBarber.contacts.getContact({ contactId });
+            contact = data?.contact || data;
+          } else {
+            contact = await getContact(contactId);
+          }
+          depositContactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
+        } catch { /* ignore */ }
+
+        await recordTransaction({
+          contactId,
+          contactName: depositContactName,
+          barberGhlId,
+          squarePayment: sp,
+          totalCents,
+          serviceCents,
+          createdAt: sp.created_at,
+          appointmentId: match.id,
+          calendarId: match.calendarId || null,
+          squareTipCents: sp.tip_money?.amount || null,
+          discountCents: candidate.orderDetails?.totalDiscountCents || null,
+          orderDetails: candidate.orderDetails,
+        });
+        continue;
+      }
+
+      // Fetch contact name for the suggested match detail
       let contactName = "";
       try {
         let contact;
@@ -497,29 +558,7 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
       } catch { /* ignore */ }
 
-      // Record transaction
-      const sp = candidate.squarePayment;
-      const totalCents = sp.total_money?.amount || sp.amount_money?.amount || 0;
-      const serviceCents = sp.amount_money?.amount || 0;
-
-      const { transactionType } = await recordTransaction({
-        contactId,
-        contactName,
-        barberGhlId,
-        squarePayment: sp,
-        totalCents,
-        serviceCents,
-        createdAt: sp.created_at,
-        appointmentId: match.id,
-        calendarId: match.calendarId || null,
-        squareTipCents: sp.tip_money?.amount || null,
-        discountCents: candidate.orderDetails?.totalDiscountCents || null,
-        orderDetails: candidate.orderDetails,
-      });
-
-      // Skip deposits — they're saved but don't belong in the Review Payments screen
-      if (transactionType === "deposit") continue;
-
+      // Return as suggested match (NOT saved to Supabase — deferred to user confirmation)
       const autoMatchDetail = {
         squarePaymentId: sp.id,
         contactId,
@@ -533,9 +572,17 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         createdAt: sp.created_at,
         matchMethod: "batch_sequential",
         squareTipCents: sp.tip_money?.amount || null,
+        // Extended fields for deferred confirmation
+        squareOrderId: sp.order_id || null,
+        cardBrand: sp.card_details?.card?.card_brand || null,
+        last4: sp.card_details?.card?.last_4 || null,
+        itemType: candidate.orderDetails?.itemType || null,
+        isProductSale: candidate.orderDetails?.isProductSale || false,
+        discountCents: candidate.orderDetails?.totalDiscountCents || null,
+        note: sp.note || null,
       };
 
-      console.log(`[SquareSync] Sequential match: payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
+      console.log(`[SquareSync] Sequential match (suggested): payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
       newlyMatched.push({ idx: candidate._idx, autoMatchDetail });
     }
   }
@@ -657,6 +704,38 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
 }
 
 /**
+ * Classify a payment as deposit, session_payment, or product_sale
+ * WITHOUT saving anything to the database.
+ * Used by matchAndRecordPayment() and batchProximityMatch() to detect deposits
+ * before deciding whether to auto-save or defer to user confirmation.
+ */
+async function classifyTransactionType({ serviceCents, squareTipCents, calendarId, orderDetails }) {
+  const serviceAmount = serviceCents / 100;
+  const itemType = orderDetails?.itemType || null;
+  const isProductSale = orderDetails?.isProductSale || false;
+
+  if (isProductSale) return "product_sale";
+
+  const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
+  const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+
+  if (depositPct && listedPrice) {
+    const expectedDeposit = listedPrice * (depositPct / 100);
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    if (!hasTip && amountMatches && isCustomAmount) return "deposit";
+  } else if (!calendarId && !isProductSale) {
+    const hasTip = squareTipCents != null && squareTipCents > 0;
+    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
+    const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
+    if (!hasTip && isCustomAmount && isKnownDepositAmount) return "deposit";
+  }
+
+  return "session_payment";
+}
+
+/**
  * Insert a matched transaction into the transactions table.
  * Barbers at the barbershop are 100% artist (no shop commission split).
  * If calendarId is provided, looks up service price, calculates tip,
@@ -675,40 +754,17 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   const itemType = orderDetails?.itemType || null;
   const isProductSale = orderDetails?.isProductSale || false;
 
-  // Look up deposit config for this calendar
-  const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
-  const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+  // Determine transaction type using shared classifier
+  const transactionType = await classifyTransactionType({ serviceCents, squareTipCents, calendarId, orderDetails });
 
-  // Determine transaction type: deposit vs session_payment vs product_sale
-  // Deposit detection compares against serviceAmount (amount_money), not grossAmount (total_money)
-  let transactionType = "session_payment";
-
-  if (isProductSale) {
-    // Product sales (e.g., pomade, styling products) — never a deposit
-    transactionType = "product_sale";
-    console.log(`[SquareSync] Product sale: $${grossAmount} — "${orderDetails.lineItemName}"`);
-  } else if (depositPct && listedPrice) {
-    const expectedDeposit = listedPrice * (depositPct / 100);
-    const hasTip = squareTipCents != null && squareTipCents > 0;
-    // Deposit detection uses serviceAmount (amount_money, the base charge):
-    //   1. Base charge ≈ service_price × deposit% (within $1 tolerance)
-    //   2. No tip on the payment
-    //   3. Line item is CUSTOM_AMOUNT (manually keyed, not a catalog item)
-    const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
-    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
-    if (!hasTip && amountMatches && isCustomAmount) {
-      transactionType = "deposit";
+  if (transactionType === "product_sale") {
+    console.log(`[SquareSync] Product sale: $${grossAmount} — "${orderDetails?.lineItemName}"`);
+  } else if (transactionType === "deposit") {
+    const depositPct = calendarId ? await lookupDepositPercentage(calendarId) : null;
+    const listedPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+    if (depositPct && listedPrice) {
       console.log(`[SquareSync] Deposit detected: $${serviceAmount} matches ${depositPct}% of $${listedPrice} (itemType=${itemType}) for calendar ${calendarId}`);
-    }
-  } else if (!calendarId && !isProductSale) {
-    // Fallback deposit detection when no calendarId is available
-    // (e.g., deposit made at booking time, appointment not yet linked)
-    // Known deposit amounts: $40 (50% of $80 haircut), $50 (50% of $100 haircut+beard)
-    const hasTip = squareTipCents != null && squareTipCents > 0;
-    const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
-    const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
-    if (!hasTip && isCustomAmount && isKnownDepositAmount) {
-      transactionType = "deposit";
+    } else {
       console.log(`[SquareSync] Deposit detected (no calendar): $${serviceAmount} is a known deposit amount (itemType=${itemType})`);
     }
   }

@@ -3167,7 +3167,7 @@ function createApp() {
   app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents } = req.body;
+      const { squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale } = req.body;
 
       if (!squarePaymentId || !contactId || !amountCents) {
         return res.status(400).json({
@@ -3188,6 +3188,8 @@ function createApp() {
         appointmentId,
         calendarId,
         squareTipCents,
+        itemType,
+        isProductSale,
       });
 
       res.json({ success: true, ...result });
@@ -3236,6 +3238,73 @@ function createApp() {
       res.json({ success: true, ...result });
     } catch (error) {
       console.error("[API] Error recording walk-in payment:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/square/bulk-confirm
+  // Bulk-confirm suggested matches, walk-ins, and reversals in a single request.
+  // Body: { matches: [...], walkIns: [...], reversals: [...] }
+  app.post("/api/barbers/:barberGhlId/square/bulk-confirm", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { matches = [], walkIns = [], reversals = [] } = req.body;
+
+      const results = { confirmed: 0, walkInsRecorded: 0, reversed: 0, errors: [] };
+
+      // 1. Process matches (both auto-suggested and manual)
+      for (const match of matches) {
+        try {
+          await assignUnmatchedPayment({
+            barberGhlId,
+            squarePaymentId: match.squarePaymentId,
+            contactId: match.contactId,
+            contactName: match.contactName,
+            amountCents: match.amountCents,
+            serviceCents: match.serviceCents,
+            createdAt: match.createdAt,
+            note: match.note,
+            appointmentId: match.appointmentId,
+            calendarId: match.calendarId,
+            squareTipCents: match.squareTipCents,
+            itemType: match.itemType,
+            isProductSale: match.isProductSale,
+          });
+          results.confirmed++;
+        } catch (err) {
+          results.errors.push({ squarePaymentId: match.squarePaymentId, error: err.message });
+        }
+      }
+
+      // 2. Process walk-ins
+      for (const walkIn of walkIns) {
+        try {
+          await recordWalkIn({
+            barberGhlId,
+            squarePaymentId: walkIn.squarePaymentId,
+            amountCents: walkIn.amountCents,
+            createdAt: walkIn.createdAt,
+          });
+          results.walkInsRecorded++;
+        } catch (err) {
+          results.errors.push({ squarePaymentId: walkIn.squarePaymentId, error: err.message });
+        }
+      }
+
+      // 3. Process reversals (unmatch previously confirmed payments)
+      for (const reversal of reversals) {
+        try {
+          await unmatchPayment({ barberGhlId, squarePaymentId: reversal.squarePaymentId });
+          results.reversed++;
+        } catch (err) {
+          results.errors.push({ squarePaymentId: reversal.squarePaymentId, error: err.message });
+        }
+      }
+
+      console.log(`[API] Bulk confirm for ${barberGhlId}: ${results.confirmed} confirmed, ${results.walkInsRecorded} walk-ins, ${results.reversed} reversed, ${results.errors.length} errors`);
+      res.json({ success: results.errors.length === 0, ...results });
+    } catch (error) {
+      console.error("[API] Error in bulk confirm:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
