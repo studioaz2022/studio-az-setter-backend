@@ -40,6 +40,7 @@ const {
   unmatchPayment,
   recordWalkIn,
 } = require("../payments/squareTransactionSync");
+const { getServicePriceMap } = require("../config/barberServicePrices");
 const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
@@ -3383,6 +3384,21 @@ function createApp() {
       });
     } catch (error) {
       console.error("[API] Error fetching Square order:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/service-prices - Return all calendar service prices
+  app.get("/api/service-prices", async (req, res) => {
+    try {
+      const priceMap = await getServicePriceMap();
+      const prices = {};
+      for (const [calendarId, price] of priceMap) {
+        prices[calendarId] = price;
+      }
+      res.json({ success: true, prices });
+    } catch (error) {
+      console.error("[API] Error fetching service prices:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
