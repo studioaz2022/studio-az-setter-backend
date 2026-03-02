@@ -3,6 +3,7 @@
 
 const { supabase } = require('./supabaseClient');
 const { getContact } = require('./ghlClient');
+const { ghlBarber } = require('./ghlMultiLocationSdk');
 
 /**
  * Get artist commission rate from database
@@ -236,7 +237,7 @@ async function updateClientFinancials(contactId) {
       totalSpent,
       completedTattoos,
       lastPaymentDate
-    });
+    }, locationId);
   } catch (ghlError) {
     console.error(`[Financial] Error updating GHL fields:`, ghlError);
     // Don't throw - GHL update is optional
@@ -244,20 +245,28 @@ async function updateClientFinancials(contactId) {
 }
 
 /**
- * Update GHL contact custom fields with financial data
+ * Update GHL contact custom fields with financial data.
+ * Uses the correct API token based on which GHL location the contact belongs to.
  */
-async function updateGHLClientFinancials(contactId, financials) {
-  // Use GHL_FILE_UPLOAD_TOKEN as the primary API key
-  const GHL_API_KEY = process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY;
+async function updateGHLClientFinancials(contactId, financials, locationId) {
+  const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
+  const isBarberLocation = locationId === BARBER_LOCATION_ID;
+
+  // Pick the right token for the contact's location
+  const GHL_API_KEY = isBarberLocation
+    ? (process.env.GHL_BARBER_SHOP_TOKEN || process.env.GHL_FILE_UPLOAD_TOKEN)
+    : (process.env.GHL_FILE_UPLOAD_TOKEN || process.env.GHL_API_KEY);
 
   if (!GHL_API_KEY) {
-    console.log(`[Financial] No GHL API key, skipping custom field update`);
+    console.log(`[Financial] No GHL API key for location ${locationId}, skipping custom field update`);
     return;
   }
 
   try {
     const axios = require('axios');
-    
+
+    console.log(`[Financial] Updating GHL fields for contact ${contactId} (location: ${isBarberLocation ? 'barbershop' : 'tattoo shop'})`);
+
     const response = await axios.put(
       `https://services.leadconnectorhq.com/contacts/${contactId}`,
       {
@@ -280,7 +289,7 @@ async function updateGHLClientFinancials(contactId, financials) {
       console.log(`[Financial] GHL custom fields updated for contact ${contactId}`);
     }
   } catch (error) {
-    console.error(`[Financial] GHL update failed:`, error.message || error);
+    console.error(`[Financial] GHL update failed for ${isBarberLocation ? 'barbershop' : 'tattoo shop'} contact ${contactId}:`, error.message || error);
     throw error;
   }
 }
