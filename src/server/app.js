@@ -4326,22 +4326,42 @@ function createApp() {
 
       console.log(`  ✅ Matched to tenant: ${tenant.name}`);
 
-      // 4. Check for duplicates
+      // 4. Check for duplicates — both by dedup key AND by tenant+amount+week
       const dedupKey = generateDedup(parsed.senderName, parsed.amount, parsed.date, parsed.note);
 
-      const { payments: existing } = await db.query({
+      const { payments: existingByDedup } = await db.query({
         payments: {
           $: { where: { venmoTxId: dedupKey } },
         },
       });
 
-      if (existing.length > 0) {
-        console.log(`  ⚠️ Duplicate detected (${dedupKey}), skipping`);
+      if (existingByDedup.length > 0) {
+        console.log(`  ⚠️ Duplicate detected by dedup key (${dedupKey}), skipping`);
         return res.status(200).json({ ok: true, skipped: "duplicate", dedupKey });
       }
 
-      // 5. Determine week attribution
+      // Also check if a CSV-imported payment already exists for this tenant+amount+week
+      // This prevents duplicates when forwarding emails for payments already in the CSV import
       const paymentDate = parsed.date || new Date();
+      const { weekOf: checkWeek } = attributeToWeek(parsed.amount, parsed.note, paymentDate, tenant);
+
+      const { payments: tenantPayments } = await db.query({
+        payments: {
+          $: { where: { weekOf: checkWeek } },
+          tenant: {},
+        },
+      });
+
+      const alreadyExists = tenantPayments.some(
+        (p) => p.tenant?.[0]?.id === tenant.id && Math.abs(p.amount - parsed.amount) < 1,
+      );
+
+      if (alreadyExists) {
+        console.log(`  ⚠️ Payment already exists for ${tenant.name} in week ${checkWeek} ($${parsed.amount}), skipping`);
+        return res.status(200).json({ ok: true, skipped: "already-recorded", tenant: tenant.name, weekOf: checkWeek });
+      }
+
+      // 5. Determine week attribution (paymentDate already computed above)
       const { weekOf, attribution } = attributeToWeek(
         parsed.amount,
         parsed.note,
