@@ -4287,6 +4287,7 @@ function createApp() {
 
       const payload = req.body;
       console.log("\n📩 Venmo webhook received");
+      console.log("  📦 Full payload:", JSON.stringify(payload, null, 2));
 
       // 1. Basic validation — check it's a Venmo payment notification
       // When forwarded via Hotmail, envelope.from is the forwarder's address,
