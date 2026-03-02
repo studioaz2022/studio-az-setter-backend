@@ -4316,6 +4316,7 @@ function createApp() {
         amount: parsed.amount,
         note: parsed.note,
         date: parsed.date?.toISOString(),
+        transactionId: parsed.transactionId,
       });
 
       if (!parsed.senderName || !parsed.amount) {
@@ -4335,18 +4336,19 @@ function createApp() {
 
       console.log(`  ✅ Matched to tenant: ${tenant.name}`);
 
-      // 4. Check for duplicates — both by dedup key AND by tenant+amount+week
-      const dedupKey = generateDedup(parsed.senderName, parsed.amount, parsed.date, parsed.note);
+      // 4. Check for duplicates — by real Venmo transaction ID, then dedup key, then tenant+amount+week
+      // Prefer real Venmo transaction ID (e.g. "4543609756456913145") over synthetic dedup key
+      const venmoTxId = parsed.transactionId || generateDedup(parsed.senderName, parsed.amount, parsed.date, parsed.note);
 
-      const { payments: existingByDedup } = await db.query({
+      const { payments: existingByTxId } = await db.query({
         payments: {
-          $: { where: { venmoTxId: dedupKey } },
+          $: { where: { venmoTxId } },
         },
       });
 
-      if (existingByDedup.length > 0) {
-        console.log(`  ⚠️ Duplicate detected by dedup key (${dedupKey}), skipping`);
-        return res.status(200).json({ ok: true, skipped: "duplicate", dedupKey });
+      if (existingByTxId.length > 0) {
+        console.log(`  ⚠️ Duplicate detected by venmoTxId (${venmoTxId}), skipping`);
+        return res.status(200).json({ ok: true, skipped: "duplicate", venmoTxId });
       }
 
       // Also check if a CSV-imported payment already exists for this tenant+amount+week
@@ -4392,7 +4394,7 @@ function createApp() {
             weekOf,
             paidAt: paymentDate,
             notes: parsed.note || undefined,
-            venmoTxId: dedupKey,
+            venmoTxId,
             verified: false,
             attribution,
           })

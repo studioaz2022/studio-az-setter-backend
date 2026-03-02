@@ -1,8 +1,20 @@
 /**
  * Venmo Email Parser
  *
- * Parses Venmo "paid you" notification emails forwarded via CloudMailin.
- * Extracts sender name, amount, note, and date from the email body.
+ * Parses Venmo "paid you" notification emails forwarded via Hotmail → CloudMailin.
+ * Extracts sender name, amount, note, date, and transaction ID from the email body.
+ *
+ * When forwarded via Hotmail, the plain text looks like:
+ *   ________________________________
+ *   From: Venmo <venmo@venmo.com>
+ *   Sent: Sunday, March 1, 2026 5:41 PM
+ *   Subject: Joshua Flores paid you $325.00
+ *
+ *   Joshua Flores paid you $325.00
+ *   ...
+ *   Transaction ID
+ *   4543609756456913145
+ *   ...
  */
 
 /**
@@ -10,20 +22,25 @@
  * @param {string} plain - Plain text body of the email
  * @param {string} html - HTML body of the email (fallback)
  * @param {string} emailDate - Date from email headers (ISO string or RFC 2822)
- * @returns {{ senderName: string, amount: number, note: string|null, date: Date|null }}
+ * @returns {{ senderName: string, amount: number, note: string|null, date: Date|null, transactionId: string|null }}
  */
 function parseVenmoEmail(plain, html, emailDate) {
-  const text = plain || stripHtml(html || "");
+  const rawText = plain || stripHtml(html || "");
+
+  // Strip Hotmail forwarding preamble to get the actual Venmo email body.
+  // The forwarded email starts after the "Subject: ... paid you..." line.
+  const text = stripForwardingHeaders(rawText);
 
   const result = {
     senderName: "",
     amount: 0,
     note: null,
     date: null,
+    transactionId: null,
   };
 
   // Extract sender name — "NAME paid you" or "NAME paid your $X request"
-  const paidYouMatch = text.match(/(.+?)\s+paid you(?:r)?/i);
+  const paidYouMatch = text.match(/^(.+?)\s+paid you(?:r)?/im);
   if (paidYouMatch) {
     result.senderName = paidYouMatch[1].trim();
   }
@@ -35,27 +52,39 @@ function parseVenmoEmail(plain, html, emailDate) {
     result.amount = parseFloat(amountMatch[1].replace(/,/g, ""));
   }
 
-  // Extract date — from email headers first, then body patterns
-  if (emailDate) {
-    const parsed = new Date(emailDate);
+  // Extract transaction ID — appears after "Transaction ID" label
+  const txIdMatch = text.match(/Transaction ID\s*\n\s*(\d{10,})/i)
+    || rawText.match(/Transaction ID\s*\n\s*(\d{10,})/i);
+  if (txIdMatch) {
+    result.transactionId = txIdMatch[1];
+  }
+
+  // Extract date — prefer the actual payment date from the email body over forwarding headers.
+  // The body contains "Date\n\nMar 01, 2026" in the transaction details section.
+  const bodyDateMatch = text.match(/^Date\s*\n+\s*([A-Z][a-z]+ \d{1,2},?\s+\d{4})/m);
+  if (bodyDateMatch) {
+    const parsed = new Date(bodyDateMatch[1]);
     if (!isNaN(parsed.getTime())) {
       result.date = parsed;
     }
   }
+
+  // Also try the "Sent:" line from forwarding headers (original Venmo send time)
   if (!result.date) {
-    const datePatterns = [
-      /([A-Z][a-z]+\.?\s+\d{1,2},?\s+\d{4})/,       // "Feb 24, 2026"
-      /(\d{1,2}\/\d{1,2}\/\d{2,4})/,                   // "2/24/2026"
-    ];
-    for (const pattern of datePatterns) {
-      const dateMatch = text.match(pattern);
-      if (dateMatch) {
-        const parsed = new Date(dateMatch[1]);
-        if (!isNaN(parsed.getTime())) {
-          result.date = parsed;
-          break;
-        }
+    const sentMatch = rawText.match(/Sent:\s+\w+,\s+([A-Z][a-z]+ \d{1,2},?\s+\d{4})/);
+    if (sentMatch) {
+      const parsed = new Date(sentMatch[1]);
+      if (!isNaN(parsed.getTime())) {
+        result.date = parsed;
       }
+    }
+  }
+
+  // Fallback: use CloudMailin email header date
+  if (!result.date && emailDate) {
+    const parsed = new Date(emailDate);
+    if (!isNaN(parsed.getTime())) {
+      result.date = parsed;
     }
   }
 
@@ -68,7 +97,7 @@ function parseVenmoEmail(plain, html, emailDate) {
   // Skip Venmo boilerplate lines. Note: ^\d{1,2}\/\d{1,2}\/\d{2,4}$ matches
   // standalone dates like "2/24/2026" but NOT date ranges like "3/2 - 3/6 🪑"
   const skipPatterns =
-    /paid you(?:r)?|^\$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request/i;
+    /paid you(?:r)?|^\$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request|^see transaction|^money credited|^transaction|^date$|^sent to|^@|^_+$|^\[|^for any|^paypal|^nmls|^for security/i;
 
   for (const line of lines) {
     if (
@@ -83,6 +112,21 @@ function parseVenmoEmail(plain, html, emailDate) {
   }
 
   return result;
+}
+
+/**
+ * Strip Hotmail/Outlook forwarding headers from the plain text body.
+ * Finds the "Subject: ... paid you..." line and returns everything after it.
+ * This isolates the actual Venmo email content from Hotmail's preamble.
+ */
+function stripForwardingHeaders(text) {
+  // Look for the Subject line that contains "paid you" — everything after it is the Venmo body
+  const subjectMatch = text.match(/Subject:\s+.+paid you(?:r)?[^\n]*\n/i);
+  if (subjectMatch) {
+    const afterSubject = text.slice(subjectMatch.index + subjectMatch[0].length);
+    return afterSubject.trim();
+  }
+  return text;
 }
 
 /**
