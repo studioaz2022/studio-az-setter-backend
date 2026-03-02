@@ -4454,6 +4454,100 @@ function createApp() {
     }
   });
 
+  // POST /api/rent-tracker/sync-square-to-instantdb
+  // Pull Lionel's transactions from Supabase and backfill to InstantDB serviceIncome.
+  // Does NOT call Square API — only reads from Supabase (source of truth).
+  app.post("/api/rent-tracker/sync-square-to-instantdb", async (req, res) => {
+    try {
+      const { createClient } = require("@supabase/supabase-js");
+      const { writeServiceIncome, LIONEL_GHL_ID } = require("../rentTracker/serviceIncomeWriter");
+      const { weekOfDate } = require("../rentTracker/tenantMatcher");
+
+      const supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+
+      const { startDate, endDate } = req.body;
+      const start = startDate || "2025-10-01";
+      const end = endDate || new Date().toISOString().slice(0, 10);
+
+      console.log(`\n📊 Syncing Supabase → InstantDB for Lionel (${start} to ${end})`);
+
+      // Fetch all of Lionel's transactions from Supabase
+      const { data: transactions, error } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("artist_ghl_id", LIONEL_GHL_ID)
+        .gte("session_date", start)
+        .lte("session_date", end)
+        .order("session_date", { ascending: false });
+
+      if (error) {
+        console.error("  ❌ Supabase query failed:", error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      console.log(`  Found ${transactions.length} transactions in Supabase`);
+
+      let written = 0;
+      let skipped = 0;
+      let errors = 0;
+
+      for (const tx of transactions) {
+        try {
+          // Map Supabase transaction_type to InstantDB type
+          let type = "service";
+          if (tx.transaction_type === "deposit") type = "deposit";
+          else if (tx.transaction_type === "product_sale") type = "product_sale";
+
+          const paidAt = tx.square_payment_time
+            ? new Date(tx.square_payment_time)
+            : tx.session_date
+              ? new Date(tx.session_date + "T12:00:00")
+              : new Date();
+
+          const result = await writeServiceIncome({
+            senderName: tx.contact_name || "Unknown",
+            amount: parseFloat(tx.gross_amount) || 0,
+            method: tx.payment_method || "square",
+            type,
+            paidAt,
+            notes: tx.notes || null,
+            squarePaymentId: tx.square_payment_id || undefined,
+            venmoTxId: tx.venmo_transaction_id || undefined,
+            weekOf: tx.session_date ? weekOfDate(new Date(tx.session_date + "T12:00:00")) : weekOfDate(paidAt),
+            location: tx.location_id === "mUemx2jG4wly4kJWBkI4" ? "tattoo" : "barbershop",
+            tipAmount: parseFloat(tx.tip_amount) || 0,
+            servicePriceAmount: parseFloat(tx.service_price) || undefined,
+          });
+
+          if (result.written) {
+            written++;
+          } else {
+            skipped++;
+          }
+        } catch (err) {
+          errors++;
+          console.warn(`  ⚠️ Failed to write tx ${tx.id}: ${err.message}`);
+        }
+      }
+
+      console.log(`  ✅ Sync complete: ${written} written, ${skipped} skipped (dupes), ${errors} errors`);
+
+      return res.json({
+        success: true,
+        total: transactions.length,
+        written,
+        skipped,
+        errors,
+      });
+    } catch (error) {
+      console.error("❌ Supabase→InstantDB sync error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // END MERGED WEBHOOK SERVER ROUTES
   // ═══════════════════════════════════════════════════════════════════════════
