@@ -4329,8 +4329,23 @@ function createApp() {
       const tenant = matchTenant(parsed.senderName, aliasMap);
 
       if (!tenant) {
-        console.log(`  ⚠️ No tenant match for "${parsed.senderName}", skipping`);
-        return res.status(200).json({ ok: true, skipped: "no-tenant-match", sender: parsed.senderName });
+        // Not a known tenant — likely a client paying a barber for services
+        // Identify which barber forwarded the email via envelope.from
+        const VENMO_BARBER_MAP = {
+          "l.jchavez@hotmail.com": "1kFG5FWdUDhXLUX46snG", // Lionel
+          // Add more barbers as they set up email forwarding
+        };
+        const forwarderEmail = (payload?.envelope?.from || "").toLowerCase();
+        const barberGhlId = VENMO_BARBER_MAP[forwarderEmail];
+        if (!barberGhlId) {
+          console.log(`  ⚠️ No tenant match and unknown forwarder (${forwarderEmail}), skipping`);
+          return res.status(200).json({ ok: true, skipped: "no-tenant-no-barber", sender: parsed.senderName });
+        }
+        console.log(`  📋 No tenant match — routing to barbershop handler for barber ${barberGhlId}`);
+        const { handleBarberVenmoPayment } = require("../payments/venmoBarberPayment");
+        const result = await handleBarberVenmoPayment({ parsed, barberGhlId });
+        console.log(`  Result:`, result);
+        return res.status(200).json({ ok: true, ...result });
       }
 
       console.log(`  ✅ Matched to tenant: ${tenant.name}`);

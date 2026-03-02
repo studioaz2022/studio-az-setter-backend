@@ -1083,4 +1083,5 @@ module.exports = {
   assignUnmatchedPayment,
   unmatchPayment,
   recordWalkIn,
+  toLocalDate,
 };
