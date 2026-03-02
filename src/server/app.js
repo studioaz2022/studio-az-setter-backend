@@ -4935,7 +4935,7 @@ function createApp() {
 
       // 1. Find or create GHL contact on barbershop location
       const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : "Haircut";
-      const WALK_IN_SERVICE_FIELD_ID = "C1Ut7mVyr18adlWNb4ul";
+      const WALK_IN_SERVICE_FIELD_ID = "ez95QC6Ois2V2uAFQUGY";
 
       let contactId;
       let isExistingContact = false;
