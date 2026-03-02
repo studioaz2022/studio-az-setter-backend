@@ -59,28 +59,28 @@ function parseVenmoEmail(plain, html, emailDate) {
     result.transactionId = txIdMatch[1];
   }
 
-  // Extract date — prefer the actual payment date from the email body over forwarding headers.
-  // The body contains "Date\n\nMar 01, 2026" in the transaction details section.
-  const bodyDateMatch = text.match(/^Date\s*\n+\s*([A-Z][a-z]+ \d{1,2},?\s+\d{4})/m);
-  if (bodyDateMatch) {
-    const parsed = new Date(bodyDateMatch[1]);
+  // Extract date+time — prefer "Sent:" line from forwarding headers (has time).
+  // Format: "Sent: Sunday, March 1, 2026 5:41 PM"
+  const sentMatch = rawText.match(/Sent:\s+\w+,\s+([A-Z][a-z]+ \d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
+  if (sentMatch) {
+    const parsed = new Date(sentMatch[1]);
     if (!isNaN(parsed.getTime())) {
       result.date = parsed;
     }
   }
 
-  // Also try the "Sent:" line from forwarding headers (original Venmo send time)
+  // Fallback: body "Date\n\nMar 01, 2026" (no time, just date)
   if (!result.date) {
-    const sentMatch = rawText.match(/Sent:\s+\w+,\s+([A-Z][a-z]+ \d{1,2},?\s+\d{4})/);
-    if (sentMatch) {
-      const parsed = new Date(sentMatch[1]);
+    const bodyDateMatch = text.match(/^Date\s*\n+\s*([A-Z][a-z]+ \d{1,2},?\s+\d{4})/m);
+    if (bodyDateMatch) {
+      const parsed = new Date(bodyDateMatch[1]);
       if (!isNaN(parsed.getTime())) {
         result.date = parsed;
       }
     }
   }
 
-  // Fallback: use CloudMailin email header date
+  // Last fallback: use CloudMailin email header date
   if (!result.date && emailDate) {
     const parsed = new Date(emailDate);
     if (!isNaN(parsed.getTime())) {
