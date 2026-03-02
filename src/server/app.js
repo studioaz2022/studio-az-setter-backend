@@ -4748,10 +4748,14 @@ function createApp() {
           if (!matchedContactId && isBarbershop) {
             try {
               const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
-              const apptContact = apptData?.contact?.id || apptData?.contactId;
+              // SDK returns { event: { contactId, contact: { id }, ... } }
+              const evt = apptData?.event || apptData;
+              const apptContact = evt?.contactId || evt?.contact?.id;
               if (apptContact) {
                 matchedContactId = apptContact;
                 console.log(`✅ [KIOSK] Extracted contactId ${matchedContactId} from appointment`);
+              } else {
+                console.log(`⚠️ [KIOSK] getAppointment returned no contactId. Keys:`, Object.keys(apptData || {}));
               }
             } catch (fetchErr) {
               console.error("⚠️ [KIOSK] Could not fetch appointment for contactId:", fetchErr.message);
