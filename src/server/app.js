@@ -4752,8 +4752,8 @@ function createApp() {
           if (!matchedContactId && isBarbershop) {
             try {
               const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
-              // SDK returns { event: { contactId, contact: { id }, ... } }
-              const evt = apptData?.event || apptData;
+              // SDK returns { appointment: { contactId, ... }, traceId: ... }
+              const evt = apptData?.appointment || apptData?.event || apptData;
               const apptContact = evt?.contactId || evt?.contact?.id;
               if (apptContact) {
                 matchedContactId = apptContact;
