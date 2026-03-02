@@ -4453,6 +4453,10 @@ function createApp() {
 
       // 2. Parse the email body
       const emailDate = payload?.headers?.date || null;
+      // DEBUG: Log raw plain text to diagnose forwarding format
+      console.log("  [DEBUG] Raw plain text (first 800 chars):", JSON.stringify((payload?.plain || "").slice(0, 800)));
+      console.log("  [DEBUG] Subject:", JSON.stringify(subject));
+      console.log("  [DEBUG] Headers date:", JSON.stringify(emailDate));
       const parsed = parseVenmoEmail(payload?.plain || "", payload?.html || "", emailDate);
 
       console.log("  Parsed:", {
