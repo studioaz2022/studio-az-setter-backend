@@ -153,9 +153,13 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
         sdkInstance: ghlBarber,
       });
       // Filter to active appointments only (confirmed, showed, or new)
-      appointmentsForRange = appointmentsForRange.filter(
-        (apt) => ["confirmed", "showed", "new"].includes(apt.appointmentStatus)
-      );
+      // Also exclude break/block/personal events — these are calendar holds, not real appointments
+      const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
+      appointmentsForRange = appointmentsForRange.filter((apt) => {
+        if (!["confirmed", "showed", "new"].includes(apt.appointmentStatus)) return false;
+        const title = (apt.title || "").toLowerCase().trim();
+        return !blockedTitles.includes(title);
+      });
       console.log(`[SquareSync] Pre-fetched ${appointmentsForRange.length} active appointments for proximity matching`);
     } else {
       console.warn("[SquareSync] ghlBarber SDK not available — skipping appointment proximity matching");
@@ -479,7 +483,25 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   if (contactId && !matchedAppointment && !orderDetails.isProductSale) {
     const hasTip = squarePayment.tip_money?.amount > 0;
     const isCustomAmount = orderDetails.itemType === "CUSTOM_AMOUNT" || orderDetails.itemType === null;
-    const isLikelyDeposit = !hasTip && isCustomAmount && (serviceCents / 100 === 40 || serviceCents / 100 === 50);
+    // Dynamically check all known deposit amounts from the price config
+    let isLikelyDeposit = false;
+    if (!hasTip && isCustomAmount) {
+      const { getServicePriceMap } = require("../config/barberServicePrices");
+      const priceMap = await getServicePriceMap();
+      const knownDepositAmounts = new Set();
+      for (const [calId, price] of priceMap) {
+        const pct = await lookupDepositPercentage(calId);
+        if (pct) knownDepositAmounts.add(Math.round(price * (pct / 100)));
+      }
+      isLikelyDeposit = knownDepositAmounts.has(serviceCents / 100);
+      // Also check if the line item name mentions "tattoo" or "deposit"
+      if (!isLikelyDeposit) {
+        const lineItemLower = (orderDetails?.lineItemName || "").toLowerCase();
+        if (lineItemLower.includes("tattoo") || lineItemLower.includes("deposit")) {
+          isLikelyDeposit = true;
+        }
+      }
+    }
 
     if (isLikelyDeposit) {
       try {
@@ -555,7 +577,27 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     return { matched: true, payment: null, autoMatchDetail: null };
   }
 
-  // Non-deposit: return as suggested match (NOT saved to Supabase yet)
+  // Product sales are auto-saved (not shown in Review Payments)
+  if (transactionType === "product_sale") {
+    await recordTransaction({
+      contactId,
+      contactName,
+      barberGhlId,
+      squarePayment,
+      totalCents,
+      serviceCents,
+      createdAt,
+      appointmentId: matchedAppointment?.id || null,
+      calendarId: matchedAppointment?.calendarId || null,
+      squareTipCents: squarePayment.tip_money?.amount || null,
+      discountCents: orderDetails.totalDiscountCents,
+      orderDetails,
+    });
+    console.log(`[SquareSync] Auto-recorded product sale (contact-matched): ${paymentId}`);
+    return { matched: true, payment: null, autoMatchDetail: null };
+  }
+
+  // Non-deposit, non-product: return as suggested match (NOT saved to Supabase yet)
   const autoMatchDetail = {
     squarePaymentId: paymentId,
     contactId,
@@ -624,9 +666,14 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
     const dayPayments = byDay[day].sort(
       (a, b) => new Date(a.payment.createdAt) - new Date(b.payment.createdAt)
     );
+    const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
     const dayAppts = (aptsByDay[day] || [])
       .slice()
-      .filter((apt) => apt.contactId)
+      .filter((apt) => {
+        if (!apt.contactId) return false;
+        const title = (apt.title || "").toLowerCase().trim();
+        return !blockedTitles.includes(title);
+      })
       .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
     if (dayAppts.length === 0) continue;
@@ -877,8 +924,26 @@ async function classifyTransactionType({ serviceCents, squareTipCents, calendarI
   } else if (!calendarId && !isProductSale) {
     const hasTip = squareTipCents != null && squareTipCents > 0;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
-    const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
-    if (!hasTip && isCustomAmount && isKnownDepositAmount) return "deposit";
+    if (!hasTip && isCustomAmount) {
+      // Dynamically compute all known deposit amounts from the price config
+      const { getServicePriceMap } = require("../config/barberServicePrices");
+      const priceMap = await getServicePriceMap();
+      const knownDepositAmounts = new Set();
+      for (const [calId, price] of priceMap) {
+        const pct = await lookupDepositPercentage(calId);
+        if (pct) knownDepositAmounts.add(Math.round(price * (pct / 100)));
+      }
+      const isKnownDepositAmount = knownDepositAmounts.has(serviceAmount);
+      if (isKnownDepositAmount) return "deposit";
+
+      // If the line item name mentions "tattoo" or "deposit", classify as deposit
+      // (handles tattoo deposits processed through the same Square location)
+      const lineItemLower = (orderDetails?.lineItemName || "").toLowerCase();
+      if (lineItemLower.includes("tattoo") || lineItemLower.includes("deposit")) {
+        console.log(`[SquareSync] Deposit detected (line item name): $${serviceAmount} — "${orderDetails.lineItemName}" (itemType=${itemType})`);
+        return "deposit";
+      }
+    }
   }
 
   return "session_payment";
