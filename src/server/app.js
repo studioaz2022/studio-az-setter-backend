@@ -4736,13 +4736,27 @@ function createApp() {
       // 1. If appointmentId is provided (from carousel), use it directly.
       //    Otherwise fall back to name-based matching for tattoo check-ins.
       if (matchedAppointmentId) {
-        // Mark appointment as "showed"
+        // Mark appointment as "showed" and extract contactId if missing
         try {
           await sdk.calendars.editAppointment(
             { eventId: matchedAppointmentId },
             { appointmentStatus: "showed", toNotify: false }
           );
           console.log(`✅ [KIOSK] Marked appointment ${matchedAppointmentId} as showed for ${customerName}`);
+
+          // If we don't have a contactId yet, fetch the appointment to get it
+          if (!matchedContactId && isBarbershop) {
+            try {
+              const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
+              const apptContact = apptData?.contact?.id || apptData?.contactId;
+              if (apptContact) {
+                matchedContactId = apptContact;
+                console.log(`✅ [KIOSK] Extracted contactId ${matchedContactId} from appointment`);
+              }
+            } catch (fetchErr) {
+              console.error("⚠️ [KIOSK] Could not fetch appointment for contactId:", fetchErr.message);
+            }
+          }
         } catch (apptErr) {
           console.error("⚠️ [KIOSK] Appointment status update failed:", apptErr.message);
         }
