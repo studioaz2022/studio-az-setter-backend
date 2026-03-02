@@ -4697,7 +4697,7 @@ function createApp() {
 
   /**
    * POST /api/kiosk/check-in
-   * Appointment check-in — sends push notification to barber/artist
+   * Appointment check-in — marks appointment as "showed" + sends push notification
    */
   app.post("/api/kiosk/check-in", async (req, res) => {
     const { ghlUserId, customerName, location } = req.body;
@@ -4712,8 +4712,58 @@ function createApp() {
     try {
       const { supabase } = require("../clients/supabaseClient");
       const apnsService = require("../services/apnsService");
+      const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
-      // Look up staff member's Supabase profile by GHL user ID
+      // 1. Find today's appointment for this customer on the barber/artist's calendar
+      //    and mark it as "showed"
+      let matchedAppointmentId = null;
+      try {
+        const isBarbershop = location === "barbershop";
+        const locationId = isBarbershop
+          ? BARBER_LOCATION_ID
+          : process.env.GHL_LOCATION_ID;
+        const sdkInstance = isBarbershop ? ghlBarber : undefined;
+
+        const now = new Date();
+        const startOfDay = new Date(now);
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date(now);
+        endOfDay.setHours(23, 59, 59, 999);
+
+        const events = await fetchAppointmentsForDateRange({
+          locationId,
+          startTime: startOfDay.toISOString(),
+          endTime: endOfDay.toISOString(),
+          userId: ghlUserId,
+          sdkInstance,
+        });
+
+        // Match by customer name (case-insensitive first name)
+        const inputFirst = customerName.trim().split(/\s+/)[0].toLowerCase();
+        const match = events.find((evt) => {
+          // Only match non-cancelled, future or current appointments
+          if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
+          const contactName = evt.contact?.name || evt.title || "";
+          const contactFirst = contactName.trim().split(/\s+/)[0].toLowerCase();
+          return contactFirst === inputFirst;
+        });
+
+        if (match) {
+          matchedAppointmentId = match.id;
+          const sdk = sdkInstance || require("../clients/ghlSdk").ghl;
+          await sdk.calendars.editAppointment(
+            { eventId: match.id },
+            { appointmentStatus: "showed", toNotify: false }
+          );
+          console.log(`✅ [KIOSK] Marked appointment ${match.id} as showed for ${customerName}`);
+        } else {
+          console.log(`⚠️ [KIOSK] No matching appointment found today for ${customerName} with user ${ghlUserId}`);
+        }
+      } catch (apptErr) {
+        console.error("⚠️ [KIOSK] Appointment lookup/update failed (continuing with push):", apptErr.message);
+      }
+
+      // 2. Send push notification to barber/artist
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("id")
@@ -4722,10 +4772,9 @@ function createApp() {
 
       if (profileError || !profile) {
         console.log(`⚠️ [KIOSK] No profile found for GHL user ${ghlUserId} — check-in recorded without push`);
-        return res.json({ success: true, notified: false });
+        return res.json({ success: true, notified: false, appointmentId: matchedAppointmentId });
       }
 
-      // Send push notification if APNs is configured
       if (apnsService.isConfigured()) {
         const { data: tokens } = await supabase
           .from("push_tokens")
@@ -4738,7 +4787,7 @@ function createApp() {
           const notification = {
             title: "Client Check-In",
             body: `${customerName} has arrived at the ${locationLabel}`,
-            data: { type: "kiosk_check_in", customerName, location },
+            data: { type: "kiosk_check_in", customerName, location, appointmentId: matchedAppointmentId },
           };
 
           for (const tokenRecord of tokens) {
@@ -4752,7 +4801,7 @@ function createApp() {
         }
       }
 
-      return res.json({ success: true, notified: true });
+      return res.json({ success: true, notified: true, appointmentId: matchedAppointmentId });
     } catch (error) {
       console.error("❌ [KIOSK] Check-in error:", error);
       return res.status(500).json({ success: false, error: error.message });
