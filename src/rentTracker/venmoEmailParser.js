@@ -43,7 +43,10 @@ function parseVenmoEmail(plain, html, emailDate) {
   // Extract sender name — "NAME paid you" or "NAME paid your $X request"
   const paidYouMatch = text.match(/^(.+?)\s+paid you(?:r)?/im);
   if (paidYouMatch) {
-    result.senderName = paidYouMatch[1].trim();
+    let name = paidYouMatch[1].trim();
+    // Strip any residual forwarding header prefixes (Subject:, From:, etc.)
+    name = name.replace(/^(?:Subject|From|To|Re|Fw|Fwd):\s*/i, "").trim();
+    result.senderName = name;
   }
 
   // Extract amount — "$XXX.XX" (first occurrence after "paid you/your")
@@ -98,7 +101,7 @@ function parseVenmoEmail(plain, html, emailDate) {
   // Skip Venmo boilerplate + split amount fragments ("$", "325", ".", "00")
   // Note: ^\d{1,2}\/\d{1,2}\/\d{2,4}$ matches standalone dates but NOT date ranges
   const skipPatterns =
-    /paid you(?:r)?|^\$|^\d{1,6}$|^\.$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request|^see transaction|^money credited|^transaction|^date$|^sent to|^@|^_+$|^\[|^for any|^paypal|^nmls|^for security/i;
+    /paid you(?:r)?|^\$|^\d{1,6}$|^\.$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request|^see transaction|^money credited|^transaction|^date$|^sent to|^@|^_+$|^\[|^for any|^paypal|^nmls|^for security|^from:|^sent:|^subject:|^to:|^cc:/i;
 
   for (const line of lines) {
     if (
@@ -119,14 +122,31 @@ function parseVenmoEmail(plain, html, emailDate) {
  * Strip Hotmail/Outlook forwarding headers from the plain text body.
  * Finds the "Subject: ... paid you..." line and returns everything after it.
  * This isolates the actual Venmo email content from Hotmail's preamble.
+ *
+ * Hotmail may order the forwarding headers differently:
+ *   Option A: From → Sent → Subject → body
+ *   Option B: Subject → From → Sent → body
+ * We strip everything up to and including the last forwarding header block.
  */
 function stripForwardingHeaders(text) {
-  // Look for the Subject line that contains "paid you" — everything after it is the Venmo body
-  const subjectMatch = text.match(/Subject:\s+.+paid you(?:r)?[^\n]*\n/i);
+  // Strategy 1: Find "Subject: ... paid you..." line and strip up to the end of the forwarding block.
+  // The forwarding block ends when we hit a blank line or the first "NAME paid you" body line.
+  const subjectMatch = text.match(/Subject:\s+.+paid you(?:r)?[^\n]*/i);
   if (subjectMatch) {
     const afterSubject = text.slice(subjectMatch.index + subjectMatch[0].length);
-    return afterSubject.trim();
+    // Strip remaining forwarding headers (From:, Sent:, To:) that may follow
+    const stripped = afterSubject.replace(/^\s*(?:From:|Sent:|To:|Date:|Cc:)[^\n]*\n/gim, "");
+    return stripped.trim();
   }
+
+  // Strategy 2: Look for a block of forwarding headers (From: + Sent: + Subject:) in any order.
+  // Strip everything before the last header in the block.
+  const headerBlock = text.match(/(?:^|\n)\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*(?:\n\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*)*/i);
+  if (headerBlock) {
+    const afterBlock = text.slice(headerBlock.index + headerBlock[0].length);
+    return afterBlock.trim();
+  }
+
   return text;
 }
 
