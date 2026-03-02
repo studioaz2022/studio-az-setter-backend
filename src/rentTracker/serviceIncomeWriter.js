@@ -69,7 +69,7 @@ async function writeServiceIncome(params) {
       notes: params.notes || undefined,
       squarePaymentId: params.squarePaymentId || undefined,
       venmoTxId: params.venmoTxId || undefined,
-      verified: false,
+      verified: params.method === "square",
       weekOf: week,
       location: params.location,
       tipAmount: params.tipAmount ?? undefined,

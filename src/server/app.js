@@ -4471,7 +4471,7 @@ function createApp() {
       );
 
       const { startDate, endDate } = req.body;
-      const start = startDate || "2025-10-01";
+      const start = startDate || "2026-01-01";
       const end = endDate || new Date().toISOString().slice(0, 10);
 
       console.log(`\n📊 Syncing Supabase → InstantDB for Lionel (${start} to ${end})`);
@@ -4535,6 +4535,21 @@ function createApp() {
         }
       }
 
+      // Auto-verify any existing unverified Square records
+      const { db } = require("../clients/instantDb");
+      const { serviceIncome: unverified } = await db.query({
+        serviceIncome: { $: { where: { method: "square", verified: false } } },
+      });
+      let autoVerified = 0;
+      if (unverified.length > 0) {
+        const txns = unverified.map((r) =>
+          db.tx.serviceIncome[r.id].update({ verified: true })
+        );
+        await db.transact(txns);
+        autoVerified = unverified.length;
+        console.log(`  ✅ Auto-verified ${autoVerified} existing Square records`);
+      }
+
       console.log(`  ✅ Sync complete: ${written} written, ${skipped} skipped (dupes), ${errors} errors`);
 
       return res.json({
@@ -4543,6 +4558,7 @@ function createApp() {
         written,
         skipped,
         errors,
+        autoVerified,
       });
     } catch (error) {
       console.error("❌ Supabase→InstantDB sync error:", error);
