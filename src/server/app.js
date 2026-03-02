@@ -4288,15 +4288,23 @@ function createApp() {
       const payload = req.body;
       console.log("\n📩 Venmo webhook received");
 
-      // 1. Basic validation — check it came from Venmo
+      // 1. Basic validation — check it's a Venmo payment notification
+      // When forwarded via Hotmail, envelope.from is the forwarder's address,
+      // so we also check subject + body content for "paid you".
       const envelopeFrom = payload?.envelope?.from || "";
       const headerFrom = payload?.headers?.from || "";
       const subject = payload?.headers?.subject || "";
+      const bodyText = payload?.plain || payload?.html || "";
 
-      if (!envelopeFrom.includes("venmo") && !headerFrom.toLowerCase().includes("venmo")) {
-        console.log("  ⚠️ Not from Venmo, ignoring:", envelopeFrom);
+      const isFromVenmo = envelopeFrom.includes("venmo") || headerFrom.toLowerCase().includes("venmo");
+      const subjectHasPaidYou = /paid you/i.test(subject);
+      const bodyHasPaidYou = /paid you/i.test(bodyText);
+
+      if (!isFromVenmo && !subjectHasPaidYou && !bodyHasPaidYou) {
+        console.log("  ⚠️ Not a Venmo payment email, ignoring. From:", envelopeFrom, "| Subject:", subject);
         return res.status(200).json({ ok: true, skipped: "not-venmo" });
       }
+      console.log("  ✓ Venmo payment detected (from:", isFromVenmo, "subject:", subjectHasPaidYou, "body:", bodyHasPaidYou, ")");
 
       // 2. Parse the email body
       const emailDate = payload?.headers?.date || null;
