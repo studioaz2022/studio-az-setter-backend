@@ -4934,13 +4934,18 @@ function createApp() {
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
       // 1. Find or create GHL contact on barbershop location
+      const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : "Haircut";
+      const WALK_IN_SERVICE_FIELD_ID = "C1Ut7mVyr18adlWNb4ul";
+
       let contactId;
+      let isExistingContact = false;
       try {
         const dupeData = await ghlBarber.contacts.getDuplicateContact({
           locationId: BARBER_LOCATION_ID,
           number: customerPhone,
         });
         contactId = dupeData?.contact?.id;
+        if (contactId) isExistingContact = true;
       } catch (err) {
         // Not found — will create
       }
@@ -4958,6 +4963,10 @@ function createApp() {
             phone: customerPhone,
             locationId: BARBER_LOCATION_ID,
             source: "Kiosk Walk-In",
+            assignedTo: barberGhlUserId,
+            customFields: [
+              { id: WALK_IN_SERVICE_FIELD_ID, field_value: serviceLabel },
+            ],
           });
           contactId = created?.contact?.id;
         } catch (createErr) {
@@ -4970,8 +4979,24 @@ function createApp() {
         return res.status(500).json({ success: false, error: "Could not find or create contact" });
       }
 
+      // If contact already existed, update with walk-in service field + assign barber
+      if (isExistingContact) {
+        try {
+          await ghlBarber.contacts.updateContact(
+            { contactId },
+            {
+              assignedTo: barberGhlUserId,
+              customFields: [
+                { id: WALK_IN_SERVICE_FIELD_ID, field_value: serviceLabel },
+              ],
+            }
+          );
+        } catch (updateErr) {
+          console.error("⚠️ [KIOSK] Contact update failed (continuing):", updateErr.message);
+        }
+      }
+
       // 2. Book appointment on the barber's calendar
-      const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : "Haircut";
       let appointmentId;
       try {
         const result = await ghlBarber.calendars.createAppointment({
