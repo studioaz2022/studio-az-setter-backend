@@ -4760,17 +4760,18 @@ function createApp() {
   });
 
   /**
-   * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard
+   * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard&days=0
    * Tiered real-time availability for all barbers, grouped per barber.
    *
-   * Returns barbers sorted by earliest availability with tier labels:
-   *   "now"   — earliest slot starts within 2 min of current time
-   *   "5-10"  — earliest slot starts 2–10 min from now
-   *   "10-20" — earliest slot starts 10–20 min from now
-   *   "later" — everything 20+ min out, shown with actual times
+   * Query params:
+   *   service — "haircut" or "haircut_beard"
+   *   days    — 0 = today only (default), 1-7 = today + next N days
+   *
+   * When days=0, slots are classified into tiers: now, 5-10, 10-20, later
+   * When days>0, all slots use tier "later" with actual times, sorted by date
    */
   app.get("/api/kiosk/walk-in-slots", async (req, res) => {
-    const { service } = req.query;
+    const { service, days: daysParam } = req.query;
 
     if (!service || !["haircut", "haircut_beard"].includes(service)) {
       return res.status(400).json({
@@ -4779,13 +4780,20 @@ function createApp() {
       });
     }
 
+    const days = Math.min(Math.max(parseInt(daysParam) || 0, 0), 7);
+
     try {
       const { BARBER_DATA } = require("../config/kioskConfig");
       const { getCalendarFreeSlots } = require("../clients/ghlCalendarClient");
 
       const now = new Date();
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
+      const endDate = new Date(now);
+      if (days === 0) {
+        endDate.setHours(23, 59, 59, 999);
+      } else {
+        endDate.setDate(endDate.getDate() + days);
+        endDate.setHours(23, 59, 59, 999);
+      }
 
       // Fetch slots + calendar duration for all barbers in parallel
       const promises = BARBER_DATA.map(async (barber) => {
@@ -4795,7 +4803,7 @@ function createApp() {
         try {
           // Fetch free slots and calendar config in parallel
           const [slots, calendarInfo] = await Promise.all([
-            getCalendarFreeSlots(calendarId, now, endOfDay, ghlBarber),
+            getCalendarFreeSlots(calendarId, now, endDate, ghlBarber),
             ghlBarber.calendars.getCalendar({ calendarId }).catch((err) => {
               console.warn(`⚠️ [KIOSK] Calendar info fetch failed for ${barber.name}:`, err.message);
               return null;
@@ -4825,10 +4833,16 @@ function createApp() {
             const diffMin = diffMs / 60000;
 
             let tier;
-            if (diffMin <= 2) tier = "now";
-            else if (diffMin <= 10) tier = "5-10";
-            else if (diffMin <= 20) tier = "10-20";
-            else tier = "later";
+            if (days > 0) {
+              // Multi-day mode: all slots are "later" with actual times
+              tier = "later";
+            } else {
+              // Today-only mode: classify into proximity tiers
+              if (diffMin <= 2) tier = "now";
+              else if (diffMin <= 10) tier = "5-10";
+              else if (diffMin <= 20) tier = "10-20";
+              else tier = "later";
+            }
 
             // Recompute endTime using actual calendar duration
             const endTime = new Date(startTime);
@@ -4892,8 +4906,8 @@ function createApp() {
         return aFirst - bFirst;
       });
 
-      console.log(`✅ [KIOSK] Found ${barbers.length} available barbers for ${service} (tiers: ${barbers.map(b => b.tier).join(', ')})`);
-      return res.json({ success: true, barbers });
+      console.log(`✅ [KIOSK] Found ${barbers.length} available barbers for ${service}, days=${days} (tiers: ${barbers.map(b => b.tier).join(', ')})`);
+      return res.json({ success: true, barbers, days });
     } catch (error) {
       console.error("❌ [KIOSK] Walk-in slots error:", error);
       return res.status(500).json({ success: false, error: error.message });
