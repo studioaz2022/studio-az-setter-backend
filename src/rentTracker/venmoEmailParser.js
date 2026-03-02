@@ -25,7 +25,8 @@
  * @returns {{ senderName: string, amount: number, note: string|null, date: Date|null, transactionId: string|null }}
  */
 function parseVenmoEmail(plain, html, emailDate) {
-  const rawText = plain || stripHtml(html || "");
+  // Normalize \r\n to \n so regex patterns work consistently
+  const rawText = (plain || stripHtml(html || "")).replace(/\r\n/g, "\n").replace(/\r/g, "\n");
 
   // Strip Hotmail forwarding preamble to get the actual Venmo email body.
   // The forwarded email starts after the "Subject: ... paid you..." line.
@@ -94,10 +95,10 @@ function parseVenmoEmail(plain, html, emailDate) {
     .map((l) => l.trim())
     .filter(Boolean);
 
-  // Skip Venmo boilerplate lines. Note: ^\d{1,2}\/\d{1,2}\/\d{2,4}$ matches
-  // standalone dates like "2/24/2026" but NOT date ranges like "3/2 - 3/6 🪑"
+  // Skip Venmo boilerplate + split amount fragments ("$", "325", ".", "00")
+  // Note: ^\d{1,2}\/\d{1,2}\/\d{2,4}$ matches standalone dates but NOT date ranges
   const skipPatterns =
-    /paid you(?:r)?|^\$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request|^see transaction|^money credited|^transaction|^date$|^sent to|^@|^_+$|^\[|^for any|^paypal|^nmls|^for security/i;
+    /paid you(?:r)?|^\$|^\d{1,6}$|^\.$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request|^see transaction|^money credited|^transaction|^date$|^sent to|^@|^_+$|^\[|^for any|^paypal|^nmls|^for security/i;
 
   for (const line of lines) {
     if (
