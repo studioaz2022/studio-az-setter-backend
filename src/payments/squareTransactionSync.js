@@ -225,6 +225,35 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
   // Remove auto-recorded products from unmatched list
   unmatchedResults = unmatchedResults.filter((r) => !r.payment?.isProductSale);
 
+  // Safety net: strip any product sales from autoMatched (they should be auto-saved, not shown in Review)
+  const productInAutoMatched = autoMatched.filter((m) => m.isProductSale);
+  if (productInAutoMatched.length > 0) {
+    console.log(`[SquareSync] Stripping ${productInAutoMatched.length} product sales from autoMatched (safety net)`);
+    // Auto-save these product sales that slipped through
+    for (const prod of productInAutoMatched) {
+      try {
+        await recordTransaction({
+          contactId: prod.contactId || "walk_in",
+          contactName: prod.contactName || "Walk-in",
+          barberGhlId,
+          squarePayment: { id: prod.squarePaymentId, order_id: prod.squareOrderId, tip_money: { amount: prod.squareTipCents || 0 }, note: prod.note },
+          totalCents: prod.amountCents,
+          serviceCents: prod.serviceCents || prod.amountCents,
+          createdAt: prod.createdAt,
+          appointmentId: prod.appointmentId || null,
+          calendarId: prod.calendarId || null,
+          squareTipCents: prod.squareTipCents || null,
+          discountCents: prod.discountCents,
+          orderDetails: { itemType: prod.itemType, lineItemName: null, isProductSale: true, basePriceCents: prod.basePriceCents, totalTaxCents: prod.totalTaxCents },
+        });
+        console.log(`[SquareSync] Safety-net auto-recorded product sale: ${prod.squarePaymentId}`);
+      } catch (err) {
+        console.warn(`[SquareSync] Safety-net product save failed: ${err.message}`);
+      }
+    }
+  }
+  autoMatched = autoMatched.filter((m) => !m.isProductSale);
+
   const matched = synced - unmatchedResults.length;
   const unmatched = unmatchedResults.map((r) => r.payment);
 
