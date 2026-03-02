@@ -13,6 +13,7 @@
   "type": "commonjs",
   "dependencies": {
     "@gohighlevel/api-client": "^2.2.2",
+    "@instantdb/admin": "^0.22.148",
     "@supabase/supabase-js": "^2.48.1",
     "axios": "^1.13.2",
     "cors": "^2.8.5",

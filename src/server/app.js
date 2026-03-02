@@ -4275,6 +4275,118 @@ function createApp() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // RENT TRACKER — Venmo Email Webhook (CloudMailin)
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/rent-tracker/venmo-webhook", async (req, res) => {
+    try {
+      const { db } = require("../clients/instantDb");
+      const { id } = require("@instantdb/admin");
+      const { parseVenmoEmail, generateDedup } = require("../rentTracker/venmoEmailParser");
+      const { buildAliasMap, matchTenant, attributeToWeek, getPaymentType } = require("../rentTracker/tenantMatcher");
+
+      const payload = req.body;
+      console.log("\n📩 Venmo webhook received");
+
+      // 1. Basic validation — check it came from Venmo
+      const envelopeFrom = payload?.envelope?.from || "";
+      const headerFrom = payload?.headers?.from || "";
+      const subject = payload?.headers?.subject || "";
+
+      if (!envelopeFrom.includes("venmo") && !headerFrom.toLowerCase().includes("venmo")) {
+        console.log("  ⚠️ Not from Venmo, ignoring:", envelopeFrom);
+        return res.status(200).json({ ok: true, skipped: "not-venmo" });
+      }
+
+      // 2. Parse the email body
+      const emailDate = payload?.headers?.date || null;
+      const parsed = parseVenmoEmail(payload?.plain || "", payload?.html || "", emailDate);
+
+      console.log("  Parsed:", {
+        sender: parsed.senderName,
+        amount: parsed.amount,
+        note: parsed.note,
+        date: parsed.date?.toISOString(),
+      });
+
+      if (!parsed.senderName || !parsed.amount) {
+        console.log("  ⚠️ Could not parse sender or amount, skipping");
+        return res.status(200).json({ ok: true, skipped: "parse-failed" });
+      }
+
+      // 3. Load tenants and match
+      const { tenants } = await db.query({ tenants: {} });
+      const aliasMap = buildAliasMap(tenants);
+      const tenant = matchTenant(parsed.senderName, aliasMap);
+
+      if (!tenant) {
+        console.log(`  ⚠️ No tenant match for "${parsed.senderName}", skipping`);
+        return res.status(200).json({ ok: true, skipped: "no-tenant-match", sender: parsed.senderName });
+      }
+
+      console.log(`  ✅ Matched to tenant: ${tenant.name}`);
+
+      // 4. Check for duplicates
+      const dedupKey = generateDedup(parsed.senderName, parsed.amount, parsed.date, parsed.note);
+
+      const { payments: existing } = await db.query({
+        payments: {
+          $: { where: { venmoTxId: dedupKey } },
+        },
+      });
+
+      if (existing.length > 0) {
+        console.log(`  ⚠️ Duplicate detected (${dedupKey}), skipping`);
+        return res.status(200).json({ ok: true, skipped: "duplicate", dedupKey });
+      }
+
+      // 5. Determine week attribution
+      const paymentDate = parsed.date || new Date();
+      const { weekOf, attribution } = attributeToWeek(
+        parsed.amount,
+        parsed.note,
+        paymentDate,
+        tenant,
+      );
+      const paymentType = getPaymentType(tenant);
+
+      console.log(`  Week: ${weekOf} | Attribution: ${attribution} | Type: ${paymentType}`);
+
+      // 6. Write to InstantDB
+      const paymentId = id();
+      await db.transact(
+        db.tx.payments[paymentId]
+          .update({
+            amount: parsed.amount,
+            method: "venmo",
+            type: paymentType,
+            weekOf,
+            paidAt: paymentDate,
+            notes: parsed.note || undefined,
+            venmoTxId: dedupKey,
+            verified: false,
+            attribution,
+          })
+          .link({ tenant: tenant.id }),
+      );
+
+      console.log(`  ✅ Payment logged: $${parsed.amount} from ${tenant.name} → week ${weekOf} (unverified)`);
+
+      return res.status(200).json({
+        ok: true,
+        logged: true,
+        tenant: tenant.name,
+        amount: parsed.amount,
+        weekOf,
+      });
+    } catch (error) {
+      console.error("❌ Venmo webhook error:", error);
+      // Always return 200 so CloudMailin doesn't retry
+      return res.status(200).json({ ok: true, error: "internal-error" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // END MERGED WEBHOOK SERVER ROUTES
   // ═══════════════════════════════════════════════════════════════════════════
 
