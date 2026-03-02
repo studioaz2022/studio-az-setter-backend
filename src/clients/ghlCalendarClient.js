@@ -261,13 +261,15 @@ async function getConsultAppointmentsForContact(contactId, consultCalendarIds) {
  *
  * NOTE: GHL API constraint - date range cannot exceed 31 days
  */
-async function getCalendarFreeSlots(calendarId, startDate, endDate) {
+async function getCalendarFreeSlots(calendarId, startDate, endDate, sdkInstance) {
   if (!calendarId) {
     throw new Error("calendarId is required for getCalendarFreeSlots");
   }
   if (!startDate || !endDate) {
     throw new Error("startDate and endDate are required for getCalendarFreeSlots");
   }
+
+  const sdk = sdkInstance || ghl;
 
   // Convert to milliseconds timestamp for GHL API
   const startMs = startDate.getTime();
@@ -283,7 +285,7 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate) {
 
   try {
     // SDK returns response.data directly — same date-keyed structure
-    const data = await ghl.calendars.getSlots({
+    const data = await sdk.calendars.getSlots({
       calendarId,
       startDate: startMs,
       endDate: finalEndMs,

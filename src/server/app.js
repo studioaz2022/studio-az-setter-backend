@@ -446,7 +446,9 @@ function createApp() {
       const allowedOrigins = [
         'https://tattooshopminneapolis.com',
         'https://app.onthebusinesscrm.com', // GHL custom domain
+        'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'http://localhost:3000',
+        'http://localhost:3001',
         'http://localhost:8080',
         'http://localhost:8888',
         'http://127.0.0.1:5500', // Common local dev server port
@@ -4551,6 +4553,277 @@ function createApp() {
   // ═══════════════════════════════════════════════════════════════════════════
   // END MERGED WEBHOOK SERVER ROUTES
   // ═══════════════════════════════════════════════════════════════════════════
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // KIOSK CHECK-IN ENDPOINTS
+  // iPad reception kiosk for barbershop + tattoo shop
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  /**
+   * POST /api/kiosk/check-in
+   * Appointment check-in — sends push notification to barber/artist
+   */
+  app.post("/api/kiosk/check-in", async (req, res) => {
+    const { ghlUserId, customerName, location } = req.body;
+
+    if (!ghlUserId || !customerName || !location) {
+      return res.status(400).json({
+        success: false,
+        error: "ghlUserId, customerName, and location are required",
+      });
+    }
+
+    try {
+      const { supabase } = require("../clients/supabaseClient");
+      const apnsService = require("../services/apnsService");
+
+      // Look up staff member's Supabase profile by GHL user ID
+      const { data: profile, error: profileError } = await supabase
+        .from("profiles")
+        .select("id")
+        .eq("ghl_user_id", ghlUserId)
+        .single();
+
+      if (profileError || !profile) {
+        console.log(`⚠️ [KIOSK] No profile found for GHL user ${ghlUserId} — check-in recorded without push`);
+        return res.json({ success: true, notified: false });
+      }
+
+      // Send push notification if APNs is configured
+      if (apnsService.isConfigured()) {
+        const { data: tokens } = await supabase
+          .from("push_tokens")
+          .select("token")
+          .eq("user_id", profile.id)
+          .eq("is_active", true);
+
+        if (tokens && tokens.length > 0) {
+          const locationLabel = location === "tattoo" ? "Tattoo Shop" : "Barbershop";
+          const notification = {
+            title: "Client Check-In",
+            body: `${customerName} has arrived at the ${locationLabel}`,
+            data: { type: "kiosk_check_in", customerName, location },
+          };
+
+          for (const tokenRecord of tokens) {
+            try {
+              await apnsService.sendWithRefresh(tokenRecord.token, notification);
+            } catch (pushErr) {
+              console.error("❌ [KIOSK] Push send error:", pushErr.message);
+            }
+          }
+          console.log(`✅ [KIOSK] Check-in notification sent for ${customerName} → ${ghlUserId}`);
+        }
+      }
+
+      return res.json({ success: true, notified: true });
+    } catch (error) {
+      console.error("❌ [KIOSK] Check-in error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard
+   * Real-time availability for all barbers for a given service
+   */
+  app.get("/api/kiosk/walk-in-slots", async (req, res) => {
+    const { service } = req.query;
+
+    if (!service || !["haircut", "haircut_beard"].includes(service)) {
+      return res.status(400).json({
+        success: false,
+        error: 'service must be "haircut" or "haircut_beard"',
+      });
+    }
+
+    try {
+      const { BARBER_DATA } = require("../config/kioskConfig");
+      const { getCalendarFreeSlots } = require("../clients/ghlCalendarClient");
+
+      // Date range: rest of today
+      const now = new Date();
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Fetch slots for all barbers in parallel
+      const promises = BARBER_DATA.map(async (barber) => {
+        const calendarId = barber.calendars[service];
+        if (!calendarId) return [];
+
+        try {
+          const slots = await getCalendarFreeSlots(calendarId, now, endOfDay, ghlBarber);
+          return slots.map((slot) => ({
+            barberName: barber.name,
+            barberGhlUserId: barber.ghlUserId,
+            barberPhoto: barber.photoUrl,
+            calendarId,
+            startTime: slot.startTime,
+            endTime: slot.endTime,
+            service,
+          }));
+        } catch (err) {
+          console.error(`⚠️ [KIOSK] Slot fetch failed for ${barber.name}:`, err.message);
+          return [];
+        }
+      });
+
+      const results = await Promise.allSettled(promises);
+      let allSlots = [];
+      for (const result of results) {
+        if (result.status === "fulfilled") {
+          allSlots = allSlots.concat(result.value);
+        }
+      }
+
+      // Enrich with prices
+      try {
+        const priceMap = await getServicePriceMap();
+        for (const slot of allSlots) {
+          const priceEntry = priceMap[slot.calendarId];
+          slot.price = priceEntry ? priceEntry.price : 0;
+        }
+      } catch (priceErr) {
+        console.error("⚠️ [KIOSK] Price lookup failed:", priceErr.message);
+      }
+
+      // Sort by time
+      allSlots.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+      console.log(`✅ [KIOSK] Found ${allSlots.length} walk-in slots for ${service}`);
+      return res.json({ success: true, slots: allSlots });
+    } catch (error) {
+      console.error("❌ [KIOSK] Walk-in slots error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/kiosk/walk-in-book
+   * Book a walk-in appointment — creates/finds GHL contact, books on calendar, sends push
+   */
+  app.post("/api/kiosk/walk-in-book", async (req, res) => {
+    const { calendarId, barberGhlUserId, startTime, endTime, customerName, customerPhone, service } = req.body;
+
+    if (!calendarId || !barberGhlUserId || !startTime || !endTime || !customerName || !customerPhone || !service) {
+      return res.status(400).json({
+        success: false,
+        error: "All fields required: calendarId, barberGhlUserId, startTime, endTime, customerName, customerPhone, service",
+      });
+    }
+
+    try {
+      const { supabase } = require("../clients/supabaseClient");
+      const apnsService = require("../services/apnsService");
+      const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
+
+      // 1. Find or create GHL contact on barbershop location
+      let contactId;
+      try {
+        const dupeData = await ghlBarber.contacts.getDuplicateContact({
+          locationId: BARBER_LOCATION_ID,
+          number: customerPhone,
+        });
+        contactId = dupeData?.contact?.id;
+      } catch (err) {
+        // Not found — will create
+      }
+
+      if (!contactId) {
+        // Parse name into first/last
+        const nameParts = customerName.trim().split(/\s+/);
+        const firstName = nameParts[0];
+        const lastName = nameParts.slice(1).join(" ") || "";
+
+        try {
+          const created = await ghlBarber.contacts.createContact({
+            firstName,
+            lastName: lastName || undefined,
+            phone: customerPhone,
+            locationId: BARBER_LOCATION_ID,
+            source: "Kiosk Walk-In",
+          });
+          contactId = created?.contact?.id;
+        } catch (createErr) {
+          console.error("❌ [KIOSK] Contact creation failed:", createErr.message);
+          return res.status(500).json({ success: false, error: "Failed to create contact" });
+        }
+      }
+
+      if (!contactId) {
+        return res.status(500).json({ success: false, error: "Could not find or create contact" });
+      }
+
+      // 2. Book appointment on the barber's calendar
+      const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : "Haircut";
+      let appointmentId;
+      try {
+        const result = await ghlBarber.calendars.createAppointment({
+          calendarId,
+          contactId,
+          locationId: BARBER_LOCATION_ID,
+          startTime,
+          endTime,
+          title: `Walk-in: ${customerName}`,
+          appointmentStatus: "confirmed",
+          assignedUserId: barberGhlUserId,
+          toNotify: false,
+        });
+        appointmentId = result?.id || result?.event?.id;
+      } catch (bookErr) {
+        console.error("❌ [KIOSK] Appointment creation failed:", bookErr.response?.data || bookErr.message);
+        return res.status(500).json({ success: false, error: "Failed to book appointment" });
+      }
+
+      // 3. Send push notification to barber
+      if (apnsService.isConfigured()) {
+        try {
+          const { data: profile } = await supabase
+            .from("profiles")
+            .select("id")
+            .eq("ghl_user_id", barberGhlUserId)
+            .single();
+
+          if (profile) {
+            const { data: tokens } = await supabase
+              .from("push_tokens")
+              .select("token")
+              .eq("user_id", profile.id)
+              .eq("is_active", true);
+
+            if (tokens && tokens.length > 0) {
+              const time = new Date(startTime).toLocaleTimeString("en-US", {
+                hour: "numeric",
+                minute: "2-digit",
+                hour12: true,
+              });
+              const notification = {
+                title: "Walk-In Booked",
+                body: `${customerName} — ${serviceLabel} at ${time}`,
+                data: { type: "kiosk_walk_in", appointmentId, customerName, service },
+              };
+
+              for (const tokenRecord of tokens) {
+                try {
+                  await apnsService.sendWithRefresh(tokenRecord.token, notification);
+                } catch (pushErr) {
+                  console.error("❌ [KIOSK] Push send error:", pushErr.message);
+                }
+              }
+            }
+          }
+        } catch (notifErr) {
+          console.error("⚠️ [KIOSK] Push notification failed (appointment still booked):", notifErr.message);
+        }
+      }
+
+      console.log(`✅ [KIOSK] Walk-in booked: ${customerName} → ${barberGhlUserId} at ${startTime}`);
+      return res.json({ success: true, appointmentId });
+    } catch (error) {
+      console.error("❌ [KIOSK] Walk-in booking error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
 
   return app;
 }
