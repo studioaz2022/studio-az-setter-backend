@@ -22,14 +22,14 @@ function parseVenmoEmail(plain, html, emailDate) {
     date: null,
   };
 
-  // Extract sender name — "NAME paid you"
-  const paidYouMatch = text.match(/(.+?)\s+paid you/i);
+  // Extract sender name — "NAME paid you" or "NAME paid your $X request"
+  const paidYouMatch = text.match(/(.+?)\s+paid you(?:r)?/i);
   if (paidYouMatch) {
     result.senderName = paidYouMatch[1].trim();
   }
 
-  // Extract amount — "$XXX.XX" (first occurrence after "paid you")
-  const amountMatch = text.match(/paid you\s+\$([0-9,]+(?:\.\d{2})?)/i)
+  // Extract amount — "$XXX.XX" (first occurrence after "paid you/your")
+  const amountMatch = text.match(/paid you(?:r)?\s+\$([0-9,]+(?:\.\d{2})?)/i)
     || text.match(/\$([0-9,]+(?:\.\d{2})?)/);
   if (amountMatch) {
     result.amount = parseFloat(amountMatch[1].replace(/,/g, ""));
@@ -68,7 +68,7 @@ function parseVenmoEmail(plain, html, emailDate) {
   // Skip Venmo boilerplate lines. Note: ^\d{1,2}\/\d{1,2}\/\d{2,4}$ matches
   // standalone dates like "2/24/2026" but NOT date ranges like "3/2 - 3/6 🪑"
   const skipPatterns =
-    /paid you|^\$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a/i;
+    /paid you(?:r)?|^\$|^[A-Z][a-z]+ \d{1,2},?\s+\d{4}$|^\d{1,2}\/\d{1,2}\/\d{2,4}$|^view|^reply|^venmo|^transfer|^standard|^instant|^https?:|^if you|^didn.t|^this is a|^request/i;
 
   for (const line of lines) {
     if (

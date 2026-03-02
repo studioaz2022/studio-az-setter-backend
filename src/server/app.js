@@ -4297,8 +4297,8 @@ function createApp() {
       const bodyText = payload?.plain || payload?.html || "";
 
       const isFromVenmo = envelopeFrom.includes("venmo") || headerFrom.toLowerCase().includes("venmo");
-      const subjectHasPaidYou = /paid you/i.test(subject);
-      const bodyHasPaidYou = /paid you/i.test(bodyText);
+      const subjectHasPaidYou = /paid you(?:r)?/i.test(subject);
+      const bodyHasPaidYou = /paid you(?:r)?/i.test(bodyText);
 
       if (!isFromVenmo && !subjectHasPaidYou && !bodyHasPaidYou) {
         console.log("  ⚠️ Not a Venmo payment email, ignoring. From:", envelopeFrom, "| Subject:", subject);
