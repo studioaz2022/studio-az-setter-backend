@@ -678,13 +678,34 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
 
     if (dayAppts.length === 0) continue;
 
-    // Sequential pairing: Nth unmatched payment → Nth unclaimed appointment
-    let aptIdx = 0;
+    // Time-aware sequential pairing: for each unmatched payment, find the closest
+    // unclaimed appointment that falls within a reasonable time window.
+    // Payment must occur during the appointment or within 45 min after it ends.
+    const claimedAptIndices = new Set();
     for (const candidate of dayPayments) {
-      if (aptIdx >= dayAppts.length) break;
+      const paymentTime = new Date(candidate.payment.createdAt);
 
-      const match = dayAppts[aptIdx];
-      aptIdx++;
+      // Find the best unclaimed appointment: closest in time, payment during or after apt
+      let bestIdx = -1;
+      let bestDiff = Infinity;
+      for (let i = 0; i < dayAppts.length; i++) {
+        if (claimedAptIndices.has(i)) continue;
+        const aptStart = new Date(dayAppts[i].startTime);
+        const aptEnd = dayAppts[i].endTime ? new Date(dayAppts[i].endTime) : new Date(aptStart.getTime() + 60 * 60 * 1000); // default 1hr
+        const WINDOW_MS = 45 * 60 * 1000; // 45 min after appointment ends
+        // Payment must be >= appointment start and <= appointment end + 45min
+        if (paymentTime >= aptStart && paymentTime <= new Date(aptEnd.getTime() + WINDOW_MS)) {
+          const diff = Math.abs(paymentTime - aptEnd);
+          if (diff < bestDiff) {
+            bestDiff = diff;
+            bestIdx = i;
+          }
+        }
+      }
+
+      if (bestIdx === -1) continue; // No appointment within time window
+      claimedAptIndices.add(bestIdx);
+      const match = dayAppts[bestIdx];
 
       const contactId = match.contactId;
       const sp = candidate.squarePayment;
