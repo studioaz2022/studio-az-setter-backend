@@ -5274,7 +5274,8 @@ function createApp() {
       const sdkInstance = isBarbershop ? ghlBarber : undefined;
       const sdk = sdkInstance || require("../clients/ghlSdk").ghl;
 
-      const CHECK_IN_FIELD_ID = "J78FOcL9lie4BKji08gs";
+      const CHECK_IN_FIELD_ID = "J78FOcL9lie4BKji08gs"; // barbershop
+      const TATTOO_CHECK_IN_FIELD_ID = "sPhtINDWyvqVkFyZ9ILY"; // tattoo
       const WALK_IN_SERVICE_FIELD_ID = "ez95QC6Ois2V2uAFQUGY";
 
       let matchedAppointmentId = knownApptId || null;
@@ -5382,6 +5383,24 @@ function createApp() {
           }
         } catch (cfErr) {
           console.error("⚠️ [KIOSK] Custom field update failed:", cfErr.message);
+        }
+      } else if (matchedContactId && !isBarbershop) {
+        // Tattoo check-in — set "Here" field on tattoo location contact using tattoo SDK
+        try {
+          const tattooSdk = require("../clients/ghlSdk").ghl;
+          const updateRes = await tattooSdk.contacts.updateContact(
+            { contactId: matchedContactId },
+            {
+              customFields: [
+                { id: TATTOO_CHECK_IN_FIELD_ID, field_value: "Here" },
+              ],
+            }
+          );
+          const updatedContact = updateRes?.contact || updateRes;
+          const cfAfter = updatedContact?.customFields?.find(f => f.id === TATTOO_CHECK_IN_FIELD_ID);
+          console.log(`✅ [KIOSK] Set 'Here' tattoo custom field on contact ${matchedContactId} — response field:`, JSON.stringify(cfAfter));
+        } catch (cfErr) {
+          console.error("⚠️ [KIOSK] Tattoo custom field update failed:", cfErr.message);
         }
       }
 
