@@ -4921,7 +4921,7 @@ function createApp() {
       // Calendars to exclude (breaks / internal)
       const BREAK_CALENDAR_IDS = new Set(["lijQ2ubF4UcrHxDwfzyK"]);
 
-      // Calendar ID → service label for the kiosk carousel
+      // Calendar ID → base service label for the kiosk carousel
       const CALENDAR_SERVICE_MAP = {
         // Lionel — regular
         "Bsv9ngkRgsbLzgtN3Vpq": "Haircut",
@@ -4968,6 +4968,100 @@ function createApp() {
         "rsg2VbiVFGuGiEwUIhdl": "Neck Trim",
       };
 
+      // ── Title parsing (mirrors iOS TodaysScheduleWidget.swift) ──
+
+      /** Extract contact name from title: "ServiceType: Name" → "Name" */
+      function parseContactName(title) {
+        if (!title) return "Unknown";
+        const colonIdx = title.indexOf(": ");
+        if (colonIdx !== -1) return title.slice(colonIdx + 2).trim();
+        const dashIdx = title.indexOf(" - ");
+        if (dashIdx !== -1) return title.slice(dashIdx + 3).trim();
+        return title.trim(); // F&F titles are just the name
+      }
+
+      /** Extract raw service text from title: "ServiceType: Name" → "ServiceType" */
+      function parseRawService(title) {
+        if (!title) return "";
+        let raw = title;
+        const colonIdx = raw.indexOf(": ");
+        if (colonIdx !== -1) raw = raw.slice(0, colonIdx);
+        else {
+          const dashIdx = raw.indexOf(" - ");
+          if (dashIdx !== -1) raw = raw.slice(0, dashIdx);
+          else return ""; // no separator = F&F, service comes from calendar
+        }
+        return raw.replace(/📱/g, "").trim();
+      }
+
+      const KNOWN_HAIR_TYPES = ["fade", "afro", "long/med", "kids", "espanol"];
+
+      /** Extract hair type from raw service text: "FadeHaircut" → "Fade" */
+      function parseHairType(rawService) {
+        if (!rawService) return null;
+        let s = rawService.toLowerCase();
+        if (s.startsWith("silent")) return null; // silent is separate
+        // Strip add-on suffixes after "haircut" (e.g. "Haircut Eyebrows ($10)")
+        const hcIdx = s.indexOf("haircut");
+        if (hcIdx !== -1) s = s.slice(0, hcIdx + 7);
+        // Strip calendar prefixes ("SoonestFade" → "fade")
+        if (s.startsWith("soonest")) s = s.slice(7);
+        // Check for "FadeHaircut" pattern → extract prefix
+        const hcIdx2 = s.indexOf("haircut");
+        if (hcIdx2 > 0) {
+          const before = s.slice(0, hcIdx2).trim();
+          if (KNOWN_HAIR_TYPES.includes(before)) {
+            return before === "long/med" ? "Long/Med" : before.charAt(0).toUpperCase() + before.slice(1);
+          }
+          return null;
+        }
+        // Standalone hair type after stripping prefix
+        const remaining = s.trim();
+        if (KNOWN_HAIR_TYPES.includes(remaining)) {
+          return remaining === "long/med" ? "Long/Med" : remaining.charAt(0).toUpperCase() + remaining.slice(1);
+        }
+        return null;
+      }
+
+      /** Detect silent appointment */
+      function isSilent(rawService) {
+        return rawService && rawService.toLowerCase().startsWith("silent");
+      }
+
+      /** Extract add-ons from raw service text */
+      function parseAddOns(rawService) {
+        if (!rawService) return [];
+        const lower = rawService.toLowerCase();
+        const addOns = [];
+        // Match add-ons with their price tags
+        const eyebrowMatch = rawService.match(/eyebrow[s]?\s*\(\$\d+\)/i);
+        if (eyebrowMatch) addOns.push(eyebrowMatch[0]);
+        // "Both Wax ($30)", "Nose or Ear Wax ($15)", "Eye Brow Wax ($15)"
+        const waxMatch = rawService.match(/((?:both|nose\s*(?:or|&)\s*ear|eye\s*brow)\s*wax\s*\(\$\d+\))/i);
+        if (waxMatch) addOns.push(waxMatch[1]);
+        else if (lower.includes("wax") && !lower.includes("eyebrow")) {
+          const genericWax = rawService.match(/wax\s*\(\$\d+\)/i);
+          if (genericWax) addOns.push(genericWax[0]);
+        }
+        return addOns;
+      }
+
+      /** Build full service label: "Silent · Fade · Haircut + Beard · Eyebrows ($10)" */
+      function buildServiceLabel(calendarId, title) {
+        const baseService = CALENDAR_SERVICE_MAP[calendarId] || null;
+        const rawService = parseRawService(title);
+        const parts = [];
+
+        if (isSilent(rawService)) parts.push("Silent");
+        const hairType = parseHairType(rawService);
+        if (hairType) parts.push(hairType);
+        parts.push(baseService || (rawService ? rawService : "Appointment"));
+        const addOns = parseAddOns(rawService);
+        addOns.forEach((a) => parts.push(a));
+
+        return parts.join(" · ");
+      }
+
       // Filter to active appointments, exclude breaks, extract key fields
       const appointments = events
         .filter((evt) => {
@@ -4979,13 +5073,13 @@ function createApp() {
         .map((evt) => ({
           id: evt.id,
           contactId: evt.contact?.id || null,
-          contactName: evt.contact?.name || evt.title || "Unknown",
+          contactName: parseContactName(evt.title) || evt.contact?.name || "Unknown",
           contactPhone: evt.contact?.phone || evt.contact?.phoneNumber || null,
           startTime: evt.startTime,
           endTime: evt.endTime,
           status: evt.appointmentStatus,
           calendarId: evt.calendarId || null,
-          service: CALENDAR_SERVICE_MAP[evt.calendarId] || null,
+          service: buildServiceLabel(evt.calendarId, evt.title),
         }))
         .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
