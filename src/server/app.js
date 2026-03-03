@@ -3391,7 +3391,7 @@ function createApp() {
         venmoTransactionId: tx.venmo_transaction_id,
         amountCents: Math.round((tx.gross_amount || 0) * 100),
         serviceCents: tx.service_price ? Math.round(tx.service_price * 100) : null,
-        createdAt: tx.created_at,
+        createdAt: tx.square_payment_time || tx.created_at,
         senderName: tx.contact_name,
         note: tx.notes,
         contactId: tx.contact_id,

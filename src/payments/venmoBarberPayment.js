@@ -204,6 +204,7 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     tip_amount: 0,
     venmo_story_url: parsed.storyUrl || null,
     venmo_profile_pic_url: parsed.profilePicUrl || null,
+    square_payment_time: parsed.date ? parsed.date.toISOString() : null,
   });
 
   if (error) {
