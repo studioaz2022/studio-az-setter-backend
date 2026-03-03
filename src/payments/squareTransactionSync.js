@@ -708,14 +708,19 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
     if (dayAppts.length === 0) continue;
 
     // Time-aware matching: for each unmatched payment, find the best unclaimed
-    // appointment. Barbers often run behind, so payments come after the appointment ends.
+    // appointment based on distance from appointment end time.
     //
-    // Scoring: prefer appointments that already ended before the payment was made.
-    // Among those, pick the one whose end time is closest to the payment time
-    // (most recently ended = most likely match). If no ended appointment fits,
-    // fall back to appointments currently in progress at payment time.
+    // Scoring: uses absolute distance from appointment end time, with a 10-minute
+    // grace period before end (clients often pay while still in the chair).
+    // Payments well before the appointment ends get a penalty (unlikely match).
+    //
+    // Maximum distance threshold: if the best match is >45 min from any appointment
+    // end, skip the match entirely — it's more likely a walk-in or cash client's
+    // unclaimed appointment than a real match.
     //
     // Window: payment must be within 15 min before apt start → 60 min after apt end.
+    const MAX_MATCH_DISTANCE_MIN = 45; // reject matches worse than this
+    const GRACE_PERIOD_MS = 10 * 60 * 1000; // 10 min before apt end treated as "ended"
     const claimedAptIndices = new Set();
     for (const candidate of dayPayments) {
       const paymentTime = new Date(candidate.payment.createdAt);
@@ -731,15 +736,17 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         if (paymentTime < new Date(aptStart.getTime() - BEFORE_MS) ||
             paymentTime > new Date(aptEnd.getTime() + AFTER_MS)) continue;
 
-        // Prefer appointments that ended before the payment (natural "pay after service")
-        // Score: time since apt ended (lower = better). Appointments not yet ended get a penalty.
+        // Grace period: treat payments within 10 min of appointment end as "post-service"
+        // (clients often pay while still in the chair near the end of their appointment).
+        // Score = absolute distance from appointment end time (lower = better).
+        // Payments well before the grace window get a 1000-point penalty.
         let score;
-        if (paymentTime >= aptEnd) {
-          // Appointment already ended — ideal match. Score = minutes since end.
-          score = (paymentTime - aptEnd) / 60000;
+        const graceStart = new Date(aptEnd.getTime() - GRACE_PERIOD_MS);
+        if (paymentTime >= graceStart) {
+          // Payment is within grace period or after appointment ended
+          score = Math.abs(paymentTime - aptEnd) / 60000;
         } else {
-          // Appointment still in progress or hasn't started — unlikely match.
-          // Penalty: 1000 + minutes until end (so ended apts always win).
+          // Payment is well before appointment ends — unlikely match
           score = 1000 + (aptEnd - paymentTime) / 60000;
         }
 
@@ -749,7 +756,9 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         }
       }
 
-      if (bestIdx === -1) continue;
+      // Reject match if best score exceeds threshold — likely a walk-in or
+      // cash client's unclaimed appointment, not a real match
+      if (bestIdx === -1 || bestScore > MAX_MATCH_DISTANCE_MIN) continue;
       claimedAptIndices.add(bestIdx);
       const match = dayAppts[bestIdx];
 
