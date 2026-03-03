@@ -4918,11 +4918,63 @@ function createApp() {
         sdkInstance: ghlBarber,
       });
 
-      // Filter to active appointments only, extract key fields
+      // Calendars to exclude (breaks / internal)
+      const BREAK_CALENDAR_IDS = new Set(["lijQ2ubF4UcrHxDwfzyK"]);
+
+      // Calendar ID → service label for the kiosk carousel
+      const CALENDAR_SERVICE_MAP = {
+        // Lionel — regular
+        "Bsv9ngkRgsbLzgtN3Vpq": "Haircut",
+        "pGNsYjGyEYW9LCD1GcQN": "Haircut + Beard",
+        // Lionel — Friends & Family
+        "9a66xeZi2pEJWQpxiMjy": "Haircut",
+        "0qOmPMcP7L4qz58fxmu4": "Haircut + Beard",
+        // Drew
+        "AzIK0eW09u4V1jJTXQ0x": "Haircut",
+        "dCuPcZbqylgwftyDu8kw": "Haircut + Beard",
+        "RsdMc558Cjjs28xpyCCf": "Beard Trim",
+        // Logan
+        "o1fvyti3GnoFGKZN5Hwr": "Haircut",
+        "lsBgjayKLFOUahMvuVNe": "Haircut + Beard",
+        "Us8MYQ74AcvMsJBmIucQ": "Beard Trim",
+        // Elle
+        "Bcqa2hqjUX7xhNu37cL1": "Haircut",
+        "D9l8VEIX7hOLrqSrSJVc": "Haircut + Beard",
+        // David
+        "qvcPzTqyaQOxsijIQqAN": "Haircut",
+        "prLxqGcd2JYNnb0sPGmc": "Haircut + Beard",
+        // Joshua
+        "X1xINoRML65yAOVUsAGa": "Haircut",
+        "Vs496YAmFt5uX2JTg2Bs": "Haircut + Beard",
+        "3NsSPGmWCxSAZJSPTIDY": "Beard Trim",
+        "pJSIf74XzkpvFAChges2": "Haircut + Beard",
+        "FMi3hYcTU2UMeJ2F1hn6": "Haircut + Beard",
+        // Albe
+        "h9VQL30IBqr6TTiKwAQm": "Haircut",
+        "NZSQNzPM10Fe6mUuJuyU": "Haircut + Beard",
+        "xLjnOmLqToiknndXnvbk": "Beard Trim",
+        // Liam
+        "kiGx7ec1vj9e62U33ZhU": "Haircut",
+        "vLpnhjAc93piHn1e2cfQ": "Haircut + Beard",
+        "g7DSKwGxH8qsXrHBfZ5h": "Beard Trim",
+        "KJZWIO6KESFa2SHiCFr7": "Hot Towel Shave",
+        // Gilberto
+        "38Uhu6i5W4L5yGJbE0My": "Haircut",
+        "7Bj9t1Gwi0zcJRTwCvYA": "Haircut + Beard",
+        // Anna
+        "WWduImUIgEoEx8mBTkmp": "Haircut",
+        "9s2hYN8XT06IrGGt89uT": "Haircut + Beard",
+        "ZOORnQ8ZPwiyT3Xtvvlg": "Haircut + Grey Blending",
+        "rsg2VbiVFGuGiEwUIhdl": "Neck Trim",
+      };
+
+      // Filter to active appointments, exclude breaks, extract key fields
       const appointments = events
         .filter((evt) => {
           const status = evt.appointmentStatus;
-          return status !== "cancelled" && status !== "noshow" && status !== "invalid";
+          if (status === "cancelled" || status === "noshow" || status === "invalid") return false;
+          if (BREAK_CALENDAR_IDS.has(evt.calendarId)) return false;
+          return true;
         })
         .map((evt) => ({
           id: evt.id,
@@ -4933,6 +4985,7 @@ function createApp() {
           endTime: evt.endTime,
           status: evt.appointmentStatus,
           calendarId: evt.calendarId || null,
+          service: CALENDAR_SERVICE_MAP[evt.calendarId] || null,
         }))
         .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
