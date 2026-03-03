@@ -142,24 +142,24 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
         .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
       if (contactId) {
-        // Try to find an appointment for this specific contact
+        // We found a GHL contact — only match to THEIR appointment, never a stranger's
         const contactAppt = unclaimedAppts.find((apt) => apt.contactId === contactId);
         if (contactAppt) {
           appointmentId = contactAppt.id;
           calendarId = contactAppt.calendarId || null;
           console.log(`  [VenmoBarber] Matched to contact's appointment: ${appointmentId}`);
         }
-      }
-
-      // If no contact-specific match, use time proximity (first unclaimed)
-      if (!appointmentId && unclaimedAppts.length > 0) {
+        // If their appointment is already claimed or doesn't exist, leave as unmatched
+        // rather than grabbing someone else's appointment by proximity
+      } else if (unclaimedAppts.length > 0) {
+        // No GHL contact found — use time proximity as a best guess
         const proximityAppt = unclaimedAppts[0];
         appointmentId = proximityAppt.id;
         calendarId = proximityAppt.calendarId || null;
 
         // Link the appointment's GHL contact for internal tracking,
         // but NEVER overwrite contactName — it stays as the Venmo sender
-        if (!contactId && proximityAppt.contactId) {
+        if (proximityAppt.contactId) {
           contactId = proximityAppt.contactId;
         }
         console.log(`  [VenmoBarber] Time-proximity match: appointment ${appointmentId}`);

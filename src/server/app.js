@@ -3755,15 +3755,16 @@ function createApp() {
             .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
           if (contactId) {
-            // First priority: match by GHL contact ID → appointment contact
+            // We found a GHL contact — only match to THEIR appointment, never a stranger's
             const contactAppt = unclaimed.find((a) => a.contactId === contactId);
             if (contactAppt) {
               appointmentId = contactAppt.id;
               calendarId = contactAppt.calendarId || null;
             }
-          }
-          if (!appointmentId && unclaimed.length > 0) {
-            // Fallback: time proximity — find closest unclaimed appointment
+            // If their appointment is already claimed or doesn't exist, leave as unmatched
+            // rather than grabbing someone else's appointment by proximity
+          } else if (unclaimed.length > 0) {
+            // No GHL contact found — use time proximity as a best guess
             const paymentMs = paymentDate.getTime();
             let closest = unclaimed[0];
             let closestDiff = Math.abs(new Date(closest.startTime).getTime() - paymentMs);
@@ -3779,7 +3780,7 @@ function createApp() {
 
             // Link the appointment's GHL contact for internal tracking,
             // but NEVER overwrite contactName — it stays as the Venmo sender
-            if (!contactId && closest.contactId) {
+            if (closest.contactId) {
               contactId = closest.contactId;
             }
           }
