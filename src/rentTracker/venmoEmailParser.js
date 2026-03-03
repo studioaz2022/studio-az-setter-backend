@@ -22,7 +22,7 @@
  * @param {string} plain - Plain text body of the email
  * @param {string} html - HTML body of the email (fallback)
  * @param {string} emailDate - Date from email headers (ISO string or RFC 2822)
- * @returns {{ senderName: string, amount: number, note: string|null, date: Date|null, transactionId: string|null }}
+ * @returns {{ senderName: string, amount: number, note: string|null, date: Date|null, transactionId: string|null, storyUrl: string|null }}
  */
 function parseVenmoEmail(plain, html, emailDate) {
   // Normalize \r\n to \n so regex patterns work consistently
@@ -38,6 +38,8 @@ function parseVenmoEmail(plain, html, emailDate) {
     note: null,
     date: null,
     transactionId: null,
+    storyUrl: null,
+    profilePicUrl: null,
   };
 
   // Extract sender name — "NAME paid you" or "NAME paid your $X request"
@@ -62,6 +64,35 @@ function parseVenmoEmail(plain, html, emailDate) {
     || rawText.match(/Transaction ID\s*\n\s*(\d{10,})/i);
   if (txIdMatch) {
     result.transactionId = txIdMatch[1];
+  }
+
+  // Extract Venmo story URL — the deep link to view the transaction in Venmo.
+  // This is different from the Transaction ID; it includes a story ID + auth key (?k=...).
+  // Try HTML first (most reliable), then fall back to plain text.
+  if (html) {
+    const htmlUrlMatch = html.match(/href="(https:\/\/venmo\.com\/story\/[^"]+)"/i);
+    if (htmlUrlMatch) {
+      result.storyUrl = htmlUrlMatch[1];
+    }
+  }
+  if (!result.storyUrl) {
+    // Plain text format: "See transaction<https://venmo.com/story/...>"
+    const plainUrlMatch = rawText.match(/(?:See transaction|view)[^\n]*<(https:\/\/venmo\.com\/story\/[^>]+)>/i)
+      || rawText.match(/(https:\/\/venmo\.com\/story\/\S+)/i);
+    if (plainUrlMatch) {
+      result.storyUrl = plainUrlMatch[1];
+    }
+  }
+
+  // Extract Venmo profile picture URL from HTML.
+  // Format: <img alt="NAME image" src="https://pics-v3.venmo.com/...">
+  if (html) {
+    const picMatch = html.match(/img[^>]+alt="[^"]*image"[^>]+src="(https:\/\/pics[^"]+venmo\.com\/[^"]+)"/i)
+      || html.match(/src="(https:\/\/pics[^"]+venmo\.com\/[^"]+)"[^>]+alt="[^"]*image"/i);
+    if (picMatch) {
+      // Decode HTML entities (e.g., &amp; → &)
+      result.profilePicUrl = picMatch[1].replace(/&amp;/g, "&");
+    }
   }
 
   // Extract date+time — prefer "Sent:" line from the LAST (deepest) forwarding header block.

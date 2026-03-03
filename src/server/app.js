@@ -3398,6 +3398,8 @@ function createApp() {
         contactName: tx.contact_name,
         appointmentId: tx.appointment_id,
         sessionDate: tx.session_date,
+        storyUrl: tx.venmo_story_url || null,
+        profilePicUrl: tx.venmo_profile_pic_url || null,
       }));
 
       console.log(`[API] Venmo unreviewed for ${barberGhlId}: ${payments.length} payments`);

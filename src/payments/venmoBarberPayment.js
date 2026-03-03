@@ -202,6 +202,8 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     calendar_id: calendarId || null,
     service_price: parsed.amount,
     tip_amount: 0,
+    venmo_story_url: parsed.storyUrl || null,
+    venmo_profile_pic_url: parsed.profilePicUrl || null,
   });
 
   if (error) {
