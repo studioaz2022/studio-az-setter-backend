@@ -3707,9 +3707,11 @@ function createApp() {
           }
         }
 
-        // Contact matching (same logic as venmoBarberPayment.js)
+        // Contact matching — search GHL by Venmo sender name
+        // IMPORTANT: contactName is ALWAYS the original Venmo sender name (row.from).
+        // We never overwrite it with appointment contact info — the Venmo sender identity is sacred.
         let contactId = null;
-        let contactName = row.from;
+        const contactName = row.from; // immutable — always the Venmo sender
         let appointmentId = null;
         let calendarId = null;
 
@@ -3729,10 +3731,8 @@ function createApp() {
               });
               if (exactMatch) {
                 contactId = exactMatch.id;
-                contactName = `${exactMatch.firstName || ""} ${exactMatch.lastName || ""}`.trim();
               } else if (contacts.length === 1) {
                 contactId = contacts[0].id;
-                contactName = `${contacts[0].firstName || ""} ${contacts[0].lastName || ""}`.trim();
               }
             }
           } catch (err) {
@@ -3755,6 +3755,7 @@ function createApp() {
             .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
 
           if (contactId) {
+            // First priority: match by GHL contact ID → appointment contact
             const contactAppt = unclaimed.find((a) => a.contactId === contactId);
             if (contactAppt) {
               appointmentId = contactAppt.id;
@@ -3762,7 +3763,7 @@ function createApp() {
             }
           }
           if (!appointmentId && unclaimed.length > 0) {
-            // Time proximity: find closest unclaimed appointment
+            // Fallback: time proximity — find closest unclaimed appointment
             const paymentMs = paymentDate.getTime();
             let closest = unclaimed[0];
             let closestDiff = Math.abs(new Date(closest.startTime).getTime() - paymentMs);
@@ -3776,14 +3777,10 @@ function createApp() {
             appointmentId = closest.id;
             calendarId = closest.calendarId || null;
 
-            // If no contact match, use appointment's contact
+            // Link the appointment's GHL contact for internal tracking,
+            // but NEVER overwrite contactName — it stays as the Venmo sender
             if (!contactId && closest.contactId) {
               contactId = closest.contactId;
-              try {
-                const data = await ghlBarber.contacts.getContact({ contactId });
-                const c = data?.contact || data;
-                contactName = `${c.firstName || ""} ${c.lastName || ""}`.trim() || contactName;
-              } catch { /* keep CSV sender name */ }
             }
           }
         }
@@ -3791,8 +3788,8 @@ function createApp() {
         // Calculate service price and tip
         const servicePrice = row.amount - row.tip;
 
-        // Construct Venmo story URL from transaction ID (requires Venmo login, no auth key)
-        const venmoStoryUrl = `https://venmo.com/story/${row.txId}`;
+        // CSV imports don't have the ?k= auth parameter that email-forwarded URLs do,
+        // so we don't set venmo_story_url — the bare URL requires Venmo login and won't work.
 
         // Insert to Supabase
         const { error: insertErr } = await supabase.from("transactions").insert({
@@ -3810,7 +3807,6 @@ function createApp() {
           artist_amount: row.amount,
           settlement_status: "settled",
           venmo_transaction_id: row.txId,
-          venmo_story_url: venmoStoryUrl,
           session_date: localDate,
           location_id: BARBER_LOCATION_ID,
           notes: row.note || null,

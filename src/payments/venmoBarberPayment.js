@@ -43,8 +43,10 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   }
 
   // Step 3: Contact matching by name
+  // IMPORTANT: contactName is ALWAYS the original Venmo sender name.
+  // We never overwrite it with GHL or appointment contact info.
   let contactId = null;
-  let contactName = parsed.senderName;
+  const contactName = parsed.senderName; // immutable — always the Venmo sender
 
   if (ghlBarber && parsed.senderName) {
     try {
@@ -65,14 +67,11 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
 
         if (exactMatch) {
           contactId = exactMatch.id;
-          contactName = `${exactMatch.firstName || ""} ${exactMatch.lastName || ""}`.trim();
-          console.log(`  [VenmoBarber] Exact name match: ${contactName} (${contactId})`);
+          console.log(`  [VenmoBarber] Exact name match: ${exactMatch.firstName} ${exactMatch.lastName} (${contactId})`);
         } else if (contacts.length === 1) {
           // Only one result — use it
-          const c = contacts[0];
-          contactId = c.id;
-          contactName = `${c.firstName || ""} ${c.lastName || ""}`.trim();
-          console.log(`  [VenmoBarber] Single result match: ${contactName} (${contactId})`);
+          contactId = contacts[0].id;
+          console.log(`  [VenmoBarber] Single result match: ${contacts[0].firstName} ${contacts[0].lastName} (${contactId})`);
         } else {
           // Multiple results, try first+last name substring match
           const senderParts = senderLower.split(/\s+/);
@@ -86,8 +85,7 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
             });
             if (partialMatch) {
               contactId = partialMatch.id;
-              contactName = `${partialMatch.firstName || ""} ${partialMatch.lastName || ""}`.trim();
-              console.log(`  [VenmoBarber] First+last match: ${contactName} (${contactId})`);
+              console.log(`  [VenmoBarber] First+last match: ${partialMatch.firstName} ${partialMatch.lastName} (${contactId})`);
             }
           }
         }
@@ -159,17 +157,10 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
         appointmentId = proximityAppt.id;
         calendarId = proximityAppt.calendarId || null;
 
-        // If we didn't have a contact match, use the appointment's contact
+        // Link the appointment's GHL contact for internal tracking,
+        // but NEVER overwrite contactName — it stays as the Venmo sender
         if (!contactId && proximityAppt.contactId) {
           contactId = proximityAppt.contactId;
-          // Try to get the contact name from GHL
-          try {
-            const data = await ghlBarber.contacts.getContact({ contactId });
-            const c = data?.contact || data;
-            contactName = `${c.firstName || ""} ${c.lastName || ""}`.trim() || contactName;
-          } catch {
-            // Keep Venmo sender name
-          }
         }
         console.log(`  [VenmoBarber] Time-proximity match: appointment ${appointmentId}`);
       }
