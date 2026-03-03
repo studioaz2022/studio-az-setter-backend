@@ -3391,6 +3391,7 @@ function createApp() {
         venmoTransactionId: tx.venmo_transaction_id,
         amountCents: Math.round((tx.gross_amount || 0) * 100),
         serviceCents: tx.service_price ? Math.round(tx.service_price * 100) : null,
+        tipCents: tx.tip_amount ? Math.round(tx.tip_amount * 100) : null,
         createdAt: tx.square_payment_time || tx.created_at,
         senderName: tx.contact_name,
         note: tx.notes,
@@ -3421,7 +3422,9 @@ function createApp() {
 
       const results = { confirmed: 0, walkInsRecorded: 0, errors: [] };
 
-      // Process matches — update contact and appointment on existing records
+      // Process matches — update contact, appointment, and recalculate tip/service split
+      const { lookupServicePrice } = require("../config/barberServicePrices");
+
       for (const match of matches) {
         try {
           const updateFields = {
@@ -3430,6 +3433,28 @@ function createApp() {
           };
           if (match.appointmentId) updateFields.appointment_id = match.appointmentId;
           if (match.calendarId) updateFields.calendar_id = match.calendarId;
+
+          // Manual slider override takes priority
+          if (match.servicePriceCents != null && match.tipAmountCents != null) {
+            updateFields.service_price = match.servicePriceCents / 100;
+            updateFields.tip_amount = match.tipAmountCents / 100;
+          } else if (match.calendarId) {
+            // Auto-recalculate split using calendar price (match may have changed appointment)
+            const calendarPrice = await lookupServicePrice(match.calendarId);
+            if (calendarPrice) {
+              // Fetch the existing gross_amount
+              const { data: existing } = await supabase
+                .from("transactions")
+                .select("gross_amount")
+                .eq("id", match.supabaseId)
+                .maybeSingle();
+              const grossAmount = existing?.gross_amount || 0;
+              if (grossAmount >= calendarPrice) {
+                updateFields.service_price = calendarPrice;
+                updateFields.tip_amount = +(grossAmount - calendarPrice).toFixed(2);
+              }
+            }
+          }
 
           const { error } = await supabase
             .from("transactions")
@@ -3833,8 +3858,19 @@ function createApp() {
           }
         }
 
-        // Calculate service price and tip
-        const servicePrice = row.amount - row.tip;
+        // Calculate service price and tip using calendar price when available
+        const { lookupServicePrice } = require("../config/barberServicePrices");
+        const calendarPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+        let servicePrice, tipAmount;
+        if (calendarPrice && row.amount >= calendarPrice) {
+          // Calendar price known — split: service = calendar price, tip = remainder
+          servicePrice = calendarPrice;
+          tipAmount = +(row.amount - calendarPrice).toFixed(2);
+        } else {
+          // No calendar or payment less than calendar price — use CSV tip column (usually 0)
+          servicePrice = row.amount - row.tip;
+          tipAmount = row.tip;
+        }
 
         // CSV imports don't have the ?k= auth parameter that email-forwarded URLs do,
         // so we don't set venmo_story_url — the bare URL requires Venmo login and won't work.
@@ -3860,7 +3896,7 @@ function createApp() {
           notes: row.note || null,
           calendar_id: calendarId || null,
           service_price: servicePrice,
-          tip_amount: row.tip,
+          tip_amount: tipAmount,
           square_payment_time: paymentDate.toISOString(),
         });
 

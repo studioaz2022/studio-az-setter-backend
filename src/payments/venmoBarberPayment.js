@@ -209,7 +209,19 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     }
   }
 
-  // Step 6: Record to Supabase
+  // Step 6: Calculate service/tip split using calendar price when available
+  const { lookupServicePrice } = require("../config/barberServicePrices");
+  const calendarPrice = calendarId ? await lookupServicePrice(calendarId) : null;
+  let servicePrice, tipAmount;
+  if (calendarPrice && parsed.amount >= calendarPrice) {
+    servicePrice = calendarPrice;
+    tipAmount = +(parsed.amount - calendarPrice).toFixed(2);
+  } else {
+    servicePrice = parsed.amount;
+    tipAmount = 0;
+  }
+
+  // Step 7: Record to Supabase
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId || "venmo_unmatched",
     contact_name: contactName || parsed.senderName,
@@ -229,8 +241,8 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     location_id: BARBER_LOCATION_ID,
     notes: parsed.note || null,
     calendar_id: calendarId || null,
-    service_price: parsed.amount,
-    tip_amount: 0,
+    service_price: servicePrice,
+    tip_amount: tipAmount,
     venmo_story_url: parsed.storyUrl || null,
     venmo_profile_pic_url: parsed.profilePicUrl || null,
     square_payment_time: parsed.date ? parsed.date.toISOString() : null,
