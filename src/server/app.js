@@ -4628,6 +4628,80 @@ function createApp() {
     }
   });
 
+  // ═══ CONTACT SEARCH (GHL CRM) ═══
+
+  app.get("/api/contacts/search", async (req, res) => {
+    const { q, locationId } = req.query;
+    if (!q || !locationId) {
+      return res.status(400).json({ success: false, error: "q and locationId are required" });
+    }
+
+    try {
+      const BARBER_LOC = process.env.GHL_BARBER_LOCATION_ID;
+      const isBarberLocation = locationId === BARBER_LOC;
+      const sdk = isBarberLocation && ghlBarber ? ghlBarber : null;
+
+      if (!sdk) {
+        return res.status(400).json({ success: false, error: "No SDK available for this location" });
+      }
+
+      const result = await sdk.contacts.getContacts({
+        locationId,
+        query: q,
+        limit: 20,
+      });
+
+      const contacts = (result?.contacts || []).map((c) => ({
+        id: c.id,
+        locationId: c.locationId,
+        contactName: c.contactName || `${c.firstName || ""} ${c.lastName || ""}`.trim() || null,
+        firstName: c.firstName,
+        lastName: c.lastName,
+        email: c.email,
+        phone: c.phone,
+        assignedTo: c.assignedTo,
+        followers: c.followers,
+        tags: c.tags,
+      }));
+
+      res.json({ success: true, contacts });
+    } catch (error) {
+      console.error("❌ Error searching contacts:", error.message || error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ ADD FOLLOWER TO CONTACT ═══
+
+  app.post("/api/contacts/:contactId/add-follower", async (req, res) => {
+    const { contactId } = req.params;
+    const { followerId, locationId } = req.body;
+
+    if (!followerId || !locationId) {
+      return res.status(400).json({ success: false, error: "followerId and locationId are required" });
+    }
+
+    try {
+      const BARBER_LOC = process.env.GHL_BARBER_LOCATION_ID;
+      const isBarberLocation = locationId === BARBER_LOC;
+      const sdk = isBarberLocation && ghlBarber ? ghlBarber : null;
+
+      if (!sdk) {
+        return res.status(400).json({ success: false, error: "No SDK available for this location" });
+      }
+
+      await sdk.contacts.addFollowersContact(
+        { contactId },
+        { followers: [followerId] }
+      );
+
+      res.json({ success: true });
+    } catch (error) {
+      console.error("❌ Error adding follower:", error.message || error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // ═══ CONTACT COMMENTS (Route A Admin-Artist Communication) ═══
 
   app.get("/api/contacts/:contactId/comments", async (req, res) => {
