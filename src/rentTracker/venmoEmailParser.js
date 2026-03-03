@@ -106,7 +106,13 @@ function parseVenmoEmail(plain, html, emailDate) {
     lastSentMatch = sentM;
   }
   if (lastSentMatch) {
-    const parsed = new Date(lastSentMatch[1]);
+    // The "Sent:" time from Hotmail is in the sender's local timezone (America/Chicago).
+    // new Date() without a timezone treats it as UTC, causing a 6-hour shift.
+    // Append the Central Time offset so the Date object represents the correct instant.
+    const dateStr = lastSentMatch[1];
+    const isDST = isCentralDST(dateStr);
+    const tzSuffix = isDST ? " GMT-0500" : " GMT-0600"; // CDT = -5, CST = -6
+    const parsed = new Date(dateStr + tzSuffix);
     if (!isNaN(parsed.getTime())) {
       result.date = parsed;
     }
@@ -224,6 +230,35 @@ function stripHtml(html) {
     .replace(/&#39;/g, "'")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Check if a date string falls within US Central Daylight Time (CDT).
+ * DST runs from 2nd Sunday of March to 1st Sunday of November.
+ */
+function isCentralDST(dateStr) {
+  // Parse the date in UTC just to extract month/day
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return false;
+  const month = d.getUTCMonth(); // 0-indexed
+  // Apr–Oct are always DST
+  if (month > 2 && month < 10) return true;
+  // Nov–Feb are always CST
+  if (month < 2 || month > 10) return false;
+  // March: DST starts 2nd Sunday at 2 AM
+  if (month === 2) {
+    const day = d.getUTCDate();
+    // 2nd Sunday is always between 8th and 14th
+    // Approximate: after the 14th is always DST, before 8th is always CST
+    return day > 14;
+  }
+  // October: DST ends 1st Sunday of November, so all of Oct is DST
+  if (month === 9) return true;
+  // November: DST ends 1st Sunday
+  if (month === 10) {
+    return d.getUTCDate() < 4; // conservative: first few days might still be DST
+  }
+  return false;
 }
 
 /**
