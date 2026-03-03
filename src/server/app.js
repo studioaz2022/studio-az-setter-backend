@@ -4825,7 +4825,7 @@ function createApp() {
             console.log(`✅ [KIOSK] Set alert custom field on contact ${matchedContactId}`);
           } else {
             // Normal appointment check-in — set "Here" field
-            await ghlBarber.contacts.updateContact(
+            const updateRes = await ghlBarber.contacts.updateContact(
               { contactId: matchedContactId },
               {
                 customFields: [
@@ -4833,7 +4833,9 @@ function createApp() {
                 ],
               }
             );
-            console.log(`✅ [KIOSK] Set 'Here' custom field on contact ${matchedContactId}`);
+            const updatedContact = updateRes?.contact || updateRes;
+            const cfAfter = updatedContact?.customFields?.find(f => f.id === CHECK_IN_FIELD_ID);
+            console.log(`✅ [KIOSK] Set 'Here' custom field on contact ${matchedContactId} — response field:`, JSON.stringify(cfAfter));
           }
         } catch (cfErr) {
           console.error("⚠️ [KIOSK] Custom field update failed:", cfErr.message);
