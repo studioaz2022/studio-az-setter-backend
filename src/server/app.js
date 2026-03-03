@@ -3468,6 +3468,377 @@ function createApp() {
     }
   });
 
+  // ─── VENMO CONNECTION MANAGEMENT ────────────────────────────────────────────
+
+  // GET /api/barbers/:barberGhlId/venmo/status
+  app.get("/api/barbers/:barberGhlId/venmo/status", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      const { data, error } = await supabase
+        .from("venmo_connections")
+        .select("*")
+        .eq("barber_ghl_id", barberGhlId)
+        .maybeSingle();
+
+      if (error) throw error;
+
+      if (!data || data.status === "disconnected") {
+        return res.json({
+          success: true,
+          connected: false,
+          forwardingEmail: null,
+          venmoDisplayName: null,
+          hasCompletedOnboarding: false,
+          hasCompletedCsvImport: false,
+          connectedAt: null,
+          lastPaymentAt: null,
+        });
+      }
+
+      res.json({
+        success: true,
+        connected: true,
+        forwardingEmail: data.forwarding_email,
+        venmoDisplayName: data.venmo_display_name,
+        hasCompletedOnboarding: data.has_completed_onboarding,
+        hasCompletedCsvImport: data.has_completed_csv_import,
+        connectedAt: data.connected_at,
+        lastPaymentAt: data.last_payment_at,
+      });
+    } catch (error) {
+      console.error("[API] Error fetching Venmo status:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/venmo/connect
+  app.post("/api/barbers/:barberGhlId/venmo/connect", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { forwardingEmail, venmoDisplayName } = req.body;
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      if (!forwardingEmail) {
+        return res.status(400).json({ success: false, error: "forwardingEmail is required" });
+      }
+
+      const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
+
+      // Upsert into venmo_connections
+      const { error } = await supabase
+        .from("venmo_connections")
+        .upsert({
+          barber_ghl_id: barberGhlId,
+          forwarding_email: forwardingEmail.toLowerCase().trim(),
+          venmo_display_name: venmoDisplayName || null,
+          status: "active",
+          has_completed_onboarding: true,
+          location_id: BARBER_LOCATION_ID,
+          connected_at: new Date().toISOString(),
+        }, { onConflict: "barber_ghl_id" });
+
+      if (error) throw error;
+
+      console.log(`[API] Venmo connected for ${barberGhlId}: ${forwardingEmail}`);
+      res.json({
+        success: true,
+        cloudmailinAddress: "788b0d92b40d683887d5@cloudmailin.net",
+      });
+    } catch (error) {
+      console.error("[API] Error connecting Venmo:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // DELETE /api/barbers/:barberGhlId/venmo/disconnect
+  app.delete("/api/barbers/:barberGhlId/venmo/disconnect", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      const { error } = await supabase
+        .from("venmo_connections")
+        .update({ status: "disconnected", forwarding_email: null })
+        .eq("barber_ghl_id", barberGhlId);
+
+      if (error) throw error;
+
+      console.log(`[API] Venmo disconnected for ${barberGhlId}`);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[API] Error disconnecting Venmo:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/venmo/csv-import
+  // Accepts multipart CSV file upload, parses, filters, and imports to Supabase
+  app.post("/api/barbers/:barberGhlId/venmo/csv-import", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+      const { parseVenmoCSV } = require("../payments/venmoCsvParser");
+      const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+      const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
+      const { toLocalDate } = require("../payments/squareTransactionSync");
+
+      const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
+
+      // Get barber's Venmo display name from venmo_connections
+      const { data: conn } = await supabase
+        .from("venmo_connections")
+        .select("venmo_display_name")
+        .eq("barber_ghl_id", barberGhlId)
+        .maybeSingle();
+
+      const barberVenmoName = conn?.venmo_display_name || "";
+
+      // Parse CSV from request body (expect { csv: "..." } as JSON or raw text)
+      let csvString = "";
+      if (req.body?.csv) {
+        csvString = req.body.csv;
+      } else if (typeof req.body === "string") {
+        csvString = req.body;
+      } else {
+        return res.status(400).json({ success: false, error: "No CSV data provided. Send as { csv: '...' }" });
+      }
+
+      const { rows, venmoUsername } = parseVenmoCSV(csvString, barberVenmoName);
+      console.log(`[API] Venmo CSV: ${rows.length} incoming payments parsed for ${barberGhlId} (username: ${venmoUsername})`);
+
+      // Load tenant alias map for rent-tenant filtering
+      let tenantNames = new Set();
+      try {
+        const { db } = require("../clients/instantDb");
+        const { tenants } = await db.query({ tenants: {} });
+        const { buildAliasMap } = require("../rentTracker/tenantMatcher");
+        const aliasMap = buildAliasMap(tenants);
+        tenantNames = new Set(Object.keys(aliasMap).map((n) => n.toLowerCase()));
+      } catch (err) {
+        console.warn(`[API] Could not load tenant list (non-fatal): ${err.message}`);
+      }
+
+      let imported = 0;
+      let duplicates = 0;
+      let skippedTenant = 0;
+      let skippedOutsideHours = 0;
+
+      // Cache appointments by date to avoid repeated API calls
+      const appointmentCache = {};
+
+      for (const row of rows) {
+        // Dedup check
+        const { data: existing } = await supabase
+          .from("transactions")
+          .select("id")
+          .eq("venmo_transaction_id", row.txId)
+          .maybeSingle();
+
+        if (existing) {
+          duplicates++;
+          continue;
+        }
+
+        // Tenant filter
+        if (tenantNames.has(row.from.toLowerCase().trim())) {
+          skippedTenant++;
+          continue;
+        }
+
+        // Working hours filter — check if payment falls within barber's shift ±1hr
+        const paymentDate = new Date(row.datetime + "Z"); // treat as UTC initially
+        // CSV datetimes from Venmo are in UTC
+        const localDate = toLocalDate(paymentDate.toISOString());
+
+        if (!appointmentCache[localDate]) {
+          try {
+            const dayStart = new Date(`${localDate}T00:00:00`);
+            const dayEnd = new Date(`${localDate}T23:59:59`);
+            appointmentCache[localDate] = await fetchAppointmentsForDateRange({
+              locationId: BARBER_LOCATION_ID,
+              startTime: dayStart.toISOString(),
+              endTime: dayEnd.toISOString(),
+              userId: barberGhlId,
+              sdkInstance: ghlBarber,
+            });
+          } catch (err) {
+            console.warn(`[API] Could not fetch appointments for ${localDate}: ${err.message}`);
+            appointmentCache[localDate] = [];
+          }
+        }
+
+        const dayAppts = (appointmentCache[localDate] || []).filter(
+          (apt) =>
+            apt.assignedUserId === barberGhlId &&
+            ["confirmed", "showed", "new"].includes(apt.appointmentStatus)
+        );
+
+        // If barber has no appointments that day, skip (not a work day)
+        if (dayAppts.length === 0) {
+          skippedOutsideHours++;
+          continue;
+        }
+
+        // Check if payment time is within working hours ±1hr buffer
+        if (dayAppts.length > 0) {
+          const apptTimes = dayAppts.map((a) => new Date(a.startTime).getTime());
+          const earliestAppt = Math.min(...apptTimes);
+          const latestAppt = Math.max(...apptTimes);
+          const bufferMs = 60 * 60 * 1000; // 1 hour
+          const paymentTime = paymentDate.getTime();
+
+          if (paymentTime < earliestAppt - bufferMs || paymentTime > latestAppt + bufferMs) {
+            skippedOutsideHours++;
+            continue;
+          }
+        }
+
+        // Contact matching (same logic as venmoBarberPayment.js)
+        let contactId = null;
+        let contactName = row.from;
+        let appointmentId = null;
+        let calendarId = null;
+
+        if (ghlBarber && row.from) {
+          try {
+            const result = await ghlBarber.contacts.getContacts({
+              locationId: BARBER_LOCATION_ID,
+              query: row.from,
+              limit: 5,
+            });
+            const contacts = result?.contacts || [];
+            if (contacts.length > 0) {
+              const senderLower = row.from.toLowerCase().trim();
+              const exactMatch = contacts.find((c) => {
+                const fullName = `${c.firstName || ""} ${c.lastName || ""}`.trim().toLowerCase();
+                return fullName === senderLower;
+              });
+              if (exactMatch) {
+                contactId = exactMatch.id;
+                contactName = `${exactMatch.firstName || ""} ${exactMatch.lastName || ""}`.trim();
+              } else if (contacts.length === 1) {
+                contactId = contacts[0].id;
+                contactName = `${contacts[0].firstName || ""} ${contacts[0].lastName || ""}`.trim();
+              }
+            }
+          } catch (err) {
+            console.warn(`[API] Contact search failed for "${row.from}": ${err.message}`);
+          }
+        }
+
+        // Appointment matching — find unclaimed appointment for this day
+        if (dayAppts.length > 0) {
+          const { data: existingTx } = await supabase
+            .from("transactions")
+            .select("appointment_id")
+            .eq("artist_ghl_id", barberGhlId)
+            .eq("session_date", localDate)
+            .not("appointment_id", "is", null);
+
+          const claimedIds = new Set((existingTx || []).map((t) => t.appointment_id));
+          const unclaimed = dayAppts
+            .filter((a) => !claimedIds.has(a.id))
+            .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+          if (contactId) {
+            const contactAppt = unclaimed.find((a) => a.contactId === contactId);
+            if (contactAppt) {
+              appointmentId = contactAppt.id;
+              calendarId = contactAppt.calendarId || null;
+            }
+          }
+          if (!appointmentId && unclaimed.length > 0) {
+            // Time proximity: find closest unclaimed appointment
+            const paymentMs = paymentDate.getTime();
+            let closest = unclaimed[0];
+            let closestDiff = Math.abs(new Date(closest.startTime).getTime() - paymentMs);
+            for (const apt of unclaimed) {
+              const diff = Math.abs(new Date(apt.startTime).getTime() - paymentMs);
+              if (diff < closestDiff) {
+                closest = apt;
+                closestDiff = diff;
+              }
+            }
+            appointmentId = closest.id;
+            calendarId = closest.calendarId || null;
+
+            // If no contact match, use appointment's contact
+            if (!contactId && closest.contactId) {
+              contactId = closest.contactId;
+              try {
+                const data = await ghlBarber.contacts.getContact({ contactId });
+                const c = data?.contact || data;
+                contactName = `${c.firstName || ""} ${c.lastName || ""}`.trim() || contactName;
+              } catch { /* keep CSV sender name */ }
+            }
+          }
+        }
+
+        // Calculate service price and tip
+        const servicePrice = row.amount - row.tip;
+
+        // Insert to Supabase
+        const { error: insertErr } = await supabase.from("transactions").insert({
+          contact_id: contactId || "venmo_unmatched",
+          contact_name: contactName || row.from,
+          appointment_id: appointmentId || null,
+          artist_ghl_id: barberGhlId,
+          transaction_type: "session_payment",
+          payment_method: "venmo",
+          payment_recipient: "artist_direct",
+          gross_amount: row.amount,
+          shop_percentage: 0,
+          artist_percentage: 100,
+          shop_amount: 0,
+          artist_amount: row.amount,
+          settlement_status: "settled",
+          venmo_transaction_id: row.txId,
+          session_date: localDate,
+          location_id: BARBER_LOCATION_ID,
+          notes: row.note || null,
+          calendar_id: calendarId || null,
+          service_price: servicePrice,
+          tip_amount: row.tip,
+          square_payment_time: paymentDate.toISOString(),
+        });
+
+        if (insertErr) {
+          console.warn(`[API] CSV insert failed for txId ${row.txId}: ${insertErr.message}`);
+          continue;
+        }
+
+        imported++;
+      }
+
+      // Update venmo_connections to mark CSV import complete
+      await supabase
+        .from("venmo_connections")
+        .update({ has_completed_csv_import: true })
+        .eq("barber_ghl_id", barberGhlId);
+
+      const total = rows.length;
+      console.log(`[API] Venmo CSV import for ${barberGhlId}: ${imported} imported, ${duplicates} dups, ${skippedTenant} tenant, ${skippedOutsideHours} outside hours, ${total} total parsed`);
+
+      res.json({
+        success: true,
+        imported,
+        duplicates,
+        skippedTenant,
+        skippedOutsideHours,
+        total,
+      });
+    } catch (error) {
+      console.error("[API] Error importing Venmo CSV:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // POST /api/barbers/:barberGhlId/square/refresh-token
   // Manually refresh a single barber's Square access token.
   app.post("/api/barbers/:barberGhlId/square/refresh-token", async (req, res) => {
@@ -4481,13 +4852,17 @@ function createApp() {
 
       if (!tenant) {
         // Not a known tenant — likely a client paying a barber for services
-        // Identify which barber forwarded the email via envelope.from
-        const VENMO_BARBER_MAP = {
-          "l.jchavez@hotmail.com": "1kFG5FWdUDhXLUX46snG", // Lionel
-          // Add more barbers as they set up email forwarding
-        };
-        const forwarderEmail = (payload?.envelope?.from || "").toLowerCase();
-        const barberGhlId = VENMO_BARBER_MAP[forwarderEmail];
+        // Identify which barber forwarded the email via envelope.from (dynamic lookup)
+        const { createClient: createSupa } = require("@supabase/supabase-js");
+        const supa = createSupa(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+        const forwarderEmail = (payload?.envelope?.from || "").toLowerCase().trim();
+        const { data: venmoConn } = await supa
+          .from("venmo_connections")
+          .select("barber_ghl_id")
+          .eq("forwarding_email", forwarderEmail)
+          .eq("status", "active")
+          .maybeSingle();
+        const barberGhlId = venmoConn?.barber_ghl_id;
         if (!barberGhlId) {
           console.log(`  ⚠️ No tenant match and unknown forwarder (${forwarderEmail}), skipping`);
           return res.status(200).json({ ok: true, skipped: "no-tenant-no-barber", sender: parsed.senderName });
