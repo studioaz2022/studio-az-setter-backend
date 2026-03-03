@@ -95,7 +95,26 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   let contactId = null;
   const contactName = parsed.senderName; // immutable — always the Venmo sender
 
-  if (ghlBarber && parsed.senderName) {
+  // Normalize helper: strip periods, collapse whitespace, lowercase
+  // e.g. "C.J. Washington" → "cj washington", "Pablo RP" → "pablo rp"
+  const normalize = (s) => (s || "").replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+  // Strategy 1: Match sender name against today's appointment titles directly.
+  // This catches cases like "CJ Washington" → "C.J. Washington" where GHL search fails.
+  if (unclaimedAppts.length > 0 && parsed.senderName) {
+    const senderNorm = normalize(parsed.senderName);
+    for (const apt of unclaimedAppts) {
+      const titleNorm = normalize(apt.title);
+      if (titleNorm && (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm))) {
+        contactId = apt.contactId || null;
+        console.log(`  [VenmoBarber] Appointment title match: "${parsed.senderName}" → "${apt.title}" (contact: ${contactId})`);
+        break;
+      }
+    }
+  }
+
+  // Strategy 2: GHL contact search (if appointment title match didn't work)
+  if (!contactId && ghlBarber && parsed.senderName) {
     try {
       const result = await ghlBarber.contacts.getContacts({
         locationId: BARBER_LOCATION_ID,

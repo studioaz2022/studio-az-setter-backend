@@ -3731,7 +3731,29 @@ function createApp() {
             .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
         }
 
-        if (ghlBarber && row.from) {
+        // Normalize helper: strip periods, collapse whitespace, lowercase
+        // e.g. "C.J. Washington" → "cj washington", "Pablo RP" → "pablo rp"
+        const normalize = (s) => (s || "").replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
+
+        // Strategy 1: Match sender name against today's appointment titles directly.
+        // This catches cases like "CJ Washington" → "C.J. Washington" where GHL search fails
+        // due to punctuation differences.
+        if (unclaimed.length > 0) {
+          const senderNorm = normalize(row.from);
+          for (const apt of unclaimed) {
+            // Appointment title often contains the contact name (e.g., "C.J. Washington" or "Haircut: Amit Sethi")
+            const titleNorm = normalize(apt.title);
+            // Check if sender name appears in title or title contains sender name
+            if (titleNorm && (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm))) {
+              contactId = apt.contactId || null;
+              console.log(`[API] Appointment title match: "${row.from}" → "${apt.title}" (contact: ${contactId})`);
+              break;
+            }
+          }
+        }
+
+        // Strategy 2: GHL contact search (if appointment title match didn't work)
+        if (!contactId && ghlBarber && row.from) {
           try {
             const result = await ghlBarber.contacts.getContacts({
               locationId: BARBER_LOCATION_ID,
