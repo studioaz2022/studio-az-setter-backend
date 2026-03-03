@@ -3613,13 +3613,14 @@ function createApp() {
       console.log(`[API] Venmo CSV: ${rows.length} incoming payments parsed for ${barberGhlId} (username: ${venmoUsername})`);
 
       // Load tenant alias map for rent-tenant filtering
-      let tenantNames = new Set();
+      // buildAliasMap() returns a Map<string, tenant>, so use Map.keys() not Object.keys()
+      let tenantAliasMap = null;
       try {
         const { db } = require("../clients/instantDb");
         const { tenants } = await db.query({ tenants: {} });
-        const { buildAliasMap } = require("../rentTracker/tenantMatcher");
-        const aliasMap = buildAliasMap(tenants);
-        tenantNames = new Set(Object.keys(aliasMap).map((n) => n.toLowerCase()));
+        const { buildAliasMap, matchTenant } = require("../rentTracker/tenantMatcher");
+        tenantAliasMap = buildAliasMap(tenants);
+        console.log(`[API] Loaded ${tenantAliasMap.size} tenant aliases for filtering`);
       } catch (err) {
         console.warn(`[API] Could not load tenant list (non-fatal): ${err.message}`);
       }
@@ -3645,10 +3646,14 @@ function createApp() {
           continue;
         }
 
-        // Tenant filter
-        if (tenantNames.has(row.from.toLowerCase().trim())) {
-          skippedTenant++;
-          continue;
+        // Tenant filter — use matchTenant() which handles aliases, middle initials, etc.
+        if (tenantAliasMap) {
+          const { matchTenant } = require("../rentTracker/tenantMatcher");
+          const tenant = matchTenant(row.from, tenantAliasMap);
+          if (tenant) {
+            skippedTenant++;
+            continue;
+          }
         }
 
         // Working hours filter — check if payment falls within barber's shift ±1hr
@@ -3673,11 +3678,14 @@ function createApp() {
           }
         }
 
-        const dayAppts = (appointmentCache[localDate] || []).filter(
-          (apt) =>
-            apt.assignedUserId === barberGhlId &&
-            ["confirmed", "showed", "new"].includes(apt.appointmentStatus)
-        );
+        // Filter to real client appointments — exclude breaks, blocks, personal holds
+        const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
+        const dayAppts = (appointmentCache[localDate] || []).filter((apt) => {
+          if (apt.assignedUserId !== barberGhlId) return false;
+          if (!["confirmed", "showed", "new"].includes(apt.appointmentStatus)) return false;
+          const title = (apt.title || "").toLowerCase().trim();
+          return !blockedTitles.includes(title);
+        });
 
         // If barber has no appointments that day, skip (not a work day)
         if (dayAppts.length === 0) {
@@ -3783,6 +3791,9 @@ function createApp() {
         // Calculate service price and tip
         const servicePrice = row.amount - row.tip;
 
+        // Construct Venmo story URL from transaction ID (requires Venmo login, no auth key)
+        const venmoStoryUrl = `https://venmo.com/story/${row.txId}`;
+
         // Insert to Supabase
         const { error: insertErr } = await supabase.from("transactions").insert({
           contact_id: contactId || "venmo_unmatched",
@@ -3799,6 +3810,7 @@ function createApp() {
           artist_amount: row.amount,
           settlement_status: "settled",
           venmo_transaction_id: row.txId,
+          venmo_story_url: venmoStoryUrl,
           session_date: localDate,
           location_id: BARBER_LOCATION_ID,
           notes: row.note || null,
