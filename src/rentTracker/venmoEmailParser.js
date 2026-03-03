@@ -44,8 +44,9 @@ function parseVenmoEmail(plain, html, emailDate) {
   const paidYouMatch = text.match(/^(.+?)\s+paid you(?:r)?/im);
   if (paidYouMatch) {
     let name = paidYouMatch[1].trim();
-    // Strip any residual forwarding header prefixes (Subject:, From:, etc.)
-    name = name.replace(/^(?:Subject|From|To|Re|Fw|Fwd):\s*/i, "").trim();
+    // Strip any residual forwarding header prefixes (Subject:, From:, Fw:, etc.)
+    // Handle chained prefixes like "Fw: Fw: Samuel" or "Subject: Fw: Samuel"
+    name = name.replace(/^(?:(?:Subject|From|To|Re|Fw|Fwd):\s*)+/i, "").trim();
     result.senderName = name;
   }
 
@@ -63,11 +64,18 @@ function parseVenmoEmail(plain, html, emailDate) {
     result.transactionId = txIdMatch[1];
   }
 
-  // Extract date+time — prefer "Sent:" line from forwarding headers (has time).
+  // Extract date+time — prefer "Sent:" line from the LAST (deepest) forwarding header block.
+  // When forwarded multiple times, there are multiple "Sent:" lines. The last one before
+  // the Venmo body is the actual Venmo send date (e.g., Feb 24), not the forward date (e.g., Mar 2).
   // Format: "Sent: Sunday, March 1, 2026 5:41 PM"
-  const sentMatch = rawText.match(/Sent:\s+\w+,\s+([A-Z][a-z]+ \d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)/i);
-  if (sentMatch) {
-    const parsed = new Date(sentMatch[1]);
+  const sentRegex = /Sent:\s+\w+,\s+([A-Z][a-z]+ \d{1,2},?\s+\d{4}\s+\d{1,2}:\d{2}\s*(?:AM|PM)?)/gi;
+  let lastSentMatch = null;
+  let sentM;
+  while ((sentM = sentRegex.exec(rawText)) !== null) {
+    lastSentMatch = sentM;
+  }
+  if (lastSentMatch) {
+    const parsed = new Date(lastSentMatch[1]);
     if (!isNaN(parsed.getTime())) {
       result.date = parsed;
     }
@@ -120,30 +128,48 @@ function parseVenmoEmail(plain, html, emailDate) {
 
 /**
  * Strip Hotmail/Outlook forwarding headers from the plain text body.
- * Finds the "Subject: ... paid you..." line and returns everything after it.
- * This isolates the actual Venmo email content from Hotmail's preamble.
+ * Returns just the Venmo email body content.
  *
- * Hotmail may order the forwarding headers differently:
- *   Option A: From → Sent → Subject → body
- *   Option B: Subject → From → Sent → body
- * We strip everything up to and including the last forwarding header block.
+ * IMPORTANT: Emails may be forwarded multiple times, creating nested headers:
+ *   ________________________________
+ *   From: Leonel Chavez <l.jchavez@hotmail.com>      ← outer forward (1st)
+ *   Sent: Monday, March 2, 2026 5:29 PM
+ *   Subject: Fw: Samuel Ruiz Plaza paid you $100.00
+ *   ________________________________
+ *   From: Leonel Chavez <l.jchavez@hotmail.com>      ← middle forward (2nd)
+ *   Sent: Monday, March 2, 2026 12:21 AM
+ *   Subject: Fw: Samuel Ruiz Plaza paid you $100.00
+ *   ________________________________
+ *   From: Venmo <venmo@venmo.com>                     ← actual Venmo email (deepest)
+ *   Sent: Tuesday, February 24, 2026 3:38 PM
+ *   Subject: Samuel Ruiz Plaza paid you $100.00
+ *
+ * We need the LAST (deepest) "Subject: ... paid you" block — the one from Venmo.
  */
 function stripForwardingHeaders(text) {
-  // Strategy 1: Find "Subject: ... paid you..." line and strip up to the end of the forwarding block.
-  // The forwarding block ends when we hit a blank line or the first "NAME paid you" body line.
-  const subjectMatch = text.match(/Subject:\s+.+paid you(?:r)?[^\n]*/i);
-  if (subjectMatch) {
-    const afterSubject = text.slice(subjectMatch.index + subjectMatch[0].length);
+  // Find ALL "Subject: ... paid you" lines, use the LAST one (deepest = actual Venmo email)
+  const subjectRegex = /Subject:\s+(?:(?:Fw|Fwd|Re):\s*)*(.+paid you(?:r)?[^\n]*)/gi;
+  let lastSubjectMatch = null;
+  let match;
+  while ((match = subjectRegex.exec(text)) !== null) {
+    lastSubjectMatch = match;
+  }
+
+  if (lastSubjectMatch) {
+    const afterSubject = text.slice(lastSubjectMatch.index + lastSubjectMatch[0].length);
     // Strip remaining forwarding headers (From:, Sent:, To:) that may follow
     const stripped = afterSubject.replace(/^\s*(?:From:|Sent:|To:|Date:|Cc:)[^\n]*\n/gim, "");
     return stripped.trim();
   }
 
-  // Strategy 2: Look for a block of forwarding headers (From: + Sent: + Subject:) in any order.
-  // Strip everything before the last header in the block.
-  const headerBlock = text.match(/(?:^|\n)\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*(?:\n\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*)*/i);
-  if (headerBlock) {
-    const afterBlock = text.slice(headerBlock.index + headerBlock[0].length);
+  // Fallback: Look for a block of forwarding headers in any order, use the last one
+  const headerBlockRegex = /(?:^|\n)\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*(?:\n\s*(?:From:|Sent:|Subject:|To:|Date:)[^\n]*)*/gi;
+  let lastBlock = null;
+  while ((match = headerBlockRegex.exec(text)) !== null) {
+    lastBlock = match;
+  }
+  if (lastBlock) {
+    const afterBlock = text.slice(lastBlock.index + lastBlock[0].length);
     return afterBlock.trim();
   }
 
