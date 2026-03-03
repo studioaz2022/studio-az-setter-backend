@@ -42,7 +42,54 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     return { skipped: "duplicate", venmoTxId };
   }
 
-  // Step 3: Contact matching by name
+  // Step 3: Build unclaimed appointments list (needed for contact matching cross-ref)
+  let appointmentId = null;
+  let calendarId = null;
+  const paymentDate = parsed.date || new Date();
+  const localDate = toLocalDate(paymentDate.toISOString());
+  let unclaimedAppts = [];
+
+  try {
+    const dayStart = new Date(`${localDate}T00:00:00`);
+    const dayEnd = new Date(`${localDate}T23:59:59`);
+
+    const appointments = await fetchAppointmentsForDateRange({
+      locationId: BARBER_LOCATION_ID,
+      startTime: dayStart.toISOString(),
+      endTime: dayEnd.toISOString(),
+      userId: barberGhlId,
+      sdkInstance: ghlBarber,
+    });
+
+    // Filter to real client appointments — exclude breaks, blocks, personal holds
+    const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
+    const activeAppts = appointments.filter((apt) => {
+      if (apt.assignedUserId !== barberGhlId) return false;
+      if (!["confirmed", "showed", "new"].includes(apt.appointmentStatus)) return false;
+      const title = (apt.title || "").toLowerCase().trim();
+      return !blockedTitles.includes(title);
+    });
+
+    if (activeAppts.length > 0) {
+      const { data: existingTx } = await supabase
+        .from("transactions")
+        .select("appointment_id")
+        .eq("artist_ghl_id", barberGhlId)
+        .eq("session_date", localDate)
+        .not("appointment_id", "is", null);
+
+      const claimedAptIds = new Set((existingTx || []).map((t) => t.appointment_id));
+      unclaimedAppts = activeAppts
+        .filter((apt) => !claimedAptIds.has(apt.id))
+        .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+    } else {
+      console.log(`  [VenmoBarber] No active appointments found for ${localDate}`);
+    }
+  } catch (err) {
+    console.warn(`  [VenmoBarber] Appointment fetch failed: ${err.message}`);
+  }
+
+  // Step 4: Contact matching by name
   // IMPORTANT: contactName is ALWAYS the original Venmo sender name.
   // We never overwrite it with GHL or appointment contact info.
   let contactId = null;
@@ -58,7 +105,6 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
 
       const contacts = result?.contacts || [];
       if (contacts.length > 0) {
-        // Try exact full name match first (case-insensitive)
         const senderLower = parsed.senderName.toLowerCase().trim();
         const exactMatch = contacts.find((c) => {
           const fullName = `${c.firstName || ""} ${c.lastName || ""}`.trim().toLowerCase();
@@ -69,7 +115,6 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
           contactId = exactMatch.id;
           console.log(`  [VenmoBarber] Exact name match: ${exactMatch.firstName} ${exactMatch.lastName} (${contactId})`);
         } else if (contacts.length === 1) {
-          // Only one result — use it
           contactId = contacts[0].id;
           console.log(`  [VenmoBarber] Single result match: ${contacts[0].firstName} ${contacts[0].lastName} (${contactId})`);
         } else {
@@ -96,82 +141,56 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
       } else {
         console.log(`  [VenmoBarber] No GHL contacts found for "${parsed.senderName}"`);
       }
+
+      // Fallback: Venmo names are often abbreviated (e.g., "Pablo RP" for "Pablo Ruiz Plaza").
+      // If full-name search failed, try first-name-only and cross-reference with day's appointments.
+      if (!contactId && parsed.senderName.includes(" ")) {
+        const firstName = parsed.senderName.split(/\s+/)[0];
+        const firstNameResult = await ghlBarber.contacts.getContacts({
+          locationId: BARBER_LOCATION_ID,
+          query: firstName,
+          limit: 10,
+        });
+        const firstNameContacts = firstNameResult?.contacts || [];
+        if (firstNameContacts.length > 0 && unclaimedAppts.length > 0) {
+          const apptContactIds = new Set(unclaimedAppts.map((a) => a.contactId).filter(Boolean));
+          const apptMatch = firstNameContacts.find((c) => apptContactIds.has(c.id));
+          if (apptMatch) {
+            contactId = apptMatch.id;
+            console.log(`  [VenmoBarber] First-name fallback matched "${parsed.senderName}" → ${apptMatch.firstName} ${apptMatch.lastName} (${contactId}) via appointment cross-ref`);
+          }
+        }
+      }
     } catch (err) {
       console.warn(`  [VenmoBarber] Contact search failed: ${err.message}`);
     }
   }
 
-  // Step 4: Appointment matching
-  let appointmentId = null;
-  let calendarId = null;
-  const paymentDate = parsed.date || new Date();
-  const localDate = toLocalDate(paymentDate.toISOString());
-
-  try {
-    // Build date range for the payment day in barbershop timezone
-    const dayStart = new Date(`${localDate}T00:00:00`);
-    const dayEnd = new Date(`${localDate}T23:59:59`);
-
-    const appointments = await fetchAppointmentsForDateRange({
-      locationId: BARBER_LOCATION_ID,
-      startTime: dayStart.toISOString(),
-      endTime: dayEnd.toISOString(),
-      userId: barberGhlId,
-      sdkInstance: ghlBarber,
-    });
-
-    // Filter to active appointments assigned to this barber
-    const activeAppts = appointments.filter(
-      (apt) =>
-        apt.assignedUserId === barberGhlId &&
-        ["confirmed", "showed", "new"].includes(apt.appointmentStatus)
-    );
-
-    if (activeAppts.length > 0) {
-      // Get already-claimed appointment IDs from existing transactions
-      const { data: existingTx } = await supabase
-        .from("transactions")
-        .select("appointment_id")
-        .eq("artist_ghl_id", barberGhlId)
-        .eq("session_date", localDate)
-        .not("appointment_id", "is", null);
-
-      const claimedAptIds = new Set((existingTx || []).map((t) => t.appointment_id));
-      const unclaimedAppts = activeAppts
-        .filter((apt) => !claimedAptIds.has(apt.id))
-        .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-
-      if (contactId) {
-        // We found a GHL contact — only match to THEIR appointment, never a stranger's
-        const contactAppt = unclaimedAppts.find((apt) => apt.contactId === contactId);
-        if (contactAppt) {
-          appointmentId = contactAppt.id;
-          calendarId = contactAppt.calendarId || null;
-          console.log(`  [VenmoBarber] Matched to contact's appointment: ${appointmentId}`);
-        }
-        // If their appointment is already claimed or doesn't exist, leave as unmatched
-        // rather than grabbing someone else's appointment by proximity
-      } else if (unclaimedAppts.length > 0) {
-        // No GHL contact found — use time proximity as a best guess
-        const proximityAppt = unclaimedAppts[0];
-        appointmentId = proximityAppt.id;
-        calendarId = proximityAppt.calendarId || null;
-
-        // Link the appointment's GHL contact for internal tracking,
-        // but NEVER overwrite contactName — it stays as the Venmo sender
-        if (proximityAppt.contactId) {
-          contactId = proximityAppt.contactId;
-        }
-        console.log(`  [VenmoBarber] Time-proximity match: appointment ${appointmentId}`);
+  // Step 5: Appointment matching
+  if (unclaimedAppts.length > 0) {
+    if (contactId) {
+      // We found a GHL contact — only match to THEIR appointment, never a stranger's
+      const contactAppt = unclaimedAppts.find((apt) => apt.contactId === contactId);
+      if (contactAppt) {
+        appointmentId = contactAppt.id;
+        calendarId = contactAppt.calendarId || null;
+        console.log(`  [VenmoBarber] Matched to contact's appointment: ${appointmentId}`);
       }
-    } else {
-      console.log(`  [VenmoBarber] No active appointments found for ${localDate}`);
+      // If their appointment is already claimed or doesn't exist, leave as unmatched
+    } else if (unclaimedAppts.length > 0) {
+      // No GHL contact found at all — use time proximity as a best guess
+      const proximityAppt = unclaimedAppts[0];
+      appointmentId = proximityAppt.id;
+      calendarId = proximityAppt.calendarId || null;
+
+      if (proximityAppt.contactId) {
+        contactId = proximityAppt.contactId;
+      }
+      console.log(`  [VenmoBarber] Time-proximity match: appointment ${appointmentId}`);
     }
-  } catch (err) {
-    console.warn(`  [VenmoBarber] Appointment matching failed: ${err.message}`);
   }
 
-  // Step 5: Record to Supabase
+  // Step 6: Record to Supabase
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId || "venmo_unmatched",
     contact_name: contactName || parsed.senderName,

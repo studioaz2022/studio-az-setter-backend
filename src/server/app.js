@@ -3715,6 +3715,22 @@ function createApp() {
         let appointmentId = null;
         let calendarId = null;
 
+        // Build unclaimed appointments list first — needed for both contact matching and fallback
+        let unclaimed = [];
+        if (dayAppts.length > 0) {
+          const { data: existingTx } = await supabase
+            .from("transactions")
+            .select("appointment_id")
+            .eq("artist_ghl_id", barberGhlId)
+            .eq("session_date", localDate)
+            .not("appointment_id", "is", null);
+
+          const claimedIds = new Set((existingTx || []).map((t) => t.appointment_id));
+          unclaimed = dayAppts
+            .filter((a) => !claimedIds.has(a.id))
+            .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+        }
+
         if (ghlBarber && row.from) {
           try {
             const result = await ghlBarber.contacts.getContacts({
@@ -3735,25 +3751,34 @@ function createApp() {
                 contactId = contacts[0].id;
               }
             }
+
+            // Fallback: Venmo names are often abbreviated (e.g., "Pablo RP" for "Pablo Ruiz Plaza").
+            // If full-name search failed, try first-name-only and cross-reference with day's appointments.
+            if (!contactId && row.from.includes(" ")) {
+              const firstName = row.from.split(/\s+/)[0];
+              const firstNameResult = await ghlBarber.contacts.getContacts({
+                locationId: BARBER_LOCATION_ID,
+                query: firstName,
+                limit: 10,
+              });
+              const firstNameContacts = firstNameResult?.contacts || [];
+              if (firstNameContacts.length > 0 && unclaimed.length > 0) {
+                // Cross-reference: find a contact that has an unclaimed appointment today
+                const apptContactIds = new Set(unclaimed.map((a) => a.contactId).filter(Boolean));
+                const apptMatch = firstNameContacts.find((c) => apptContactIds.has(c.id));
+                if (apptMatch) {
+                  contactId = apptMatch.id;
+                  console.log(`[API] First-name fallback matched "${row.from}" → ${apptMatch.firstName} ${apptMatch.lastName} (${contactId}) via appointment cross-ref`);
+                }
+              }
+            }
           } catch (err) {
             console.warn(`[API] Contact search failed for "${row.from}": ${err.message}`);
           }
         }
 
-        // Appointment matching — find unclaimed appointment for this day
-        if (dayAppts.length > 0) {
-          const { data: existingTx } = await supabase
-            .from("transactions")
-            .select("appointment_id")
-            .eq("artist_ghl_id", barberGhlId)
-            .eq("session_date", localDate)
-            .not("appointment_id", "is", null);
-
-          const claimedIds = new Set((existingTx || []).map((t) => t.appointment_id));
-          const unclaimed = dayAppts
-            .filter((a) => !claimedIds.has(a.id))
-            .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-
+        // Appointment matching
+        if (unclaimed.length > 0) {
           if (contactId) {
             // We found a GHL contact — only match to THEIR appointment, never a stranger's
             const contactAppt = unclaimed.find((a) => a.contactId === contactId);
@@ -3764,7 +3789,7 @@ function createApp() {
             // If their appointment is already claimed or doesn't exist, leave as unmatched
             // rather than grabbing someone else's appointment by proximity
           } else if (unclaimed.length > 0) {
-            // No GHL contact found — use time proximity as a best guess
+            // No GHL contact found at all — use time proximity as a best guess
             const paymentMs = paymentDate.getTime();
             let closest = unclaimed[0];
             let closestDiff = Math.abs(new Date(closest.startTime).getTime() - paymentMs);
