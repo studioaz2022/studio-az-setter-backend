@@ -5293,7 +5293,7 @@ function createApp() {
           console.log(`✅ [KIOSK] Marked appointment ${matchedAppointmentId} as showed for ${customerName}`);
 
           // If we don't have a contactId yet, fetch the appointment to get it
-          if (!matchedContactId && isBarbershop) {
+          if (!matchedContactId) {
             try {
               const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
               // SDK returns { appointment: { contactId, ... }, traceId: ... }
@@ -5384,23 +5384,50 @@ function createApp() {
         } catch (cfErr) {
           console.error("⚠️ [KIOSK] Custom field update failed:", cfErr.message);
         }
-      } else if (matchedContactId && !isBarbershop) {
+      } else if (!isBarbershop) {
         // Tattoo check-in — set "Here" field on tattoo location contact using tattoo SDK
-        try {
-          const tattooSdk = require("../clients/ghlSdk").ghl;
-          const updateRes = await tattooSdk.contacts.updateContact(
-            { contactId: matchedContactId },
-            {
+        const tattooSdk = require("../clients/ghlSdk").ghl;
+        const { TATTOO_LOCATION_ID } = require("../config/kioskConfig");
+
+        // If no contactId (name_only fallback), create a contact first
+        if (!matchedContactId && type === "name_only") {
+          try {
+            const nameParts = customerName.trim().split(/\s+/);
+            const firstName = nameParts[0];
+            const lastName = nameParts.slice(1).join(" ") || "";
+
+            const created = await tattooSdk.contacts.createContact({
+              firstName,
+              lastName: lastName || undefined,
+              locationId: TATTOO_LOCATION_ID,
+              source: "Kiosk Tattoo Check-In",
+              assignedTo: ghlUserId,
               customFields: [
                 { id: TATTOO_CHECK_IN_FIELD_ID, field_value: "Here" },
               ],
-            }
-          );
-          const updatedContact = updateRes?.contact || updateRes;
-          const cfAfter = updatedContact?.customFields?.find(f => f.id === TATTOO_CHECK_IN_FIELD_ID);
-          console.log(`✅ [KIOSK] Set 'Here' tattoo custom field on contact ${matchedContactId} — response field:`, JSON.stringify(cfAfter));
-        } catch (cfErr) {
-          console.error("⚠️ [KIOSK] Tattoo custom field update failed:", cfErr.message);
+            });
+            matchedContactId = created?.contact?.id;
+            console.log(`✅ [KIOSK] Created tattoo contact ${matchedContactId} for ${customerName} with 'Here' field`);
+          } catch (createErr) {
+            console.error("⚠️ [KIOSK] Tattoo contact creation failed:", createErr.message);
+          }
+        } else if (matchedContactId) {
+          // Normal tattoo check-in — update existing contact
+          try {
+            const updateRes = await tattooSdk.contacts.updateContact(
+              { contactId: matchedContactId },
+              {
+                customFields: [
+                  { id: TATTOO_CHECK_IN_FIELD_ID, field_value: "Here" },
+                ],
+              }
+            );
+            const updatedContact = updateRes?.contact || updateRes;
+            const cfAfter = updatedContact?.customFields?.find(f => f.id === TATTOO_CHECK_IN_FIELD_ID);
+            console.log(`✅ [KIOSK] Set 'Here' tattoo custom field on contact ${matchedContactId} — response field:`, JSON.stringify(cfAfter));
+          } catch (cfErr) {
+            console.error("⚠️ [KIOSK] Tattoo custom field update failed:", cfErr.message);
+          }
         }
       }
 
@@ -5647,6 +5674,78 @@ function createApp() {
       return res.json({ success: true, appointments });
     } catch (error) {
       console.error("❌ [KIOSK] Barber appointments error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/kiosk/tattoo-appointments?ghlUserId=X
+   * Returns today's appointments for a specific tattoo artist — used by the kiosk
+   * appointment carousel so clients can tap their name/time to check in.
+   * Uses the tattoo SDK (default ghl) and tattoo location ID.
+   */
+  app.get("/api/kiosk/tattoo-appointments", async (req, res) => {
+    const { ghlUserId } = req.query;
+
+    if (!ghlUserId) {
+      return res.status(400).json({ success: false, error: "ghlUserId is required" });
+    }
+
+    try {
+      const { TATTOO_LOCATION_ID } = require("../config/kioskConfig");
+
+      const now = new Date();
+      const startOfDay = new Date(now);
+      startOfDay.setHours(0, 0, 0, 0);
+      const endOfDay = new Date(now);
+      endOfDay.setHours(23, 59, 59, 999);
+
+      // Use default ghl SDK (tattoo location) — no sdkInstance param
+      const events = await fetchAppointmentsForDateRange({
+        locationId: TATTOO_LOCATION_ID,
+        startTime: startOfDay.toISOString(),
+        endTime: endOfDay.toISOString(),
+        userId: ghlUserId,
+      });
+
+      // Filter to active appointments, extract key fields
+      const appointments = events
+        .filter((evt) => {
+          const status = evt.appointmentStatus;
+          if (status === "cancelled" || status === "noshow" || status === "invalid") return false;
+          return true;
+        })
+        .map((evt) => {
+          // Tattoo titles are typically "ServiceName: ContactName" or just contact name
+          let contactName = "Unknown";
+          const title = evt.title || "";
+          const colonIdx = title.indexOf(": ");
+          if (colonIdx !== -1) {
+            contactName = title.slice(colonIdx + 2).trim();
+          } else if (evt.contact?.name) {
+            contactName = evt.contact.name;
+          } else if (title) {
+            contactName = title.trim();
+          }
+
+          return {
+            id: evt.id,
+            contactId: evt.contact?.id || null,
+            contactName,
+            contactPhone: evt.contact?.phone || evt.contact?.phoneNumber || null,
+            startTime: evt.startTime,
+            endTime: evt.endTime,
+            status: evt.appointmentStatus,
+            calendarId: evt.calendarId || null,
+            service: null, // tattoo appointments don't need service labels
+          };
+        })
+        .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+
+      console.log(`✅ [KIOSK] Found ${appointments.length} tattoo appointments today for artist ${ghlUserId}`);
+      return res.json({ success: true, appointments });
+    } catch (error) {
+      console.error("❌ [KIOSK] Tattoo appointments error:", error);
       return res.status(500).json({ success: false, error: error.message });
     }
   });

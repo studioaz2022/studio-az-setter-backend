@@ -91,4 +91,19 @@ const BARBER_DATA = [
   },
 ];
 
-module.exports = { BARBER_DATA, BARBER_LOCATION_ID };
+const TATTOO_LOCATION_ID = process.env.GHL_LOCATION_ID || 'mUemx2jG4wly4kJWBkI4';
+
+const TATTOO_ARTIST_DATA = [
+  {
+    name: 'Joan Martinez',
+    ghlUserId: '1wuLf50VMODExBSJ9xPI',
+    calendarId: '0oW0C4kLB6qh1qa1WV9c',
+  },
+  {
+    name: 'Andrew Fernan',
+    ghlUserId: 'O8ChoMYj1BmMWJJsDlvC',
+    calendarId: '9KwARaShHhymNjgarXgA',
+  },
+];
+
+module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID };
