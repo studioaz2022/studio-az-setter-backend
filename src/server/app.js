@@ -2695,6 +2695,32 @@ function createApp() {
           }
         }
 
+        // Fallback 2: search GHL contacts by name when no meet_event_subscriptions match
+        if (!contactId && nameFromTitle) {
+          try {
+            const { ghl } = require("../clients/ghlSdk");
+            const result = await ghl.contacts.getContacts({
+              locationId: process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4",
+              query: nameFromTitle,
+              limit: 5,
+            });
+            const contacts = result?.contacts || [];
+            if (contacts.length > 0) {
+              // Pick best match — prefer exact name match
+              const exactMatch = contacts.find((c) => {
+                const fullName = `${c.firstName || ""} ${c.lastName || ""}`.trim().toLowerCase();
+                return fullName === nameFromTitle.toLowerCase();
+              });
+              const match = exactMatch || contacts[0];
+              contactId = match.id || match._id;
+              clientName = nameFromTitle;
+              console.log(`🔥 Matched to contact ${contactId} via GHL name search for "${nameFromTitle}"`);
+            }
+          } catch (searchErr) {
+            console.warn("🔥 GHL contact name search failed:", searchErr.message);
+          }
+        }
+
         if (!contactId) {
           console.warn("🔥 Could not match transcript to any contact — storing as unmatched");
           if (supabase) {
@@ -2781,6 +2807,146 @@ function createApp() {
         console.error("🔥 Fireflies webhook handler error:", err.message || err);
       }
     });
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES REPROCESS UNMATCHED TRANSCRIPTS
+  // Retries matching for unmatched transcripts using GHL contact name search
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/fireflies/reprocess-unmatched", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(500).json({ error: "Supabase not configured" });
+      }
+
+      // Optionally target a specific transcript
+      const { transcriptId } = req.body || {};
+
+      let query = supabase
+        .from("fireflies_transcripts")
+        .select("*")
+        .eq("status", "unmatched");
+
+      if (transcriptId) {
+        query = query.eq("transcript_id", transcriptId);
+      }
+
+      const { data: unmatched, error: queryErr } = await query;
+
+      if (queryErr) {
+        return res.status(500).json({ error: queryErr.message });
+      }
+
+      if (!unmatched || unmatched.length === 0) {
+        return res.json({ success: true, processed: 0, message: "No unmatched transcripts" });
+      }
+
+      console.log(`🔥 Reprocessing ${unmatched.length} unmatched transcript(s)...`);
+
+      const results = [];
+
+      for (const row of unmatched) {
+        const nameFromTitle = extractNameFromTitle(row.meeting_title);
+
+        if (!nameFromTitle) {
+          results.push({ id: row.transcript_id, status: "skipped", reason: "no name in title" });
+          continue;
+        }
+
+        // Search GHL contacts by name
+        let contactId = null;
+        try {
+          const { ghl } = require("../clients/ghlSdk");
+          const result = await ghl.contacts.getContacts({
+            locationId: process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4",
+            query: nameFromTitle,
+            limit: 5,
+          });
+          const contacts = result?.contacts || [];
+          if (contacts.length > 0) {
+            const exactMatch = contacts.find((c) => {
+              const fullName = `${c.firstName || ""} ${c.lastName || ""}`.trim().toLowerCase();
+              return fullName === nameFromTitle.toLowerCase();
+            });
+            contactId = (exactMatch || contacts[0]).id;
+          }
+        } catch (searchErr) {
+          results.push({ id: row.transcript_id, status: "error", reason: searchErr.message });
+          continue;
+        }
+
+        if (!contactId) {
+          results.push({ id: row.transcript_id, status: "still_unmatched", name: nameFromTitle });
+          continue;
+        }
+
+        // Fetch transcript from Fireflies
+        let transcript;
+        try {
+          transcript = await getTranscript(row.transcript_id);
+        } catch (fetchErr) {
+          results.push({ id: row.transcript_id, status: "error", reason: `fetch failed: ${fetchErr.message}` });
+          continue;
+        }
+
+        if (!transcript || !transcript.sentences || transcript.sentences.length === 0) {
+          results.push({ id: row.transcript_id, status: "error", reason: "empty transcript" });
+          continue;
+        }
+
+        // Check if Google/Gemini artifacts already exist
+        const googleExists = await checkGoogleArtifactsExist(contactId);
+        if (googleExists) {
+          await supabase.from("fireflies_transcripts").update({
+            contact_id: contactId,
+            status: "skipped_google_exists",
+            processed_at: new Date().toISOString(),
+          }).eq("transcript_id", row.transcript_id);
+          results.push({ id: row.transcript_id, status: "skipped_google_exists", contactId });
+          continue;
+        }
+
+        // Format + summarize
+        const rawText = formatTranscriptText(transcript.sentences);
+        let summaryText = "";
+        try {
+          summaryText = await summarizeConsultation(rawText, { clientName: nameFromTitle });
+        } catch (sumErr) {
+          summaryText = "Summary generation failed. See raw transcript.";
+        }
+
+        // Save to GHL custom fields
+        const customField = {
+          Tj9WuXbE1hWtxfTgCMGM: rawText,
+          EU4U5jeDJxXHQ8Jh8gfT: summaryText,
+          LUASmxIwwPBr3SsZEHd9: row.transcript_id,
+          HORoQH6waBo9xSabFbyM: new Date().toISOString(),
+        };
+
+        try {
+          await updateContact(contactId, { customField });
+        } catch (updateErr) {
+          results.push({ id: row.transcript_id, status: "error", reason: `GHL update failed: ${updateErr.message}` });
+          continue;
+        }
+
+        // Mark as processed
+        await supabase.from("fireflies_transcripts").update({
+          contact_id: contactId,
+          status: "processed",
+          processed_at: new Date().toISOString(),
+        }).eq("transcript_id", row.transcript_id);
+
+        results.push({ id: row.transcript_id, status: "processed", contactId, name: nameFromTitle });
+        console.log(`🔥 ✅ Reprocessed transcript "${row.meeting_title}" → contact ${contactId}`);
+      }
+
+      return res.json({ success: true, processed: results.length, results });
+    } catch (err) {
+      console.error("🔥 Reprocess error:", err);
+      return res.status(500).json({ error: err.message });
+    }
   });
 
   // ═══════════════════════════════════════════════════════════════════════════

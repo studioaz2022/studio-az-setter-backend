@@ -5,6 +5,22 @@
 
 const { supabase } = require('./supabaseClient');
 const apnsService = require('../services/apnsService');
+const { createGoogleMeet } = require('./googleMeet');
+const { subscribeToMeetSpace } = require('./workspaceEvents');
+const {
+  CALENDARS,
+  CONSULTATION_CALENDARS,
+  TRANSLATOR_CALENDARS,
+  GHL_USER_EMAILS,
+} = require('../config/constants');
+const { updateContact } = require('./ghlClient');
+
+// All consultation-related calendar IDs (artist + translator calendars)
+const ALL_CONSULT_CALENDAR_IDS = new Set([
+  ...Object.values(CALENDARS).filter(Boolean),
+  ...Object.values(CONSULTATION_CALENDARS).filter(Boolean),
+  ...Object.values(TRANSLATOR_CALENDARS).filter(Boolean),
+]);
 
 /**
  * Handle appointment created event
@@ -31,6 +47,105 @@ async function handleAppointmentCreated(payload) {
 
   // Send push notification to assigned artist
   await sendAppointmentPushNotification(payload.appointment || payload, 'created');
+
+  // Auto-create Google Calendar event + Fireflies for consultation appointments
+  // that don't already have a Google Meet link (i.e., manually booked via iOS or GHL UI)
+  const rawAppt = payload.appointment || payload;
+  await ensureGoogleMeetForConsultation(rawAppt);
+}
+
+/**
+ * For consultation appointments that lack a Google Meet link,
+ * create a Google Calendar event (with Fireflies bot) and
+ * a Workspace Events subscription for artifact push notifications.
+ *
+ * This catches manually-booked consultations from the iOS app or GHL UI
+ * that bypass the AI setter's bookingController.
+ */
+async function ensureGoogleMeetForConsultation(rawAppt) {
+  const calendarId = rawAppt.calendarId;
+  const contactId = rawAppt.contactId;
+  const title = rawAppt.title || 'Consultation';
+  const startTime = rawAppt.startTime;
+  const endTime = rawAppt.endTime;
+  const existingAddress = rawAppt.address || '';
+  const assignedUserId = rawAppt.assignedUserId;
+
+  // Only process consultation calendars (skip tattoo session, barbershop, etc.)
+  if (!ALL_CONSULT_CALENDAR_IDS.has(calendarId)) {
+    return;
+  }
+
+  // Skip translator-only appointments (they'll share the artist's Meet link)
+  const isTranslatorCalendar = Object.values(TRANSLATOR_CALENDARS).includes(calendarId);
+  if (isTranslatorCalendar) {
+    console.log('📹 Skipping Google Meet for translator appointment (shares artist link)');
+    return;
+  }
+
+  // Skip if already has a Google Meet link (AI setter already handled it)
+  if (existingAddress && existingAddress.includes('meet.google.com')) {
+    console.log('📹 Appointment already has Google Meet link — skipping');
+    return;
+  }
+
+  console.log(`📹 Consultation appointment on calendar ${calendarId} has no Google Meet — creating one`);
+
+  try {
+    // Build attendee list
+    const attendeeEmails = [];
+    if (assignedUserId && GHL_USER_EMAILS[assignedUserId]) {
+      attendeeEmails.push(GHL_USER_EMAILS[assignedUserId]);
+    }
+
+    // Fetch contact email if available
+    try {
+      const { getContact } = require('./ghlClient');
+      const contact = await getContact(contactId);
+      if (contact?.email) {
+        attendeeEmails.push(contact.email);
+      }
+    } catch (contactErr) {
+      console.warn('📹 Could not fetch contact email (non-blocking):', contactErr.message);
+    }
+
+    const meetResp = await createGoogleMeet({
+      summary: title,
+      description: `Consultation booked via GHL\nContact: ${contactId}`,
+      startISO: startTime,
+      endISO: endTime,
+      attendees: attendeeEmails,
+    });
+
+    const meetUrl = meetResp.meetUrl || meetResp.htmlLink || null;
+    console.log('📹 Google Meet created for manual consultation:', meetUrl);
+
+    if (meetUrl) {
+      // Update GHL appointment address + contact custom field with Meet link
+      try {
+        await updateContact(contactId, {
+          customField: { google_meet_link: meetUrl },
+        });
+        console.log('📹 Updated contact google_meet_link custom field');
+      } catch (cfErr) {
+        console.warn('📹 Failed to update contact Meet link (non-blocking):', cfErr.message);
+      }
+
+      // Subscribe to Workspace Events for real-time artifact notifications
+      try {
+        await subscribeToMeetSpace(meetUrl, contactId, {
+          calendarEventTitle: title,
+          scheduledStart: startTime,
+          scheduledEnd: endTime,
+        });
+      } catch (subErr) {
+        console.warn('📹 Failed to subscribe to workspace events (non-blocking):', subErr.message);
+      }
+    }
+  } catch (err) {
+    // Non-blocking — appointment was already created successfully
+    console.error('📹 Failed to create Google Meet for consultation (non-blocking):', err.message);
+  }
 }
 
 /**
