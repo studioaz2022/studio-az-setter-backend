@@ -5133,7 +5133,7 @@ function createApp() {
       const { db } = require("../clients/instantDb");
       const { id } = require("@instantdb/admin");
       const { parseVenmoEmail, generateDedup } = require("../rentTracker/venmoEmailParser");
-      const { buildAliasMap, matchTenant, attributeToWeek, getPaymentType } = require("../rentTracker/tenantMatcher");
+      const { buildAliasMap, matchTenant, attributeToWeek, getPaymentType, toISODate, getMonday } = require("../rentTracker/tenantMatcher");
 
       const payload = req.body;
       console.log("\n📩 Venmo webhook received");
@@ -5223,34 +5223,42 @@ function createApp() {
         return res.status(200).json({ ok: true, skipped: "duplicate", venmoTxId });
       }
 
-      // Also check if a CSV-imported payment already exists for this tenant+amount+week
-      // This prevents duplicates when forwarding emails for payments already in the CSV import
+      // 5. Determine week attribution
+      // Fetch tenant's recent payments for late-payment detection + duplicate check
       const paymentDate = parsed.date || new Date();
-      const { weekOf: checkWeek } = attributeToWeek(parsed.amount, parsed.note, paymentDate, tenant);
+      const lookbackDate = new Date(paymentDate);
+      lookbackDate.setDate(lookbackDate.getDate() - 35);
+      const lookbackWeek = toISODate(getMonday(lookbackDate));
 
-      const { payments: tenantPayments } = await db.query({
+      const { payments: recentTenantPayments } = await db.query({
         payments: {
-          $: { where: { weekOf: checkWeek } },
+          $: { where: { weekOf: { $gte: lookbackWeek } } },
           tenant: {},
         },
       });
+      const tenantRecentPayments = recentTenantPayments.filter((p) => {
+        const t = Array.isArray(p.tenant) ? p.tenant[0] : p.tenant;
+        return t && t.id === tenant.id;
+      });
+      const paidWeeks = tenantRecentPayments.map((p) => p.weekOf);
 
-      const alreadyExists = tenantPayments.some(
-        (p) => p.tenant?.[0]?.id === tenant.id && Math.abs(p.amount - parsed.amount) < 1,
-      );
-
-      if (alreadyExists) {
-        console.log(`  ⚠️ Payment already exists for ${tenant.name} in week ${checkWeek} ($${parsed.amount}), skipping`);
-        return res.status(200).json({ ok: true, skipped: "already-recorded", tenant: tenant.name, weekOf: checkWeek });
-      }
-
-      // 5. Determine week attribution (paymentDate already computed above)
       const { weekOf, attribution } = attributeToWeek(
         parsed.amount,
         parsed.note,
         paymentDate,
         tenant,
+        paidWeeks,
       );
+
+      // Check if a payment already exists for this tenant+amount+week (CSV import or prior webhook)
+      const alreadyExists = tenantRecentPayments.some(
+        (p) => p.weekOf === weekOf && Math.abs(p.amount - parsed.amount) < 1,
+      );
+
+      if (alreadyExists) {
+        console.log(`  ⚠️ Payment already exists for ${tenant.name} in week ${weekOf} ($${parsed.amount}), skipping`);
+        return res.status(200).json({ ok: true, skipped: "already-recorded", tenant: tenant.name, weekOf });
+      }
       const paymentType = getPaymentType(tenant);
 
       console.log(`  Week: ${weekOf} | Attribution: ${attribution} | Type: ${paymentType}`);

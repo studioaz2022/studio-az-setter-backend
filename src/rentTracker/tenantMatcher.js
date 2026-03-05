@@ -148,15 +148,15 @@ function matchTenant(fromName, aliasMap) {
 
 /**
  * Determine which week a payment should be attributed to.
- * Simplified version for real-time webhook (no resolveDoubles needed).
  *
  * @param {number} amount - Payment amount
  * @param {string|null} note - Venmo note text
  * @param {Date} paymentDate - When the payment was made
  * @param {object} tenant - Tenant object
+ * @param {string[]} [paidWeeks] - Weeks this tenant already has payments for (ISO date strings)
  * @returns {{ weekOf: string, attribution: string }}
  */
-function attributeToWeek(amount, note, paymentDate, tenant) {
+function attributeToWeek(amount, note, paymentDate, tenant, paidWeeks) {
   const paymentWeek = weekOfDate(paymentDate);
 
   // Tattoo artists / non-rent: just use payment date's week
@@ -190,6 +190,27 @@ function attributeToWeek(amount, note, paymentDate, tenant) {
     }
   }
 
+  // Late payment detection: if amount ≈ rent and we have payment history,
+  // find the earliest unpaid week going back up to 4 weeks
+  if (paidWeeks && paidWeeks.length >= 0 && Math.abs(amount - rent) <= 10) {
+    const paidSet = new Set(paidWeeks);
+    const monday = getMonday(paymentDate);
+
+    // Check from 4 weeks ago up to the current payment week
+    for (let i = 4; i >= 0; i--) {
+      const checkDate = new Date(monday);
+      checkDate.setDate(checkDate.getDate() - i * 7);
+      const checkWeek = toISODate(checkDate);
+      if (!paidSet.has(checkWeek)) {
+        if (checkWeek !== paymentWeek) {
+          return { weekOf: checkWeek, attribution: `backfill-unpaid → ${checkWeek}` };
+        }
+        // Earliest unpaid is the current week — just use it
+        return { weekOf: paymentWeek, attribution: "payment-date" };
+      }
+    }
+  }
+
   // Default: use payment date's week
   return { weekOf: paymentWeek, attribution: "payment-date" };
 }
@@ -209,5 +230,7 @@ module.exports = {
   attributeToWeek,
   getPaymentType,
   weekOfDate,
+  toISODate,
+  getMonday,
   parseDateRange,
 };
