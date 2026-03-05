@@ -3926,18 +3926,83 @@ function createApp() {
         // e.g. "C.J. Washington" → "cj washington", "Pablo RP" → "pablo rp"
         const normalize = (s) => (s || "").replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
+        // Common nickname/diminutive pairs for first-name matching
+        const nicknameMap = {
+          ben: "benjamin", benjamin: "ben",
+          mike: "michael", michael: "mike",
+          steve: "stephen", stephen: "steve",
+          steven: "steve", steve: "steven",
+          matt: "matthew", matthew: "matt",
+          dan: "daniel", daniel: "dan",
+          dave: "david", david: "dave",
+          rob: "robert", robert: "rob",
+          bob: "robert",
+          jim: "james", james: "jim",
+          joe: "joseph", joseph: "joe",
+          tom: "thomas", thomas: "tom",
+          nick: "nicholas", nicholas: "nick",
+          chris: "christopher", christopher: "chris",
+          jon: "jonathan", jonathan: "jon",
+          alex: "alexander", alexander: "alex",
+          will: "william", william: "will",
+          bill: "william",
+          ed: "edward", edward: "ed",
+          tony: "anthony", anthony: "tony",
+          jake: "jacob", jacob: "jake",
+          josh: "joshua", joshua: "josh",
+          sam: "samuel", samuel: "sam",
+          zac: "zachary", zach: "zachary", zachary: "zach",
+          drew: "andrew", andrew: "drew",
+          pat: "patrick", patrick: "pat",
+          greg: "gregory", gregory: "greg",
+          jeff: "jeffrey", jeffrey: "jeff",
+          larry: "lawrence", lawrence: "larry",
+          rick: "richard", richard: "rick",
+          dick: "richard",
+          charlie: "charles", charles: "charlie",
+          chuck: "charles",
+          liz: "elizabeth", elizabeth: "liz",
+          beth: "elizabeth",
+          kate: "katherine", katherine: "kate",
+          katie: "katherine",
+          jen: "jennifer", jennifer: "jen",
+          jess: "jessica", jessica: "jess",
+          dj: "d j",
+        };
+
+        // Check if two names match, considering nicknames
+        // Compares last names exactly, first names with nickname fallback
+        const namesMatch = (name1, name2) => {
+          const parts1 = name1.split(" ");
+          const parts2 = name2.split(" ");
+          if (parts1.length < 2 || parts2.length < 2) return false;
+          const first1 = parts1[0], last1 = parts1[parts1.length - 1];
+          const first2 = parts2[0], last2 = parts2[parts2.length - 1];
+          if (last1 !== last2) return false;
+          if (first1 === first2) return true;
+          // Check nickname variants
+          return nicknameMap[first1] === first2 || nicknameMap[first2] === first1;
+        };
+
         // Strategy 1: Match sender name against today's appointment titles directly.
         // This catches cases like "CJ Washington" → "C.J. Washington" where GHL search fails
-        // due to punctuation differences.
+        // due to punctuation differences. Also handles nicknames (Ben → Benjamin, etc.).
         if (unclaimed.length > 0) {
           const senderNorm = normalize(row.from);
           for (const apt of unclaimed) {
             // Appointment title often contains the contact name (e.g., "C.J. Washington" or "Haircut: Amit Sethi")
             const titleNorm = normalize(apt.title);
+            if (!titleNorm) continue;
             // Check if sender name appears in title or title contains sender name
-            if (titleNorm && (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm))) {
+            if (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm)) {
               contactId = apt.contactId || null;
               console.log(`[API] Appointment title match: "${row.from}" → "${apt.title}" (contact: ${contactId})`);
+              break;
+            }
+            // Check with nickname matching (e.g., "Benjamin Wright" → "Ben Wright")
+            if (namesMatch(senderNorm, titleNorm)) {
+              contactId = apt.contactId || null;
+              console.log(`[API] Appointment nickname match: "${row.from}" → "${apt.title}" (contact: ${contactId})`);
               break;
             }
           }

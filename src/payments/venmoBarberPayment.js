@@ -99,15 +99,65 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   // e.g. "C.J. Washington" → "cj washington", "Pablo RP" → "pablo rp"
   const normalize = (s) => (s || "").replace(/\./g, "").replace(/\s+/g, " ").trim().toLowerCase();
 
+  // Common nickname/diminutive pairs for first-name matching
+  const nicknameMap = {
+    ben: "benjamin", benjamin: "ben",
+    mike: "michael", michael: "mike",
+    steve: "stephen", stephen: "steve",
+    steven: "steve",
+    matt: "matthew", matthew: "matt",
+    dan: "daniel", daniel: "dan",
+    dave: "david", david: "dave",
+    rob: "robert", robert: "rob", bob: "robert",
+    jim: "james", james: "jim",
+    joe: "joseph", joseph: "joe",
+    tom: "thomas", thomas: "tom",
+    nick: "nicholas", nicholas: "nick",
+    chris: "christopher", christopher: "chris",
+    jon: "jonathan", jonathan: "jon",
+    alex: "alexander", alexander: "alex",
+    will: "william", william: "will", bill: "william",
+    ed: "edward", edward: "ed",
+    tony: "anthony", anthony: "tony",
+    jake: "jacob", jacob: "jake",
+    josh: "joshua", joshua: "josh",
+    sam: "samuel", samuel: "sam",
+    zac: "zachary", zach: "zachary", zachary: "zach",
+    drew: "andrew", andrew: "drew",
+    pat: "patrick", patrick: "pat",
+    greg: "gregory", gregory: "greg",
+    jeff: "jeffrey", jeffrey: "jeff",
+    charlie: "charles", charles: "charlie", chuck: "charles",
+    dj: "d j",
+  };
+
+  const namesMatch = (name1, name2) => {
+    const parts1 = name1.split(" ");
+    const parts2 = name2.split(" ");
+    if (parts1.length < 2 || parts2.length < 2) return false;
+    const first1 = parts1[0], last1 = parts1[parts1.length - 1];
+    const first2 = parts2[0], last2 = parts2[parts2.length - 1];
+    if (last1 !== last2) return false;
+    if (first1 === first2) return true;
+    return nicknameMap[first1] === first2 || nicknameMap[first2] === first1;
+  };
+
   // Strategy 1: Match sender name against today's appointment titles directly.
   // This catches cases like "CJ Washington" → "C.J. Washington" where GHL search fails.
+  // Also handles nicknames (Ben → Benjamin, etc.).
   if (unclaimedAppts.length > 0 && parsed.senderName) {
     const senderNorm = normalize(parsed.senderName);
     for (const apt of unclaimedAppts) {
       const titleNorm = normalize(apt.title);
-      if (titleNorm && (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm))) {
+      if (!titleNorm) continue;
+      if (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm)) {
         contactId = apt.contactId || null;
         console.log(`  [VenmoBarber] Appointment title match: "${parsed.senderName}" → "${apt.title}" (contact: ${contactId})`);
+        break;
+      }
+      if (namesMatch(senderNorm, titleNorm)) {
+        contactId = apt.contactId || null;
+        console.log(`  [VenmoBarber] Appointment nickname match: "${parsed.senderName}" → "${apt.title}" (contact: ${contactId})`);
         break;
       }
     }
