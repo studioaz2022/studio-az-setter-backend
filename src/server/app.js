@@ -5378,6 +5378,7 @@ function createApp() {
             paidAt: paymentDate,
             notes: parsed.note || undefined,
             venmoTxId,
+            venmoStoryUrl: parsed.storyUrl || undefined,
             verified: false,
             attribution,
           })
