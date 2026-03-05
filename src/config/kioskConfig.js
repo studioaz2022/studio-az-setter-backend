@@ -24,6 +24,7 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'AzIK0eW09u4V1jJTXQ0x',
       haircut_beard: 'dCuPcZbqylgwftyDu8kw',
+      beard_trim: 'RsdMc558Cjjs28xpyCCf',
     },
   },
   {
@@ -33,6 +34,7 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'o1fvyti3GnoFGKZN5Hwr',
       haircut_beard: 'lsBgjayKLFOUahMvuVNe',
+      beard_trim: 'Us8MYQ74AcvMsJBmIucQ',
     },
   },
   {
@@ -60,6 +62,7 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'X1xINoRML65yAOVUsAGa',
       haircut_beard: 'Vs496YAmFt5uX2JTg2Bs',
+      beard_trim: '3NsSPGmWCxSAZJSPTIDY',
     },
   },
   {
@@ -69,6 +72,7 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'h9VQL30IBqr6TTiKwAQm',
       haircut_beard: 'NZSQNzPM10Fe6mUuJuyU',
+      beard_trim: 'xLjnOmLqToiknndXnvbk',
     },
   },
   {
@@ -78,6 +82,7 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'kiGx7ec1vj9e62U33ZhU',
       haircut_beard: 'vLpnhjAc93piHn1e2cfQ',
+      beard_trim: 'g7DSKwGxH8qsXrHBfZ5h',
     },
   },
   {
