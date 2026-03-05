@@ -457,6 +457,9 @@ function createApp() {
       
       if (allowedOrigins.indexOf(origin) !== -1) {
         callback(null, true);
+      } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
+        // Allow any private/local network IP (kiosk, local dev)
+        callback(null, true);
       } else {
         callback(new Error('Not allowed by CORS'));
       }
