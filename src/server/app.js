@@ -23,7 +23,7 @@ const {
   addTranslatorAsFollower,
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
-const { verifyStaffEmail, ghlBarber } = require("../clients/ghlMultiLocationSdk");
+const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
   buildOAuthUrl,
@@ -4899,18 +4899,39 @@ function createApp() {
         limit: 20,
       });
 
-      const contacts = (result?.contacts || []).map((c) => ({
-        id: c.id,
-        locationId: c.locationId,
-        contactName: c.contactName || `${c.firstName || ""} ${c.lastName || ""}`.trim() || null,
-        firstName: c.firstName,
-        lastName: c.lastName,
-        email: c.email,
-        phone: c.phone,
-        assignedTo: c.assignedTo,
-        followers: c.followers,
-        tags: c.tags,
-      }));
+      // Build userId → name map from cached users for assignedTo resolution
+      const locationKey = isBarberLocation ? "barber" : "tattoo";
+      let userNameMap = {};
+      try {
+        const users = await getCachedUsers(locationKey, sdk, locationId);
+        for (const u of users) {
+          userNameMap[u.id] = u.name || `${u.firstName || ""} ${u.lastName || ""}`.trim();
+        }
+      } catch (err) {
+        console.warn("[ContactSearch] Failed to fetch users for assignedTo resolution:", err.message);
+      }
+
+      const titleCase = (str) => {
+        if (!str) return str;
+        return str.replace(/\b\w/g, (c) => c.toUpperCase());
+      };
+
+      const contacts = (result?.contacts || []).map((c) => {
+        const rawName = c.contactName || `${c.firstName || ""} ${c.lastName || ""}`.trim() || null;
+        return {
+          id: c.id,
+          locationId: c.locationId,
+          contactName: titleCase(rawName),
+          firstName: titleCase(c.firstName),
+          lastName: titleCase(c.lastName),
+          email: c.email,
+          phone: c.phone,
+          assignedTo: c.assignedTo,
+          assignedToName: c.assignedTo ? (userNameMap[c.assignedTo] || null) : null,
+          followers: c.followers,
+          tags: c.tags,
+        };
+      });
 
       res.json({ success: true, contacts });
     } catch (error) {

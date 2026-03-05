@@ -137,4 +137,4 @@ async function verifyStaffEmail(email) {
   };
 }
 
-module.exports = { verifyStaffEmail, ghlBarber };
+module.exports = { verifyStaffEmail, ghlBarber, getCachedUsers };
