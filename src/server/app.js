@@ -4067,24 +4067,38 @@ function createApp() {
             // If their appointment is already claimed or doesn't exist, leave as unmatched
             // rather than grabbing someone else's appointment by proximity
           } else if (unclaimed.length > 0) {
-            // No GHL contact found at all — use time proximity as a best guess
+            // No GHL contact found at all — use distance-from-end scoring as a best guess.
+            // Same logic as Square batch matching: 10-min grace period before end,
+            // 45-min max threshold to reject unlikely matches.
+            const MAX_MATCH_DISTANCE_MIN = 45;
+            const GRACE_PERIOD_MS = 10 * 60 * 1000;
             const paymentMs = paymentDate.getTime();
-            let closest = unclaimed[0];
-            let closestDiff = Math.abs(new Date(closest.startTime).getTime() - paymentMs);
+            let bestApt = null;
+            let bestScore = Infinity;
             for (const apt of unclaimed) {
-              const diff = Math.abs(new Date(apt.startTime).getTime() - paymentMs);
-              if (diff < closestDiff) {
-                closest = apt;
-                closestDiff = diff;
+              const aptStart = new Date(apt.startTime);
+              const aptEnd = apt.endTime ? new Date(apt.endTime) : new Date(aptStart.getTime() + 60 * 60 * 1000);
+              const graceStart = new Date(aptEnd.getTime() - GRACE_PERIOD_MS);
+              let score;
+              if (paymentMs >= graceStart.getTime()) {
+                score = Math.abs(paymentMs - aptEnd.getTime()) / 60000;
+              } else {
+                score = 1000 + (aptEnd.getTime() - paymentMs) / 60000;
+              }
+              if (score < bestScore) {
+                bestScore = score;
+                bestApt = apt;
               }
             }
-            appointmentId = closest.id;
-            calendarId = closest.calendarId || null;
+            if (bestApt && bestScore <= MAX_MATCH_DISTANCE_MIN) {
+              appointmentId = bestApt.id;
+              calendarId = bestApt.calendarId || null;
 
-            // Link the appointment's GHL contact for internal tracking,
-            // but NEVER overwrite contactName — it stays as the Venmo sender
-            if (closest.contactId) {
-              contactId = closest.contactId;
+              // Link the appointment's GHL contact for internal tracking,
+              // but NEVER overwrite contactName — it stays as the Venmo sender
+              if (bestApt.contactId) {
+                contactId = bestApt.contactId;
+              }
             }
           }
         }

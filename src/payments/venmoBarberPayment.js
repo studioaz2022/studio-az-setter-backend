@@ -247,15 +247,36 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
       }
       // If their appointment is already claimed or doesn't exist, leave as unmatched
     } else if (unclaimedAppts.length > 0) {
-      // No GHL contact found at all — use time proximity as a best guess
-      const proximityAppt = unclaimedAppts[0];
-      appointmentId = proximityAppt.id;
-      calendarId = proximityAppt.calendarId || null;
-
-      if (proximityAppt.contactId) {
-        contactId = proximityAppt.contactId;
+      // No GHL contact found at all — use distance-from-end scoring as a best guess.
+      // Same logic as Square batch matching: 10-min grace period, 45-min max threshold.
+      const MAX_MATCH_DISTANCE_MIN = 45;
+      const GRACE_PERIOD_MS = 10 * 60 * 1000;
+      const paymentMs = (parsed.date || new Date()).getTime();
+      let bestApt = null;
+      let bestScore = Infinity;
+      for (const apt of unclaimedAppts) {
+        const aptStart = new Date(apt.startTime);
+        const aptEnd = apt.endTime ? new Date(apt.endTime) : new Date(aptStart.getTime() + 60 * 60 * 1000);
+        const graceStart = new Date(aptEnd.getTime() - GRACE_PERIOD_MS);
+        let score;
+        if (paymentMs >= graceStart.getTime()) {
+          score = Math.abs(paymentMs - aptEnd.getTime()) / 60000;
+        } else {
+          score = 1000 + (aptEnd.getTime() - paymentMs) / 60000;
+        }
+        if (score < bestScore) {
+          bestScore = score;
+          bestApt = apt;
+        }
       }
-      console.log(`  [VenmoBarber] Time-proximity match: appointment ${appointmentId}`);
+      if (bestApt && bestScore <= MAX_MATCH_DISTANCE_MIN) {
+        appointmentId = bestApt.id;
+        calendarId = bestApt.calendarId || null;
+        if (bestApt.contactId) {
+          contactId = bestApt.contactId;
+        }
+        console.log(`  [VenmoBarber] Distance-from-end match: appointment ${appointmentId} (score: ${bestScore.toFixed(1)} min)`);
+      }
     }
   }
 
