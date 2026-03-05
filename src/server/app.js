@@ -5733,6 +5733,30 @@ function createApp() {
   });
 
   /**
+   * Returns start/end of "today" in America/Chicago timezone as Date objects.
+   * Handles CST/CDT automatically by reading the real offset from Intl.
+   */
+  function getTodayRangeCentral() {
+    const now = new Date();
+    // Get today's date string in Central time: "YYYY-MM-DD"
+    const dateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
+    // Get the current UTC offset for Central time (accounts for DST)
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'America/Chicago',
+      timeZoneName: 'shortOffset',
+    }).formatToParts(now);
+    const offsetPart = parts.find(p => p.type === 'timeZoneName');
+    // offsetPart.value is like "GMT-5" or "GMT-6"
+    const offsetMatch = offsetPart?.value.match(/GMT([+-]?\d+)/);
+    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -6;
+    const offsetStr = `${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
+
+    const startOfDay = new Date(`${dateStr}T00:00:00${offsetStr}`);
+    const endOfDay = new Date(`${dateStr}T23:59:59.999${offsetStr}`);
+    return { startOfDay, endOfDay };
+  }
+
+  /**
    * GET /api/kiosk/barber-appointments?ghlUserId=X
    * Returns today's appointments for a specific barber — used by the kiosk
    * appointment carousel so clients can tap their name/time to check in.
@@ -5747,11 +5771,9 @@ function createApp() {
     try {
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
-      const now = new Date();
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
+      // Compute "today" in Central time so the kiosk always shows the correct day
+      // (server runs in UTC on Render — naive setHours(0) would give UTC midnight)
+      const { startOfDay, endOfDay } = getTodayRangeCentral();
 
       const events = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
@@ -5950,11 +5972,8 @@ function createApp() {
     try {
       const { TATTOO_LOCATION_ID } = require("../config/kioskConfig");
 
-      const now = new Date();
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
+      // Compute "today" in Central time (shop is in Minneapolis)
+      const { startOfDay, endOfDay } = getTodayRangeCentral();
 
       // Use default ghl SDK (tattoo location) — no sdkInstance param
       const events = await fetchAppointmentsForDateRange({
