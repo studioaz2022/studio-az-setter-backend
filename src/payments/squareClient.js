@@ -31,12 +31,17 @@ if (!SQUARE_LOCATION_ID) {
  * Create a Square payment link for a specific contact.
  * - contactId: GHL contact id (for your internal reference / future metadata use)
  * - amountCents: integer in cents, e.g. 5000 = $50.00
+ * - business: "tattoo" or "barbershop" — used to route payments in the sync
+ * - paymentType: "deposit", "session_payment", "payment_plan", etc.
+ * - description: client-facing line item name (e.g. "Tattoo Consultation")
  */
 async function createDepositLinkForContact({
   contactId,
   amountCents,
   currency = "USD",
   description = "Studio AZ Tattoo Deposit",
+  business = "tattoo",
+  paymentType = "deposit",
 }) {
   if (!contactId) {
     throw new Error("contactId is required for createDepositLinkForContact");
@@ -69,6 +74,12 @@ async function createDepositLinkForContact({
     order: {
       location_id: SQUARE_LOCATION_ID,
       reference_id: contactId, // 🔥 this is what we read back in getContactIdFromOrder
+      // Hidden metadata — not visible to the client, used for internal routing
+      metadata: {
+        business,        // "tattoo" or "barbershop"
+        payment_type: paymentType, // "deposit", "session_payment", "payment_plan"
+        contact_id: contactId,
+      },
       line_items: [
         {
           name: description,

@@ -179,11 +179,17 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
     300
   );
 
-  const synced = results.length;
-  let autoMatched = results
+  // Filter out skipped payments (e.g., tattoo payments) before counting
+  const skipped = results.filter((r) => r.skipped);
+  if (skipped.length > 0) {
+    console.log(`[SquareSync] Skipped ${skipped.length} payment(s): ${skipped.map((r) => r.skipReason).join(", ")}`);
+  }
+  const activeResults = results.filter((r) => !r.skipped);
+  const synced = activeResults.length;
+  let autoMatched = activeResults
     .filter((r) => r.matched && r.autoMatchDetail)
     .map((r) => r.autoMatchDetail);
-  let unmatchedResults = results.filter((r) => !r.matched);
+  let unmatchedResults = activeResults.filter((r) => !r.matched);
 
   // Batch proximity matching: pair unmatched non-product payments with appointments by day order
   // Exclude appointments already claimed by email/phone matching
@@ -410,6 +416,11 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   paymentSummary.isProductSale = orderDetails.isProductSale;
   paymentSummary.discountCents = orderDetails.totalDiscountCents;
   paymentSummary.discountName = orderDetails.discountName;
+
+  // Skip tattoo payments — they belong to the tattoo shop, not the barbershop
+  if (orderDetails.isTattoo) {
+    return { payment: paymentSummary, matched: false, skipped: true, skipReason: "tattoo_payment" };
+  }
 
   // Try to match via buyer email
   let contactId = null;
@@ -908,7 +919,7 @@ async function lookupGhlContactByPhone(phone) {
  * @returns {{ totalDiscountCents: number|null, discountName: string|null, itemType: string|null, lineItemName: string|null, isProductSale: boolean }}
  */
 async function fetchSquareOrderDetails(accessToken, orderId) {
-  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false, basePriceCents: null, totalTaxCents: null };
+  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false, basePriceCents: null, totalTaxCents: null, isTattoo: false };
   if (!orderId || !accessToken) return empty;
   try {
     const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
@@ -925,6 +936,18 @@ async function fetchSquareOrderDetails(accessToken, orderId) {
     const itemType = lineItem?.item_type || null;
     const lineItemName = lineItem?.name || null;
     const hasCatalogId = !!lineItem?.catalog_object_id;
+
+    // Detect tattoo payments via order metadata (new links) or line item name (legacy)
+    const orderMetadata = order.metadata || {};
+    const isTattooByMetadata = orderMetadata.business === "tattoo";
+    const isTattooByLineItem = (order.line_items || []).some(
+      (li) => (li.name || "").toLowerCase().includes("tattoo")
+    );
+    const isTattoo = isTattooByMetadata || isTattooByLineItem;
+
+    if (isTattoo) {
+      console.log(`[SquareSync] Order ${orderId}: TATTOO payment detected (${isTattooByMetadata ? "metadata" : "line item"}: "${lineItemName}") — skipping barbershop sync`);
+    }
 
     // Product sale = ITEM type with a catalog ID and NOT a known service name
     // Known service names: "Haircut", "Haircut + Beard", etc.
@@ -945,7 +968,7 @@ async function fetchSquareOrderDetails(accessToken, orderId) {
       console.log(`[SquareSync] Order ${orderId}: product sale detected — "${lineItemName}" (${itemType}), base $${(basePriceCents || 0) / 100}, tax $${(totalTaxCents || 0) / 100}`);
     }
 
-    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale, basePriceCents, totalTaxCents };
+    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale, basePriceCents, totalTaxCents, isTattoo };
   } catch (err) {
     console.warn(`[SquareSync] Failed to fetch order ${orderId}: ${err.message}`);
     return empty;
