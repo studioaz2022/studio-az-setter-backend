@@ -6115,20 +6115,20 @@ function createApp() {
         });
       }
 
-      // 3. Check next 7 days for appointments with this barber
-      const endWeek = new Date(now);
-      endWeek.setDate(endWeek.getDate() + 7);
-      endWeek.setHours(23, 59, 59, 999);
+      // 3. Check next 30 days for upcoming appointments with this barber
+      const endFuture = new Date(now);
+      endFuture.setDate(endFuture.getDate() + 30);
+      endFuture.setHours(23, 59, 59, 999);
 
-      const weekEvents = await fetchAppointmentsForDateRange({
+      const futureEvents = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
         startTime: endOfDay.toISOString(),
-        endTime: endWeek.toISOString(),
+        endTime: endFuture.toISOString(),
         userId: ghlUserId,
         sdkInstance: ghlBarber,
       });
 
-      const futureMatch = weekEvents.find((evt) => {
+      const futureMatch = futureEvents.find((evt) => {
         if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
         return evt.contact?.id === contact.id;
       });
@@ -6148,13 +6148,49 @@ function createApp() {
         });
       }
 
-      // Contact exists but no appointment found with this barber
+      // 4. No upcoming appointment — check past 60 days for most recent visit
+      const contactName = contact.name || `${contact.firstName || ""} ${contact.lastName || ""}`.trim();
+      let lastAppointment = null;
+
+      try {
+        const startPast = new Date(now);
+        startPast.setDate(startPast.getDate() - 60);
+        startPast.setHours(0, 0, 0, 0);
+
+        const pastEvents = await fetchAppointmentsForDateRange({
+          locationId: BARBER_LOCATION_ID,
+          startTime: startPast.toISOString(),
+          endTime: startOfDay.toISOString(),
+          userId: ghlUserId,
+          sdkInstance: ghlBarber,
+        });
+
+        // Find the most recent non-cancelled appointment for this contact
+        const pastMatches = pastEvents
+          .filter((evt) => {
+            if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") return false;
+            return evt.contact?.id === contact.id;
+          })
+          .sort((a, b) => new Date(b.startTime).getTime() - new Date(a.startTime).getTime());
+
+        if (pastMatches.length > 0) {
+          lastAppointment = {
+            startTime: pastMatches[0].startTime,
+            endTime: pastMatches[0].endTime,
+          };
+        }
+      } catch (err) {
+        console.error("[KIOSK] Past appointment lookup error (non-fatal):", err.message);
+      }
+
+      // Contact exists but no upcoming appointment found with this barber
       return res.json({
         success: true,
         found: true,
         reason: "no_appointment",
         contactId: contact.id,
-        contactName: contact.name || `${contact.firstName || ""} ${contact.lastName || ""}`.trim(),
+        contactName,
+        lastAppointment,
       });
     } catch (error) {
       console.error("❌ [KIOSK] Phone lookup error:", error);
