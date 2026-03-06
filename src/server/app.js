@@ -6212,10 +6212,10 @@ function createApp() {
   app.get("/api/kiosk/walk-in-slots", async (req, res) => {
     const { service, days: daysParam } = req.query;
 
-    if (!service || !["haircut", "haircut_beard"].includes(service)) {
+    if (!service || !["haircut", "haircut_beard", "beard_trim"].includes(service)) {
       return res.status(400).json({
         success: false,
-        error: 'service must be "haircut" or "haircut_beard"',
+        error: 'service must be "haircut", "haircut_beard", or "beard_trim"',
       });
     }
 
@@ -6373,7 +6373,7 @@ function createApp() {
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
       // 1. Find or create GHL contact on barbershop location
-      const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : "Haircut";
+      const serviceLabel = service === "haircut_beard" ? "Haircut + Beard" : service === "beard_trim" ? "Beard Trim" : "Haircut";
       const WALK_IN_SERVICE_FIELD_ID = "ez95QC6Ois2V2uAFQUGY";
 
       let contactId;
