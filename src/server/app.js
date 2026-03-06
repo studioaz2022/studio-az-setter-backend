@@ -448,6 +448,7 @@ function createApp() {
         'https://tattooshopminneapolis.com',
         'https://app.onthebusinesscrm.com', // GHL custom domain
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
+        'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:8080',
