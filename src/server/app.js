@@ -1970,11 +1970,11 @@ function createApp() {
         }
         const c = clientMap[tx.contact_id];
         c.total_spent += parseFloat(tx.gross_amount) || 0;
-        if (tx.transaction_type === 'session_payment' || tx.transaction_type === 'deposit') {
+        if (tx.transaction_type === 'session_payment') {
           if (tx.appointment_id) {
             c.appointment_ids.add(tx.appointment_id);
           } else {
-            // No appointment_id (walk-in etc.) — count as separate
+            // No appointment_id (walk-in etc.) — count as separate session
             c.completed_tattoos++;
           }
         }
