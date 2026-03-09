@@ -5789,26 +5789,32 @@ function createApp() {
 
   /**
    * Returns start/end of "today" in America/Chicago timezone as Date objects.
-   * Handles CST/CDT automatically by reading the real offset from Intl.
+   * Handles CST/CDT correctly even on DST transition days by computing the
+   * UTC offset independently for midnight and 23:59 (they may differ on
+   * spring-forward / fall-back days).
    */
   function getTodayRangeCentral() {
     const shopTZ = "America/Chicago";
     const now = new Date();
     // Get today's date string in Central time: "YYYY-MM-DD"
     const dateStr = now.toLocaleDateString('en-CA', { timeZone: shopTZ });
-    // Get the current UTC offset for Central time (accounts for DST)
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: shopTZ,
-      timeZoneName: 'shortOffset',
-    }).formatToParts(now);
-    const offsetPart = parts.find(p => p.type === 'timeZoneName');
-    // offsetPart.value is like "GMT-5" (CDT) or "GMT-6" (CST)
-    const offsetMatch = offsetPart?.value.match(/GMT([+-]?\d+)/);
-    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -6;
-    const offsetStr = `${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
 
-    const startOfDay = new Date(`${dateStr}T00:00:00${offsetStr}`);
-    const endOfDay = new Date(`${dateStr}T23:59:59.999${offsetStr}`);
+    // Helper: convert a local Central time to a correct UTC Date.
+    // Uses toLocaleString round-trip to find the offset at that specific instant,
+    // so midnight CST and 23:59 CDT each get the right offset on DST days.
+    function localToUTC(localTimeStr) {
+      // Probe: pick a known UTC instant near the target, format it in Central,
+      // parse back, and compute the diff = offset.
+      const probe = new Date(`${localTimeStr}Z`); // treat as UTC initially
+      const centralStr = probe.toLocaleString("en-US", { timeZone: shopTZ });
+      const centralParsed = new Date(centralStr);
+      const offsetMs = probe.getTime() - centralParsed.getTime();
+      // The actual UTC time = local time + offset (Central is behind UTC)
+      return new Date(new Date(`${localTimeStr}`).getTime() + offsetMs);
+    }
+
+    const startOfDay = localToUTC(`${dateStr}T00:00:00.000`);
+    const endOfDay = localToUTC(`${dateStr}T23:59:59.999`);
     return { startOfDay, endOfDay };
   }
 
@@ -6253,23 +6259,20 @@ function createApp() {
       const now = new Date();
 
       // Compute end-of-day in the shop's local timezone (America/Chicago).
-      // On Render the server runs in UTC, so new Date().setHours(23,59,59) would
-      // give midnight UTC — which is 6-7pm Central, bleeding into tomorrow's slots.
-      // Instead: find today's date in CT, then convert "23:59:59 CT" to UTC.
+      // On Render the server runs in UTC, so setHours(23,59,59) gives UTC midnight
+      // which is 6-7pm Central, bleeding into tomorrow's slots.
+      // Reuse getTodayRangeCentral's DST-safe approach.
       const shopTZ = "America/Chicago";
       const todayCT = now.toLocaleDateString("en-CA", { timeZone: shopTZ }); // "YYYY-MM-DD"
       const [yr, mo, dy] = todayCT.split("-").map(Number);
-      const targetDay = new Date(Date.UTC(yr, mo - 1, dy + days));
-      const targetDateStr = targetDay.toISOString().slice(0, 10); // "YYYY-MM-DD"
-      // Build "end of day in CT" as a UTC timestamp.
-      // CT is UTC-6 (CST) or UTC-5 (CDT). Use Intl to find the current offset.
-      // Round-trip: interpret a known UTC instant in CT, diff = offset.
-      const probe = new Date(`${targetDateStr}T12:00:00Z`); // noon UTC on target day
-      const ctNoon = new Date(probe.toLocaleString("en-US", { timeZone: shopTZ }));
-      const offsetMs = probe.getTime() - ctNoon.getTime(); // positive = CT is behind UTC
-      // 23:59:59.999 CT = that time + offset in UTC
-      const endOfDayCTms = new Date(`${targetDateStr}T23:59:59.999`).getTime();
-      const endDate = new Date(endOfDayCTms + offsetMs);
+      // Compute target date string (today + days)
+      const targetDay = new Date(yr, mo - 1, dy + days);
+      const targetDateStr = `${targetDay.getFullYear()}-${String(targetDay.getMonth() + 1).padStart(2, '0')}-${String(targetDay.getDate()).padStart(2, '0')}`;
+      // Convert "23:59:59 Central" to UTC using round-trip offset detection
+      const probeEnd = new Date(`${targetDateStr}T23:59:59Z`);
+      const ctEnd = new Date(probeEnd.toLocaleString("en-US", { timeZone: shopTZ }));
+      const endOffsetMs = probeEnd.getTime() - ctEnd.getTime();
+      const endDate = new Date(new Date(`${targetDateStr}T23:59:59.999`).getTime() + endOffsetMs);
       console.log(`[KIOSK walk-in] date range: ${now.toISOString()} → ${endDate.toISOString()} (today in CT: ${todayCT}, days=${days})`);
 
       // Fetch slots + calendar duration for all barbers in parallel
