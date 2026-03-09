@@ -5788,23 +5788,23 @@ function createApp() {
   });
 
   /**
-   * Returns start/end of "today" in America/Los_Angeles timezone as Date objects.
-   * Handles PST/PDT automatically by reading the real offset from Intl.
+   * Returns start/end of "today" in America/Chicago timezone as Date objects.
+   * Handles CST/CDT automatically by reading the real offset from Intl.
    */
-  function getTodayRangePacific() {
-    const shopTZ = "America/Los_Angeles";
+  function getTodayRangeCentral() {
+    const shopTZ = "America/Chicago";
     const now = new Date();
-    // Get today's date string in Pacific time: "YYYY-MM-DD"
+    // Get today's date string in Central time: "YYYY-MM-DD"
     const dateStr = now.toLocaleDateString('en-CA', { timeZone: shopTZ });
-    // Get the current UTC offset for Pacific time (accounts for DST)
+    // Get the current UTC offset for Central time (accounts for DST)
     const parts = new Intl.DateTimeFormat('en-US', {
       timeZone: shopTZ,
       timeZoneName: 'shortOffset',
     }).formatToParts(now);
     const offsetPart = parts.find(p => p.type === 'timeZoneName');
-    // offsetPart.value is like "GMT-7" (PDT) or "GMT-8" (PST)
+    // offsetPart.value is like "GMT-5" (CDT) or "GMT-6" (CST)
     const offsetMatch = offsetPart?.value.match(/GMT([+-]?\d+)/);
-    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -8;
+    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -6;
     const offsetStr = `${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
 
     const startOfDay = new Date(`${dateStr}T00:00:00${offsetStr}`);
@@ -5827,9 +5827,9 @@ function createApp() {
     try {
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
-      // Compute "today" in Pacific time so the kiosk always shows the correct day
+      // Compute "today" in Central time so the kiosk always shows the correct day
       // (server runs in UTC on Render — naive setHours(0) would give UTC midnight)
-      const { startOfDay, endOfDay } = getTodayRangePacific();
+      const { startOfDay, endOfDay } = getTodayRangeCentral();
 
       const events = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
@@ -6028,8 +6028,8 @@ function createApp() {
     try {
       const { TATTOO_LOCATION_ID } = require("../config/kioskConfig");
 
-      // Compute "today" in Pacific time (shop is in Los Angeles)
-      const { startOfDay, endOfDay } = getTodayRangePacific();
+      // Compute "today" in Central time (shop is in Minneapolis)
+      const { startOfDay, endOfDay } = getTodayRangeCentral();
 
       // Use default ghl SDK (tattoo location) — no sdkInstance param
       const events = await fetchAppointmentsForDateRange({
@@ -6113,7 +6113,7 @@ function createApp() {
       }
 
       // 2. Check for appointments today with this barber (Pacific time)
-      const { startOfDay, endOfDay } = getTodayRangePacific();
+      const { startOfDay, endOfDay } = getTodayRangeCentral();
 
       const todayEvents = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
@@ -6252,25 +6252,25 @@ function createApp() {
 
       const now = new Date();
 
-      // Compute end-of-day in the shop's local timezone (America/Los_Angeles).
+      // Compute end-of-day in the shop's local timezone (America/Chicago).
       // On Render the server runs in UTC, so new Date().setHours(23,59,59) would
-      // give midnight UTC — which is 4-5pm Pacific, bleeding into tomorrow's slots.
-      // Instead: find today's date in PT, then convert "23:59:59 PT" to UTC.
-      const shopTZ = "America/Los_Angeles";
-      const todayPT = now.toLocaleDateString("en-CA", { timeZone: shopTZ }); // "YYYY-MM-DD"
-      const [yr, mo, dy] = todayPT.split("-").map(Number);
+      // give midnight UTC — which is 6-7pm Central, bleeding into tomorrow's slots.
+      // Instead: find today's date in CT, then convert "23:59:59 CT" to UTC.
+      const shopTZ = "America/Chicago";
+      const todayCT = now.toLocaleDateString("en-CA", { timeZone: shopTZ }); // "YYYY-MM-DD"
+      const [yr, mo, dy] = todayCT.split("-").map(Number);
       const targetDay = new Date(Date.UTC(yr, mo - 1, dy + days));
       const targetDateStr = targetDay.toISOString().slice(0, 10); // "YYYY-MM-DD"
-      // Build "end of day in PT" as a UTC timestamp.
-      // PT is UTC-8 (PST) or UTC-7 (PDT). Use Intl to find the current offset.
-      // Round-trip: interpret a known UTC instant in PT, diff = offset.
+      // Build "end of day in CT" as a UTC timestamp.
+      // CT is UTC-6 (CST) or UTC-5 (CDT). Use Intl to find the current offset.
+      // Round-trip: interpret a known UTC instant in CT, diff = offset.
       const probe = new Date(`${targetDateStr}T12:00:00Z`); // noon UTC on target day
-      const ptNoon = new Date(probe.toLocaleString("en-US", { timeZone: shopTZ }));
-      const offsetMs = probe.getTime() - ptNoon.getTime(); // positive = PT is behind UTC
-      // 23:59:59.999 PT = that time + offset in UTC
-      const endOfDayPTms = new Date(`${targetDateStr}T23:59:59.999`).getTime();
-      const endDate = new Date(endOfDayPTms + offsetMs);
-      console.log(`[KIOSK walk-in] date range: ${now.toISOString()} → ${endDate.toISOString()} (today in PT: ${todayPT}, days=${days})`);
+      const ctNoon = new Date(probe.toLocaleString("en-US", { timeZone: shopTZ }));
+      const offsetMs = probe.getTime() - ctNoon.getTime(); // positive = CT is behind UTC
+      // 23:59:59.999 CT = that time + offset in UTC
+      const endOfDayCTms = new Date(`${targetDateStr}T23:59:59.999`).getTime();
+      const endDate = new Date(endOfDayCTms + offsetMs);
+      console.log(`[KIOSK walk-in] date range: ${now.toISOString()} → ${endDate.toISOString()} (today in CT: ${todayCT}, days=${days})`);
 
       // Fetch slots + calendar duration for all barbers in parallel
       const promises = BARBER_DATA.map(async (barber) => {
