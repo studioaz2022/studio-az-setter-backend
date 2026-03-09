@@ -6226,13 +6226,26 @@ function createApp() {
       const { getCalendarFreeSlots } = require("../clients/ghlCalendarClient");
 
       const now = new Date();
-      const endDate = new Date(now);
-      if (days === 0) {
-        endDate.setHours(23, 59, 59, 999);
-      } else {
-        endDate.setDate(endDate.getDate() + days);
-        endDate.setHours(23, 59, 59, 999);
-      }
+
+      // Compute end-of-day in the shop's local timezone (America/Los_Angeles).
+      // On Render the server runs in UTC, so new Date().setHours(23,59,59) would
+      // give midnight UTC — which is 4-5pm Pacific, bleeding into tomorrow's slots.
+      // Instead: find today's date in PT, then convert "23:59:59 PT" to UTC.
+      const shopTZ = "America/Los_Angeles";
+      const todayPT = now.toLocaleDateString("en-CA", { timeZone: shopTZ }); // "YYYY-MM-DD"
+      const [yr, mo, dy] = todayPT.split("-").map(Number);
+      const targetDay = new Date(Date.UTC(yr, mo - 1, dy + days));
+      const targetDateStr = targetDay.toISOString().slice(0, 10); // "YYYY-MM-DD"
+      // Build "end of day in PT" as a UTC timestamp.
+      // PT is UTC-8 (PST) or UTC-7 (PDT). Use Intl to find the current offset.
+      // Round-trip: interpret a known UTC instant in PT, diff = offset.
+      const probe = new Date(`${targetDateStr}T12:00:00Z`); // noon UTC on target day
+      const ptNoon = new Date(probe.toLocaleString("en-US", { timeZone: shopTZ }));
+      const offsetMs = probe.getTime() - ptNoon.getTime(); // positive = PT is behind UTC
+      // 23:59:59.999 PT = that time + offset in UTC
+      const endOfDayPTms = new Date(`${targetDateStr}T23:59:59.999`).getTime();
+      const endDate = new Date(endOfDayPTms + offsetMs);
+      console.log(`[KIOSK walk-in] date range: ${now.toISOString()} → ${endDate.toISOString()} (today in PT: ${todayPT}, days=${days})`);
 
       // Fetch slots + calendar duration for all barbers in parallel
       const promises = BARBER_DATA.map(async (barber) => {
