@@ -6145,9 +6145,7 @@ function createApp() {
       }
 
       // 3. Check next 30 days for upcoming appointments with this barber
-      const endFuture = new Date(now);
-      endFuture.setDate(endFuture.getDate() + 30);
-      endFuture.setHours(23, 59, 59, 999);
+      const endFuture = new Date(endOfDay.getTime() + 30 * 24 * 60 * 60 * 1000);
 
       const futureEvents = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
@@ -6182,9 +6180,7 @@ function createApp() {
       let lastAppointment = null;
 
       try {
-        const startPast = new Date(now);
-        startPast.setDate(startPast.getDate() - 60);
-        startPast.setHours(0, 0, 0, 0);
+        const startPast = new Date(startOfDay.getTime() - 60 * 24 * 60 * 60 * 1000);
 
         const pastEvents = await fetchAppointmentsForDateRange({
           locationId: BARBER_LOCATION_ID,
