@@ -1767,6 +1767,12 @@ function createApp() {
         });
       }
 
+      const parsedGross = parseFloat(grossAmount);
+      const parsedTip = tipAmount != null ? parseFloat(tipAmount) : null;
+      const parsedServicePrice = servicePrice != null ? parseFloat(servicePrice) : null;
+      const txLocationId = locationId || process.env.GHL_LOCATION_ID || 'studio_az_tattoo';
+      const txSessionDate = sessionDate ? new Date(sessionDate) : new Date();
+
       const transaction = await recordTransaction({
         contactId,
         contactName: contactName || 'Unknown',
@@ -1775,14 +1781,40 @@ function createApp() {
         transactionType,
         paymentMethod,
         paymentRecipient: paymentRecipient || 'shop',
-        grossAmount: parseFloat(grossAmount),
-        sessionDate: sessionDate ? new Date(sessionDate) : new Date(),
+        grossAmount: parsedGross,
+        sessionDate: txSessionDate,
         squarePaymentId: null,
-        locationId: locationId || process.env.GHL_LOCATION_ID || 'studio_az_tattoo',
+        locationId: txLocationId,
         notes,
-        tipAmount: tipAmount != null ? parseFloat(tipAmount) : null,
-        servicePrice: servicePrice != null ? parseFloat(servicePrice) : null,
+        tipAmount: parsedTip,
+        servicePrice: parsedServicePrice,
       });
+
+      // Mirror to InstantDB for rent tracker (non-fatal)
+      try {
+        const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
+        const { weekOfDate } = require("../rentTracker/tenantMatcher");
+
+        let incomeType = "service";
+        if (transactionType === "deposit") incomeType = "deposit";
+        else if (transactionType === "product_sale") incomeType = "product_sale";
+
+        await writeServiceIncome({
+          senderName: contactName || "Unknown",
+          amount: parsedGross,
+          method: paymentMethod,
+          type: incomeType,
+          paidAt: txSessionDate,
+          notes: notes || null,
+          weekOf: weekOfDate(txSessionDate),
+          location: txLocationId === "mUemx2jG4wly4kJWBkI4" ? "tattoo" : "barbershop",
+          tipAmount: parsedTip || 0,
+          servicePriceAmount: parsedServicePrice || undefined,
+          barberGhlId: artistId,
+        });
+      } catch (err) {
+        console.warn(`[API] InstantDB mirror failed (non-fatal): ${err.message}`);
+      }
 
       res.json({
         success: true,
@@ -5756,22 +5788,23 @@ function createApp() {
   });
 
   /**
-   * Returns start/end of "today" in America/Chicago timezone as Date objects.
-   * Handles CST/CDT automatically by reading the real offset from Intl.
+   * Returns start/end of "today" in America/Los_Angeles timezone as Date objects.
+   * Handles PST/PDT automatically by reading the real offset from Intl.
    */
-  function getTodayRangeCentral() {
+  function getTodayRangePacific() {
+    const shopTZ = "America/Los_Angeles";
     const now = new Date();
-    // Get today's date string in Central time: "YYYY-MM-DD"
-    const dateStr = now.toLocaleDateString('en-CA', { timeZone: 'America/Chicago' });
-    // Get the current UTC offset for Central time (accounts for DST)
+    // Get today's date string in Pacific time: "YYYY-MM-DD"
+    const dateStr = now.toLocaleDateString('en-CA', { timeZone: shopTZ });
+    // Get the current UTC offset for Pacific time (accounts for DST)
     const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'America/Chicago',
+      timeZone: shopTZ,
       timeZoneName: 'shortOffset',
     }).formatToParts(now);
     const offsetPart = parts.find(p => p.type === 'timeZoneName');
-    // offsetPart.value is like "GMT-5" or "GMT-6"
+    // offsetPart.value is like "GMT-7" (PDT) or "GMT-8" (PST)
     const offsetMatch = offsetPart?.value.match(/GMT([+-]?\d+)/);
-    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -6;
+    const offsetHours = offsetMatch ? parseInt(offsetMatch[1], 10) : -8;
     const offsetStr = `${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
 
     const startOfDay = new Date(`${dateStr}T00:00:00${offsetStr}`);
@@ -5794,9 +5827,9 @@ function createApp() {
     try {
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
-      // Compute "today" in Central time so the kiosk always shows the correct day
+      // Compute "today" in Pacific time so the kiosk always shows the correct day
       // (server runs in UTC on Render — naive setHours(0) would give UTC midnight)
-      const { startOfDay, endOfDay } = getTodayRangeCentral();
+      const { startOfDay, endOfDay } = getTodayRangePacific();
 
       const events = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
@@ -5995,8 +6028,8 @@ function createApp() {
     try {
       const { TATTOO_LOCATION_ID } = require("../config/kioskConfig");
 
-      // Compute "today" in Central time (shop is in Minneapolis)
-      const { startOfDay, endOfDay } = getTodayRangeCentral();
+      // Compute "today" in Pacific time (shop is in Los Angeles)
+      const { startOfDay, endOfDay } = getTodayRangePacific();
 
       // Use default ghl SDK (tattoo location) — no sdkInstance param
       const events = await fetchAppointmentsForDateRange({
@@ -6079,12 +6112,8 @@ function createApp() {
         return res.json({ success: true, found: false, reason: "no_contact" });
       }
 
-      // 2. Check for appointments today with this barber
-      const now = new Date();
-      const startOfDay = new Date(now);
-      startOfDay.setHours(0, 0, 0, 0);
-      const endOfDay = new Date(now);
-      endOfDay.setHours(23, 59, 59, 999);
+      // 2. Check for appointments today with this barber (Pacific time)
+      const { startOfDay, endOfDay } = getTodayRangePacific();
 
       const todayEvents = await fetchAppointmentsForDateRange({
         locationId: BARBER_LOCATION_ID,
