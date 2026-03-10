@@ -30,7 +30,9 @@ function parseVenmoEmail(plain, html, emailDate) {
 
   // Strip Hotmail forwarding preamble to get the actual Venmo email body.
   // The forwarded email starts after the "Subject: ... paid you..." line.
-  const text = stripForwardingHeaders(rawText);
+  // Returns { text, subjectName } — subjectName is set for "paid your request" emails.
+  const headerInfo = stripForwardingHeaders(rawText);
+  const text = headerInfo.text;
 
   const result = {
     senderName: "",
@@ -50,6 +52,13 @@ function parseVenmoEmail(plain, html, emailDate) {
     // Handle chained prefixes like "Fw: Fw: Samuel" or "Subject: Fw: Samuel"
     name = name.replace(/^(?:(?:Subject|From|To|Re|Fw|Fwd):\s*)+/i, "").trim();
     result.senderName = name;
+  }
+
+  // For "paid your request" emails, the body says "{requestor} paid you $X"
+  // but the SUBJECT has the actual PAYER name: "Spencer Weyandt paid your $60.00 request".
+  // Prefer the subject name when available.
+  if (headerInfo.subjectName && headerInfo.subjectName.toLowerCase() !== result.senderName.toLowerCase()) {
+    result.senderName = headerInfo.subjectName;
   }
 
   // Extract amount — "$XXX.XX" (first occurrence after "paid you/your")
@@ -193,10 +202,20 @@ function stripForwardingHeaders(text) {
   }
 
   if (lastSubjectMatch) {
+    // For "paid your request" emails, the subject has the real PAYER name:
+    // "Subject: Spencer Weyandt paid your $60.00 request"
+    // while the body has the REQUESTOR: "Leonel Chavez paid you $60.00"
+    let subjectName = null;
+    const subjectContent = lastSubjectMatch[1]; // e.g. "Spencer Weyandt paid your $60.00 request"
+    const requestMatch = subjectContent.match(/^(.+?)\s+paid your\s/i);
+    if (requestMatch) {
+      subjectName = requestMatch[1].trim();
+    }
+
     const afterSubject = text.slice(lastSubjectMatch.index + lastSubjectMatch[0].length);
     // Strip remaining forwarding headers (From:, Sent:, To:) that may follow
     const stripped = afterSubject.replace(/^\s*(?:From:|Sent:|To:|Date:|Cc:)[^\n]*\n/gim, "");
-    return stripped.trim();
+    return { text: stripped.trim(), subjectName };
   }
 
   // Fallback: Look for a block of forwarding headers in any order, use the last one
@@ -207,10 +226,10 @@ function stripForwardingHeaders(text) {
   }
   if (lastBlock) {
     const afterBlock = text.slice(lastBlock.index + lastBlock[0].length);
-    return afterBlock.trim();
+    return { text: afterBlock.trim(), subjectName: null };
   }
 
-  return text;
+  return { text, subjectName: null };
 }
 
 /**

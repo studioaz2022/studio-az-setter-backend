@@ -18,6 +18,46 @@ const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 const BARBER_TZ = "America/Chicago";
 
 /**
+ * Parse a date from a Venmo note (e.g., "Feb 25", "Cut Feb 18th", "2/18").
+ * Returns a Date if found and in the past, null otherwise.
+ */
+function parseNoteDate(note) {
+  if (!note) return null;
+  const currentYear = new Date().getFullYear();
+
+  const patterns = [
+    // "Feb 25", "Feb 25th", "February 25", "feb25"
+    /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)\w*\s*(\d{1,2})(?:st|nd|rd|th)?\b/i,
+    // "2/25", "02/25", "2/25/26"
+    /\b(\d{1,2})\/(\d{1,2})(?:\/(\d{2,4}))?\b/,
+  ];
+
+  const monthNames = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+
+  for (const pattern of patterns) {
+    const m = note.match(pattern);
+    if (!m) continue;
+
+    if (/^\d/.test(m[1])) {
+      // Numeric: M/D or M/D/Y
+      const month = parseInt(m[1]) - 1;
+      const day = parseInt(m[2]);
+      const year = m[3] ? (m[3].length === 2 ? 2000 + parseInt(m[3]) : parseInt(m[3])) : currentYear;
+      const d = new Date(year, month, day);
+      if (!isNaN(d.getTime()) && d <= new Date()) return d;
+    } else {
+      // Month name
+      const month = monthNames[m[1].slice(0, 3).toLowerCase()];
+      if (month === undefined) continue;
+      const day = parseInt(m[2]);
+      const d = new Date(currentYear, month, day);
+      if (!isNaN(d.getTime()) && d <= new Date()) return d;
+    }
+  }
+  return null;
+}
+
+/**
  * Handle a Venmo payment that isn't from a known rent tenant.
  * Tries to match the sender to a GHL contact and link to an appointment.
  *
@@ -46,7 +86,14 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   let appointmentId = null;
   let calendarId = null;
   const paymentDate = parsed.date || new Date();
-  const localDate = toLocalDate(paymentDate.toISOString());
+  // If the note contains a date (e.g., "Cut Feb 18th"), use it for session_date
+  // and appointment lookup instead of the email/payment date.
+  const noteDate = parseNoteDate(parsed.note);
+  const effectiveDate = noteDate || paymentDate;
+  const localDate = toLocalDate(effectiveDate.toISOString());
+  if (noteDate) {
+    console.log(`  [VenmoBarber] Note date detected: "${parsed.note}" → ${localDate} (payment was ${toLocalDate(paymentDate.toISOString())})`);
+  }
   let unclaimedAppts = [];
 
   try {

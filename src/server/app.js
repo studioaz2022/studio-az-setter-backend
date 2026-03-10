@@ -3637,6 +3637,8 @@ function createApp() {
           };
           if (match.appointmentId) updateFields.appointment_id = match.appointmentId;
           if (match.calendarId) updateFields.calendar_id = match.calendarId;
+          // Allow overriding session_date for late payments matched to past appointments
+          if (match.sessionDate) updateFields.session_date = match.sessionDate;
 
           // Manual slider override takes priority
           if (match.servicePriceCents != null && match.tipAmountCents != null) {
