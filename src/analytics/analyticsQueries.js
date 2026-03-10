@@ -1227,6 +1227,269 @@ function parsePeriod(periodParam) {
   return 30;
 }
 
+// ──────────────────────────────────────
+// Tier 3: Revenue Projection + Cohort Analysis
+// ──────────────────────────────────────
+
+/**
+ * 3.1 Revenue Projection
+ *
+ * Projects monthly income based on:
+ *   regulars_count × (30 / avg_visit_frequency_days) × avg_revenue_per_visit
+ *
+ * Also computes a "what-if" scenario: if rebooking rate increased by 10%,
+ * how many more regulars would that yield, and what would projected revenue be?
+ *
+ * Returns: {
+ *   projectedMonthlyRevenue,
+ *   assumptions: { regularsCount, avgFrequencyDays, visitsPerMonth, avgRevenuePerVisit },
+ *   whatIf: { rebookingIncrease, additionalRegulars, projectedRevenue }
+ * }
+ */
+async function getRevenueProjection(barberGhlId, locationId) {
+  // Gather the three inputs in parallel
+  const [regulars, frequency, revenue, rebooking] = await Promise.all([
+    getRegularsCount(barberGhlId, locationId),
+    getVisitFrequencyDistribution(barberGhlId, locationId),
+    getAvgRevenuePerVisit(barberGhlId, locationId, 90), // 90-day window for stable average
+    getRebookingRate(barberGhlId, locationId),
+  ]);
+
+  const regularsCount = regulars.count || 0;
+  const avgFrequencyDays = frequency.avgFrequency || null;
+  const avgRevenue = revenue.avgRevenue || 0;
+
+  // Can't project without all three factors
+  if (regularsCount === 0 || !avgFrequencyDays || avgRevenue === 0) {
+    return {
+      projectedMonthlyRevenue: null,
+      assumptions: {
+        regularsCount,
+        avgFrequencyDays,
+        visitsPerMonth: null,
+        avgRevenuePerVisit: avgRevenue,
+      },
+      whatIf: null,
+      insufficientData: true,
+    };
+  }
+
+  const visitsPerMonth = round(30 / avgFrequencyDays, 2);
+  const projectedMonthlyRevenue = round(regularsCount * visitsPerMonth * avgRevenue, 2);
+
+  // What-if: +10% rebooking rate → estimate additional regulars
+  let whatIf = null;
+  const currentRebookingForgiving = rebooking.forgiving;
+  if (currentRebookingForgiving !== null && currentRebookingForgiving < 100) {
+    // Total unique clients the barber has seen
+    const totalClients = rebooking.total || 0;
+    if (totalClients > 0) {
+      // Current regulars come from current rebooking behavior
+      // If rebooking forgiving goes up 10 percentage points, estimate how many more
+      // clients would stick around to become regulars
+      const boostedRate = Math.min(currentRebookingForgiving + 10, 100);
+      const boostFactor = boostedRate / Math.max(currentRebookingForgiving, 1);
+      const estimatedNewRegulars = Math.round(regularsCount * boostFactor);
+      const additionalRegulars = estimatedNewRegulars - regularsCount;
+      const boostedRevenue = round(estimatedNewRegulars * visitsPerMonth * avgRevenue, 2);
+
+      whatIf = {
+        currentRebookingRate: round(currentRebookingForgiving, 1),
+        boostedRebookingRate: round(boostedRate, 1),
+        rebookingIncreasePct: 10,
+        currentRegulars: regularsCount,
+        estimatedRegulars: estimatedNewRegulars,
+        additionalRegulars,
+        projectedRevenue: boostedRevenue,
+        additionalRevenue: round(boostedRevenue - projectedMonthlyRevenue, 2),
+      };
+    }
+  }
+
+  return {
+    projectedMonthlyRevenue,
+    assumptions: {
+      regularsCount,
+      avgFrequencyDays: round(avgFrequencyDays, 1),
+      visitsPerMonth,
+      avgRevenuePerVisit: avgRevenue,
+    },
+    whatIf,
+    insufficientData: false,
+  };
+}
+
+/**
+ * 3.2 Client Cohort Analysis
+ *
+ * Groups clients by the month of their first visit with this barber.
+ * Tracks each cohort's retention over subsequent months.
+ *
+ * "Active in month N" = client had at least one completed appointment
+ * in the calendar month that is N months after their cohort month.
+ *
+ * Returns: {
+ *   cohorts: [
+ *     {
+ *       cohortMonth: "2025-10",
+ *       cohortSize: 12,
+ *       retention: [
+ *         { monthsAfter: 0, activeCount: 12, retentionPct: 100 },
+ *         { monthsAfter: 1, activeCount: 8, retentionPct: 66.7 },
+ *         ...
+ *       ]
+ *     },
+ *     ...
+ *   ],
+ *   maxMonthsTracked: 6,
+ *   trend: "improving" | "declining" | "stable" | "insufficient_data"
+ * }
+ */
+async function getCohortAnalysis(barberGhlId, locationId) {
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("contact_id, start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", COMPLETED_STATUSES)
+    .order("start_time", { ascending: true });
+
+  if (error) throw new Error(`Cohort analysis query failed: ${error.message}`);
+  if (!appointments || appointments.length === 0) {
+    return { cohorts: [], maxMonthsTracked: 0, trend: "insufficient_data" };
+  }
+
+  // Group appointments by contact, tracking visit months
+  const contactVisits = {}; // contactId → Set of "YYYY-MM" strings
+  const contactFirstMonth = {}; // contactId → "YYYY-MM"
+
+  for (const appt of appointments) {
+    const month = appt.start_time.substring(0, 7); // "YYYY-MM"
+    if (!contactVisits[appt.contact_id]) {
+      contactVisits[appt.contact_id] = new Set();
+      contactFirstMonth[appt.contact_id] = month;
+    }
+    contactVisits[appt.contact_id].add(month);
+  }
+
+  // Group contacts by their first-visit month (cohort)
+  const cohortMembers = {}; // "YYYY-MM" → [contactId, ...]
+  for (const [contactId, firstMonth] of Object.entries(contactFirstMonth)) {
+    if (!cohortMembers[firstMonth]) cohortMembers[firstMonth] = [];
+    cohortMembers[firstMonth].push(contactId);
+  }
+
+  // Current month for computing how far we can track
+  const now = new Date();
+  const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}`;
+
+  // Sort cohort months chronologically
+  const cohortMonths = Object.keys(cohortMembers).sort();
+
+  // Only include cohorts with at least 3 clients (meaningful retention data)
+  // and limit to last 12 months of cohorts
+  const twelveMonthsAgo = new Date(now);
+  twelveMonthsAgo.setMonth(twelveMonthsAgo.getMonth() - 12);
+  const cutoffMonth = `${twelveMonthsAgo.getFullYear()}-${String(twelveMonthsAgo.getMonth() + 1).padStart(2, "0")}`;
+
+  const cohorts = [];
+  let maxMonthsTracked = 0;
+
+  for (const cohortMonth of cohortMonths) {
+    if (cohortMonth < cutoffMonth) continue;
+    if (cohortMonth > currentMonth) continue;
+
+    const members = cohortMembers[cohortMonth];
+    if (members.length < 3) continue;
+
+    const cohortSize = members.length;
+    const monthsElapsed = monthDiff(cohortMonth, currentMonth);
+    const trackMonths = Math.min(monthsElapsed, 6); // Cap at 6 months of tracking
+
+    if (trackMonths > maxMonthsTracked) maxMonthsTracked = trackMonths;
+
+    const retention = [];
+    for (let m = 0; m <= trackMonths; m++) {
+      const targetMonth = addMonths(cohortMonth, m);
+      let activeCount = 0;
+
+      for (const contactId of members) {
+        if (contactVisits[contactId].has(targetMonth)) {
+          activeCount++;
+        }
+      }
+
+      retention.push({
+        monthsAfter: m,
+        activeCount,
+        retentionPct: round((activeCount / cohortSize) * 100, 1),
+      });
+    }
+
+    cohorts.push({
+      cohortMonth,
+      cohortLabel: formatCohortLabel(cohortMonth),
+      cohortSize,
+      retention,
+    });
+  }
+
+  // Determine trend: compare M1 retention of recent cohorts vs older ones
+  const trend = computeCohortTrend(cohorts);
+
+  return { cohorts, maxMonthsTracked, trend };
+}
+
+/**
+ * Helper: compute month difference between two "YYYY-MM" strings.
+ */
+function monthDiff(fromMonth, toMonth) {
+  const [fromY, fromM] = fromMonth.split("-").map(Number);
+  const [toY, toM] = toMonth.split("-").map(Number);
+  return (toY - fromY) * 12 + (toM - fromM);
+}
+
+/**
+ * Helper: add N months to a "YYYY-MM" string, returns "YYYY-MM".
+ */
+function addMonths(monthStr, n) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const d = new Date(y, m - 1 + n, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+}
+
+/**
+ * Helper: format "YYYY-MM" → "Oct 2025"
+ */
+function formatCohortLabel(monthStr) {
+  const [y, m] = monthStr.split("-").map(Number);
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  return `${months[m - 1]} ${y}`;
+}
+
+/**
+ * Helper: determine if cohort retention is improving, declining, or stable.
+ * Compares M1 retention of the 3 most recent cohorts vs the 3 before that.
+ */
+function computeCohortTrend(cohorts) {
+  // Need at least 4 cohorts with M1 data to determine a trend
+  const withM1 = cohorts.filter(c => c.retention.length >= 2);
+  if (withM1.length < 4) return "insufficient_data";
+
+  const recent = withM1.slice(-3);
+  const older = withM1.slice(-6, -3);
+
+  if (older.length < 3) return "insufficient_data";
+
+  const recentAvgM1 = recent.reduce((s, c) => s + c.retention[1].retentionPct, 0) / recent.length;
+  const olderAvgM1 = older.reduce((s, c) => s + c.retention[1].retentionPct, 0) / older.length;
+
+  const diff = recentAvgM1 - olderAvgM1;
+  if (diff > 5) return "improving";
+  if (diff < -5) return "declining";
+  return "stable";
+}
+
 module.exports = {
   // Tier 1
   getRebookingRate,
@@ -1245,6 +1508,9 @@ module.exports = {
   getVisitFrequencyDistribution,
   getDiagnostics,
   parsePeriod,
+  // Tier 3
+  getRevenueProjection,
+  getCohortAnalysis,
   // Exported for testing / cron
   getServiceTypeMap,
   getContactNames,

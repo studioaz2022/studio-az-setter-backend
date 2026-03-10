@@ -5,6 +5,8 @@ const express = require("express");
 const {
   getHealthCheck,
   getDiagnostics,
+  getRevenueProjection,
+  getCohortAnalysis,
   parsePeriod,
 } = require("./analyticsQueries");
 const { runNightlySnapshot, computeShopAverages } = require("./snapshotCron");
@@ -220,6 +222,58 @@ router.post("/:barberGhlId/analytics/coaching", async (req, res) => {
     res.json(result);
   } catch (error) {
     console.error(`[Analytics] Coaching error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/barbers/:barberGhlId/analytics/projection
+ *
+ * Revenue projection based on regulars × visit frequency × avg revenue.
+ * Includes what-if scenario (rebooking +10%).
+ */
+router.get("/:barberGhlId/analytics/projection", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    console.log(`[Analytics] Revenue projection for barber ${barberGhlId}`);
+
+    const projection = await getRevenueProjection(barberGhlId, locationId);
+
+    res.json({
+      success: true,
+      barberGhlId,
+      ...projection,
+    });
+  } catch (error) {
+    console.error(`[Analytics] Projection error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/barbers/:barberGhlId/analytics/cohorts
+ *
+ * Client cohort retention analysis.
+ * Groups clients by month of first visit, tracks retention over time.
+ */
+router.get("/:barberGhlId/analytics/cohorts", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    console.log(`[Analytics] Cohort analysis for barber ${barberGhlId}`);
+
+    const cohorts = await getCohortAnalysis(barberGhlId, locationId);
+
+    res.json({
+      success: true,
+      barberGhlId,
+      ...cohorts,
+    });
+  } catch (error) {
+    console.error(`[Analytics] Cohort analysis error for ${req.params.barberGhlId}:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
