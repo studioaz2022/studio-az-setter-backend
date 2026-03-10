@@ -484,6 +484,351 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30) {
   return { rate, cancelledCount, totalBooked, repeatOffenders };
 }
 
+// ──────────────────────────────────────
+// Tier 2 Metrics (Diagnostic)
+// ──────────────────────────────────────
+
+/**
+ * 2.1 Client Attrition Rate (Service-Type Aware)
+ *
+ * Clients who have not returned past their service-type evaluation window.
+ * Strict: clients past 1x window with no return are attrited
+ * Forgiving: only clients past 2x window are attrited
+ *
+ * Returns: { strict, forgiving, atritedCount, atRiskCount, totalClients }
+ */
+async function getAttritionRate(barberGhlId, locationId) {
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("contact_id, calendar_id, start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", COMPLETED_STATUSES)
+    .order("start_time", { ascending: true });
+
+  if (error) throw new Error(`Attrition query failed: ${error.message}`);
+  if (!appointments || appointments.length === 0) {
+    return { strict: null, forgiving: null, atritedCount: 0, atRiskCount: 0, totalClients: 0 };
+  }
+
+  const serviceTypeMap = await getServiceTypeMap();
+  const now = new Date();
+
+  // Group by contact — take most recent appointment
+  const byContact = {};
+  for (const appt of appointments) {
+    byContact[appt.contact_id] = appt; // last one wins since ordered ascending
+  }
+
+  let activeCount = 0;   // within 1x window
+  let atRiskCount = 0;   // between 1x and 2x window
+  let atritedCount = 0;  // past 2x window
+
+  for (const contactId of Object.keys(byContact)) {
+    const lastAppt = byContact[contactId];
+    const serviceType = serviceTypeMap.get(lastAppt.calendar_id) || "haircut";
+    const evalWindow = getEvalWindow(serviceType);
+    const daysSince = daysBetween(new Date(lastAppt.start_time), now);
+
+    if (daysSince <= evalWindow) {
+      activeCount++;
+    } else if (daysSince <= evalWindow * 2) {
+      atRiskCount++;
+    } else {
+      atritedCount++;
+    }
+  }
+
+  const totalClients = activeCount + atRiskCount + atritedCount;
+
+  // Strict: pending (at-risk) counts as attrited
+  const strictAttrited = atRiskCount + atritedCount;
+  const strict = totalClients > 0 ? round((strictAttrited / totalClients) * 100, 1) : null;
+
+  // Forgiving: only past 2x threshold
+  const forgiving = totalClients > 0 ? round((atritedCount / totalClients) * 100, 1) : null;
+
+  return { strict, forgiving, atritedCount, atRiskCount, totalClients };
+}
+
+/**
+ * 2.2 New Client Trend (Weekly, 8-Week Sparkline)
+ *
+ * Count of unique clients whose first-ever appointment with this barber
+ * falls in each week. Returns 8 weeks of data + 4-week moving average.
+ *
+ * Returns: { weeks: [{ weekStart, weekEnd, count }], movingAverage: number, total: number }
+ */
+async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
+  // Get all completed appointments for this barber
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("contact_id, start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", COMPLETED_STATUSES)
+    .order("start_time", { ascending: true });
+
+  if (error) throw new Error(`New client trend query failed: ${error.message}`);
+  if (!appointments || appointments.length === 0) {
+    return { weeks: [], movingAverage: null, total: 0 };
+  }
+
+  // Find each contact's first appointment (MIN start_time)
+  const firstVisitByContact = {};
+  for (const appt of appointments) {
+    if (!firstVisitByContact[appt.contact_id]) {
+      firstVisitByContact[appt.contact_id] = new Date(appt.start_time);
+    }
+  }
+
+  // Build week buckets (going back numWeeks from today)
+  const now = new Date();
+  const weeks = [];
+  for (let i = numWeeks - 1; i >= 0; i--) {
+    const weekEnd = new Date(now);
+    weekEnd.setDate(weekEnd.getDate() - (i * 7));
+    weekEnd.setHours(23, 59, 59, 999);
+
+    const weekStart = new Date(weekEnd);
+    weekStart.setDate(weekStart.getDate() - 6);
+    weekStart.setHours(0, 0, 0, 0);
+
+    weeks.push({
+      weekStart: weekStart.toISOString().split("T")[0],
+      weekEnd: weekEnd.toISOString().split("T")[0],
+      count: 0,
+    });
+  }
+
+  // Count new clients per week
+  for (const firstVisit of Object.values(firstVisitByContact)) {
+    for (const week of weeks) {
+      const ws = new Date(week.weekStart);
+      const we = new Date(week.weekEnd + "T23:59:59.999Z");
+      if (firstVisit >= ws && firstVisit <= we) {
+        week.count++;
+        break;
+      }
+    }
+  }
+
+  // 4-week moving average (average of last 4 weeks)
+  const last4 = weeks.slice(-4);
+  const movingAverage = last4.length > 0
+    ? round(last4.reduce((sum, w) => sum + w.count, 0) / last4.length, 1)
+    : null;
+
+  const total = weeks.reduce((sum, w) => sum + w.count, 0);
+
+  return { weeks, movingAverage, total };
+}
+
+/**
+ * 2.3 Chair Utilization
+ *
+ * total booked appointment hours / total available hours for the period.
+ * Available hours come from the barber's appointment data (infer schedule from
+ * actual days worked). Booked hours from completed/showed appointments.
+ *
+ * Returns: { utilization, bookedHours, availableHours, byDayOfWeek }
+ */
+async function getChairUtilization(barberGhlId, locationId, periodDays = 30) {
+  const startDate = getStartDate(periodDays);
+
+  // Get all appointments (including no-shows — they still used a slot)
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("start_time, end_time, status")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", ALL_BOOKED_STATUSES)
+    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .order("start_time", { ascending: true });
+
+  if (error) throw new Error(`Chair utilization query failed: ${error.message}`);
+  if (!appointments || appointments.length === 0) {
+    return { utilization: null, bookedHours: 0, availableHours: 0, byDayOfWeek: {} };
+  }
+
+  // Calculate booked hours (exclude cancelled — they freed the slot)
+  let totalBookedMinutes = 0;
+  const byDay = {}; // day name → { bookedMinutes, workedDates }
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  for (const appt of appointments) {
+    if (appt.status === "cancelled") continue;
+
+    const start = new Date(appt.start_time);
+    const end = new Date(appt.end_time);
+    const durationMinutes = (end - start) / (1000 * 60);
+
+    if (durationMinutes > 0 && durationMinutes < 480) { // sanity check: <8 hours
+      totalBookedMinutes += durationMinutes;
+
+      const dayName = dayNames[start.getDay()];
+      if (!byDay[dayName]) byDay[dayName] = { bookedMinutes: 0, workedDates: new Set() };
+      byDay[dayName].bookedMinutes += durationMinutes;
+      byDay[dayName].workedDates.add(start.toISOString().split("T")[0]);
+    }
+  }
+
+  // Estimate available hours: for each day the barber worked, assume a standard
+  // working day. We infer from earliest to latest appointment per day.
+  // Group appointments by date to find working span per day.
+  const dateSpans = {};
+  for (const appt of appointments) {
+    const start = new Date(appt.start_time);
+    const dateKey = start.toISOString().split("T")[0];
+    if (!dateSpans[dateKey]) {
+      dateSpans[dateKey] = { earliest: start, latest: new Date(appt.end_time) };
+    } else {
+      if (start < dateSpans[dateKey].earliest) dateSpans[dateKey].earliest = start;
+      const end = new Date(appt.end_time);
+      if (end > dateSpans[dateKey].latest) dateSpans[dateKey].latest = end;
+    }
+  }
+
+  // Available hours = sum of working spans (earliest appt to latest appt end) per day
+  // with a minimum of 4 hours per worked day (to handle single-appointment days)
+  let totalAvailableMinutes = 0;
+  for (const dateKey of Object.keys(dateSpans)) {
+    const span = dateSpans[dateKey];
+    const spanMinutes = (span.latest - span.earliest) / (1000 * 60);
+    totalAvailableMinutes += Math.max(spanMinutes, 240); // min 4 hours
+  }
+
+  const bookedHours = round(totalBookedMinutes / 60, 1);
+  const availableHours = round(totalAvailableMinutes / 60, 1);
+  const utilization = availableHours > 0
+    ? round((bookedHours / availableHours) * 100, 1)
+    : null;
+
+  // By day of week breakdown
+  const byDayOfWeek = {};
+  for (const [dayName, data] of Object.entries(byDay)) {
+    const dayCount = data.workedDates.size;
+    const avgBookedPerDay = dayCount > 0 ? round(data.bookedMinutes / dayCount / 60, 1) : 0;
+    byDayOfWeek[dayName] = {
+      avgBookedHours: avgBookedPerDay,
+      daysWorked: dayCount,
+    };
+  }
+
+  return { utilization, bookedHours, availableHours, byDayOfWeek };
+}
+
+/**
+ * 2.4 Visit Frequency Distribution
+ *
+ * Histogram of average days between visits for clients with 2+ visits.
+ * Buckets: <14 days, 14-21, 22-35, 36-60, 60+
+ *
+ * Returns: { buckets: [{ label, range, count, percentage }], totalClients, avgFrequency }
+ */
+async function getVisitFrequencyDistribution(barberGhlId, locationId) {
+  const { data: appointments, error } = await supabase
+    .from("appointments")
+    .select("contact_id, start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", COMPLETED_STATUSES)
+    .order("start_time", { ascending: true });
+
+  if (error) throw new Error(`Visit frequency query failed: ${error.message}`);
+  if (!appointments || appointments.length === 0) {
+    return { buckets: buildEmptyBuckets(), totalClients: 0, avgFrequency: null };
+  }
+
+  // Group by contact
+  const byContact = {};
+  for (const appt of appointments) {
+    if (!byContact[appt.contact_id]) byContact[appt.contact_id] = [];
+    byContact[appt.contact_id].push(new Date(appt.start_time));
+  }
+
+  // For contacts with 2+ visits, compute average gap
+  const avgGaps = [];
+  for (const contactId of Object.keys(byContact)) {
+    const visits = byContact[contactId];
+    if (visits.length < 2) continue;
+
+    let totalGap = 0;
+    for (let i = 1; i < visits.length; i++) {
+      totalGap += daysBetween(visits[i - 1], visits[i]);
+    }
+    const avgGap = totalGap / (visits.length - 1);
+    avgGaps.push(avgGap);
+  }
+
+  if (avgGaps.length === 0) {
+    return { buckets: buildEmptyBuckets(), totalClients: 0, avgFrequency: null };
+  }
+
+  // Bucket definitions
+  const bucketDefs = [
+    { label: "< 14 days", range: [0, 14], count: 0 },
+    { label: "14–21 days", range: [14, 21], count: 0 },
+    { label: "22–35 days", range: [21, 35], count: 0 },
+    { label: "36–60 days", range: [35, 60], count: 0 },
+    { label: "60+ days", range: [60, Infinity], count: 0 },
+  ];
+
+  for (const gap of avgGaps) {
+    for (const bucket of bucketDefs) {
+      if (gap >= bucket.range[0] && gap < bucket.range[1]) {
+        bucket.count++;
+        break;
+      }
+    }
+  }
+
+  const totalClients = avgGaps.length;
+  const overallAvg = round(avgGaps.reduce((s, g) => s + g, 0) / totalClients, 1);
+
+  const buckets = bucketDefs.map(b => ({
+    label: b.label,
+    count: b.count,
+    percentage: round((b.count / totalClients) * 100, 1),
+  }));
+
+  return { buckets, totalClients, avgFrequency: overallAvg };
+}
+
+function buildEmptyBuckets() {
+  return [
+    { label: "< 14 days", count: 0, percentage: 0 },
+    { label: "14–21 days", count: 0, percentage: 0 },
+    { label: "22–35 days", count: 0, percentage: 0 },
+    { label: "36–60 days", count: 0, percentage: 0 },
+    { label: "60+ days", count: 0, percentage: 0 },
+  ];
+}
+
+/**
+ * Fetch all Tier 2 diagnostic metrics in one call.
+ */
+async function getDiagnostics(barberGhlId, locationId, periodDays = 30) {
+  const [
+    attrition,
+    newClientTrend,
+    chairUtilization,
+    visitFrequency,
+  ] = await Promise.all([
+    getAttritionRate(barberGhlId, locationId),
+    getNewClientTrend(barberGhlId, locationId),
+    getChairUtilization(barberGhlId, locationId, periodDays),
+    getVisitFrequencyDistribution(barberGhlId, locationId),
+  ]);
+
+  return {
+    attritionRate: attrition,
+    newClientTrend,
+    chairUtilization,
+    visitFrequencyDistribution: visitFrequency,
+  };
+}
+
 /**
  * Fetch all Tier 1 metrics in one call.
  * Returns the complete health check data.
@@ -621,6 +966,7 @@ function parsePeriod(periodParam) {
 }
 
 module.exports = {
+  // Tier 1
   getRebookingRate,
   getFirstVisitRebookingRate,
   getActiveClientCount,
@@ -630,8 +976,14 @@ module.exports = {
   getNoShowRate,
   getCancellationRate,
   getHealthCheck,
+  // Tier 2
+  getAttritionRate,
+  getNewClientTrend,
+  getChairUtilization,
+  getVisitFrequencyDistribution,
+  getDiagnostics,
   parsePeriod,
-  // Exported for testing
+  // Exported for testing / cron
   getServiceTypeMap,
   EVALUATION_WINDOWS,
   DEFAULT_EVAL_WINDOW,

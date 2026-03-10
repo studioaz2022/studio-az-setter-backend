@@ -98,6 +98,7 @@ const {
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
 const analyticsRoutes = require("../analytics/analyticsRoutes");
+const { startSnapshotCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
@@ -6557,6 +6558,9 @@ function createApp() {
 
   // ═══ ANALYTICS ROUTES ═══
   app.use("/api/barbers", analyticsRoutes);
+
+  // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
+  startSnapshotCron();
 
   return app;
 }
