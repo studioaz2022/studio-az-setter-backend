@@ -2,6 +2,7 @@
 // Nightly cron job that computes all Tier 1 + Tier 2 metrics for each barber
 // and writes daily snapshots to barber_analytics_snapshots.
 // Also computes shop averages for the 6 peer-benchmarking metrics.
+// Includes startup backfill for missed snapshots.
 
 const { supabase } = require("../clients/supabaseClient");
 const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
@@ -121,6 +122,38 @@ async function runNightlySnapshot() {
 }
 
 /**
+ * Check if today's snapshot is missing and backfill if so.
+ * Runs once on startup (delayed 30 seconds to let the server boot).
+ * Only backfills today — historical gaps can be filled via the manual endpoint.
+ */
+async function checkAndBackfill() {
+  const today = new Date().toISOString().split("T")[0];
+
+  try {
+    const { data: existing, error } = await supabase
+      .from("barber_analytics_snapshots")
+      .select("barber_ghl_id")
+      .eq("location_id", BARBER_LOCATION_ID)
+      .eq("snapshot_date", today)
+      .limit(1);
+
+    if (error) {
+      console.error("[Snapshot Cron] Backfill check failed:", error.message);
+      return;
+    }
+
+    if (!existing || existing.length === 0) {
+      console.log(`[Snapshot Cron] No snapshot found for ${today} — running backfill...`);
+      await runNightlySnapshot();
+    } else {
+      console.log(`[Snapshot Cron] Snapshot for ${today} already exists — no backfill needed`);
+    }
+  } catch (err) {
+    console.error("[Snapshot Cron] Backfill error:", err.message);
+  }
+}
+
+/**
  * Compute shop averages for the 6 peer-benchmarking metrics from today's snapshots.
  * Only includes averages when 3+ barbers have data for a metric.
  *
@@ -162,6 +195,7 @@ async function computeShopAverages(locationId, snapshotDate) {
 /**
  * Start the nightly cron schedule.
  * Runs at 2:00 AM Central time every day.
+ * On startup, checks for missed snapshots and backfills if needed.
  */
 function startSnapshotCron() {
   // Calculate ms until next 2:00 AM Central
@@ -210,7 +244,15 @@ function startSnapshotCron() {
   }
 
   scheduleNext();
-  console.log("[Snapshot Cron] Nightly snapshot cron initialized (2:00 AM Central)");
+
+  // Backfill check: run 30s after startup to let the server finish booting
+  setTimeout(() => {
+    checkAndBackfill().catch(err => {
+      console.error("[Snapshot Cron] Startup backfill check failed:", err.message);
+    });
+  }, 30 * 1000);
+
+  console.log("[Snapshot Cron] Nightly snapshot cron initialized (2:00 AM Central, startup backfill enabled)");
 }
 
 module.exports = {
@@ -218,4 +260,5 @@ module.exports = {
   computeShopAverages,
   startSnapshotCron,
   computeBarberSnapshot,
+  checkAndBackfill,
 };

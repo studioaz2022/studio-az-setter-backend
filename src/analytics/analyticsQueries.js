@@ -67,31 +67,43 @@ async function getRebookingRate(barberGhlId, locationId) {
   let pending = 0;
   let notRebooked = 0;
 
+  // Per-service-type breakdown tracking
+  const byServiceType = {};
+
   // For each contact, look at their most recent appointment
   // and determine if they should be counted as rebooked, pending, or not rebooked
   for (const contactId of Object.keys(byContact)) {
     const contactAppts = byContact[contactId];
+    const lastAppt = contactAppts[contactAppts.length - 1];
+    const serviceType = serviceTypeMap.get(lastAppt.calendar_id) || "haircut";
+
+    // Initialize service type bucket if needed
+    if (!byServiceType[serviceType]) {
+      byServiceType[serviceType] = { rebooked: 0, pending: 0, notRebooked: 0 };
+    }
 
     if (contactAppts.length >= 2) {
       // Client has returned at least once — rebooked
       rebooked++;
+      byServiceType[serviceType].rebooked++;
       continue;
     }
 
     // Single appointment — check if they're still within evaluation window
-    const lastAppt = contactAppts[contactAppts.length - 1];
-    const serviceType = serviceTypeMap.get(lastAppt.calendar_id) || "haircut";
     const evalWindow = getEvalWindow(serviceType);
     const daysSince = daysBetween(new Date(lastAppt.start_time), now);
 
     if (daysSince <= evalWindow) {
       pending++;
+      byServiceType[serviceType].pending++;
     } else if (daysSince <= evalWindow * 2) {
       // Past evaluation window but within 2x — still pending for forgiving,
       // not rebooked for strict
       pending++;
+      byServiceType[serviceType].pending++;
     } else {
       notRebooked++;
+      byServiceType[serviceType].notRebooked++;
     }
   }
 
@@ -100,7 +112,22 @@ async function getRebookingRate(barberGhlId, locationId) {
   const forgivingDenom = rebooked + notRebooked;
   const forgiving = forgivingDenom > 0 ? round((rebooked / forgivingDenom) * 100, 1) : null;
 
-  return { strict, forgiving, total, rebooked, pending, notRebooked };
+  // Compute per-service-type rates
+  const serviceTypeBreakdown = {};
+  for (const [st, counts] of Object.entries(byServiceType)) {
+    const stTotal = counts.rebooked + counts.pending + counts.notRebooked;
+    const stForgivingDenom = counts.rebooked + counts.notRebooked;
+    serviceTypeBreakdown[st] = {
+      strict: stTotal > 0 ? round((counts.rebooked / stTotal) * 100, 1) : null,
+      forgiving: stForgivingDenom > 0 ? round((counts.rebooked / stForgivingDenom) * 100, 1) : null,
+      total: stTotal,
+      rebooked: counts.rebooked,
+      pending: counts.pending,
+      notRebooked: counts.notRebooked,
+    };
+  }
+
+  return { strict, forgiving, total, rebooked, pending, notRebooked, serviceTypeBreakdown };
 }
 
 /**
@@ -299,31 +326,47 @@ async function getRegularsCount(barberGhlId, locationId) {
  *
  * Returns: { avgRevenue, totalRevenue, appointmentCount }
  */
-async function getAvgRevenuePerVisit(barberGhlId, locationId, periodDays = 30) {
-  const startDate = getStartDate(periodDays);
+async function getAvgRevenuePerVisit(barberGhlId, locationId, periodDays = 30, endDate = null, startDateOverride = null) {
+  const startDate = startDateOverride || getStartDate(periodDays);
 
-  const { data: transactions, error } = await supabase
+  let query = supabase
     .from("transactions")
-    .select("gross_amount, tip_amount")
+    .select("gross_amount, service_price, tip_amount")
     .eq("artist_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .in("transaction_type", ["session_payment"])
     .gte("session_date", startDate);
 
+  if (endDate) query = query.lt("session_date", endDate);
+
+  const { data: transactions, error } = await query;
+
   if (error) throw new Error(`Avg revenue query failed: ${error.message}`);
   if (!transactions || transactions.length === 0) {
-    return { avgRevenue: null, totalRevenue: 0, appointmentCount: 0 };
+    return { avgRevenue: null, avgServiceRevenue: null, totalRevenue: 0, totalServiceRevenue: 0, totalTips: 0, appointmentCount: 0 };
   }
 
   let totalRevenue = 0;
+  let totalServiceRevenue = 0;
+  let totalTips = 0;
   for (const t of transactions) {
     totalRevenue += parseFloat(t.gross_amount || 0);
+    totalServiceRevenue += parseFloat(t.service_price || 0);
+    totalTips += parseFloat(t.tip_amount || 0);
   }
 
   const appointmentCount = transactions.length;
   const avgRevenue = round(totalRevenue / appointmentCount, 2);
+  const avgServiceRevenue = round(totalServiceRevenue / appointmentCount, 2);
 
-  return { avgRevenue, totalRevenue: round(totalRevenue, 2), appointmentCount };
+  return {
+    avgRevenue,
+    avgServiceRevenue,
+    totalRevenue: round(totalRevenue, 2),
+    totalServiceRevenue: round(totalServiceRevenue, 2),
+    totalTips: round(totalTips, 2),
+    appointmentCount,
+  };
 }
 
 /**
@@ -334,16 +377,20 @@ async function getAvgRevenuePerVisit(barberGhlId, locationId, periodDays = 30) {
  *
  * Returns: { avgTipPercentage, tippedCount, totalCount }
  */
-async function getAvgTipPercentage(barberGhlId, locationId, periodDays = 30) {
-  const startDate = getStartDate(periodDays);
+async function getAvgTipPercentage(barberGhlId, locationId, periodDays = 30, endDate = null, startDateOverride = null) {
+  const startDate = startDateOverride || getStartDate(periodDays);
 
-  const { data: transactions, error } = await supabase
+  let query = supabase
     .from("transactions")
     .select("tip_amount, service_price")
     .eq("artist_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .in("transaction_type", ["session_payment"])
     .gte("session_date", startDate);
+
+  if (endDate) query = query.lt("session_date", endDate);
+
+  const { data: transactions, error } = await query;
 
   if (error) throw new Error(`Avg tip query failed: ${error.message}`);
   if (!transactions || transactions.length === 0) {
@@ -379,16 +426,20 @@ async function getAvgTipPercentage(barberGhlId, locationId, periodDays = 30) {
  *
  * Returns: { rate, noShowCount, totalBooked, repeatOffenders }
  */
-async function getNoShowRate(barberGhlId, locationId, periodDays = 30) {
-  const startDate = getStartDate(periodDays);
+async function getNoShowRate(barberGhlId, locationId, periodDays = 30, endDate = null, startDateOverride = null) {
+  const startDate = startDateOverride || getStartDate(periodDays);
 
-  const { data: appointments, error } = await supabase
+  let query = supabase
     .from("appointments")
     .select("id, contact_id, start_time, status, title")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
     .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
+
+  if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
+
+  const { data: appointments, error } = await query;
 
   if (error) throw new Error(`No-show rate query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
@@ -407,7 +458,8 @@ async function getNoShowRate(barberGhlId, locationId, periodDays = 30) {
     if (!noShowsByContact[appt.contact_id]) {
       noShowsByContact[appt.contact_id] = {
         contactId: appt.contact_id,
-        contactName: extractContactName(appt.title),
+        contactName: null, // resolved below via batch lookup
+        titleFallback: extractContactName(appt.title),
         count: 0,
         lastOccurrence: null,
       };
@@ -418,6 +470,14 @@ async function getNoShowRate(barberGhlId, locationId, periodDays = 30) {
         apptDate > new Date(noShowsByContact[appt.contact_id].lastOccurrence)) {
       noShowsByContact[appt.contact_id].lastOccurrence = appt.start_time;
     }
+  }
+
+  // Batch-resolve contact names from client_financials
+  const offenderContactIds = Object.keys(noShowsByContact);
+  const nameMap = await getContactNames(offenderContactIds);
+  for (const entry of Object.values(noShowsByContact)) {
+    entry.contactName = nameMap.get(entry.contactId) || entry.titleFallback;
+    delete entry.titleFallback;
   }
 
   const repeatOffenders = Object.values(noShowsByContact)
@@ -436,16 +496,20 @@ async function getNoShowRate(barberGhlId, locationId, periodDays = 30) {
  *
  * Returns: { rate, cancelledCount, totalBooked, repeatOffenders }
  */
-async function getCancellationRate(barberGhlId, locationId, periodDays = 30) {
-  const startDate = getStartDate(periodDays);
+async function getCancellationRate(barberGhlId, locationId, periodDays = 30, endDate = null, startDateOverride = null) {
+  const startDate = startDateOverride || getStartDate(periodDays);
 
-  const { data: appointments, error } = await supabase
+  let query = supabase
     .from("appointments")
     .select("id, contact_id, start_time, status, title")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
     .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
+
+  if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
+
+  const { data: appointments, error } = await query;
 
   if (error) throw new Error(`Cancellation rate query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
@@ -464,7 +528,8 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30) {
     if (!cancelsByContact[appt.contact_id]) {
       cancelsByContact[appt.contact_id] = {
         contactId: appt.contact_id,
-        contactName: extractContactName(appt.title),
+        contactName: null, // resolved below via batch lookup
+        titleFallback: extractContactName(appt.title),
         count: 0,
         lastOccurrence: null,
       };
@@ -475,6 +540,14 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30) {
         apptDate > new Date(cancelsByContact[appt.contact_id].lastOccurrence)) {
       cancelsByContact[appt.contact_id].lastOccurrence = appt.start_time;
     }
+  }
+
+  // Batch-resolve contact names from client_financials
+  const offenderContactIds = Object.keys(cancelsByContact);
+  const nameMap = await getContactNames(offenderContactIds);
+  for (const entry of Object.values(cancelsByContact)) {
+    entry.contactName = nameMap.get(entry.contactId) || entry.titleFallback;
+    delete entry.titleFallback;
   }
 
   const repeatOffenders = Object.values(cancelsByContact)
@@ -628,8 +701,8 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
  * 2.3 Chair Utilization
  *
  * total booked appointment hours / total available hours for the period.
- * Available hours come from the barber's appointment data (infer schedule from
- * actual days worked). Booked hours from completed/showed appointments.
+ * Available hours come from the barber's GHL schedule (Schedules API).
+ * Falls back to appointment-span inference if schedule data is unavailable.
  *
  * Returns: { utilization, bookedHours, availableHours, byDayOfWeek }
  */
@@ -673,29 +746,18 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30) {
     }
   }
 
-  // Estimate available hours: for each day the barber worked, assume a standard
-  // working day. We infer from earliest to latest appointment per day.
-  // Group appointments by date to find working span per day.
-  const dateSpans = {};
-  for (const appt of appointments) {
-    const start = new Date(appt.start_time);
-    const dateKey = start.toISOString().split("T")[0];
-    if (!dateSpans[dateKey]) {
-      dateSpans[dateKey] = { earliest: start, latest: new Date(appt.end_time) };
-    } else {
-      if (start < dateSpans[dateKey].earliest) dateSpans[dateKey].earliest = start;
-      const end = new Date(appt.end_time);
-      if (end > dateSpans[dateKey].latest) dateSpans[dateKey].latest = end;
-    }
-  }
+  // Get available hours from GHL schedule, with appointment-span fallback
+  const scheduleHours = await getBarberScheduleHours(barberGhlId, locationId);
+  let totalAvailableMinutes;
 
-  // Available hours = sum of working spans (earliest appt to latest appt end) per day
-  // with a minimum of 4 hours per worked day (to handle single-appointment days)
-  let totalAvailableMinutes = 0;
-  for (const dateKey of Object.keys(dateSpans)) {
-    const span = dateSpans[dateKey];
-    const spanMinutes = (span.latest - span.earliest) / (1000 * 60);
-    totalAvailableMinutes += Math.max(spanMinutes, 240); // min 4 hours
+  if (scheduleHours) {
+    // Use GHL schedule: count available hours for each calendar day in the period
+    totalAvailableMinutes = computeAvailableMinutesFromSchedule(
+      scheduleHours, startDate, new Date().toISOString().split("T")[0]
+    );
+  } else {
+    // Fallback: infer from appointment spans
+    totalAvailableMinutes = computeAvailableMinutesFromAppointments(appointments);
   }
 
   const bookedHours = round(totalBookedMinutes / 60, 1);
@@ -715,7 +777,126 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30) {
     };
   }
 
-  return { utilization, bookedHours, availableHours, byDayOfWeek };
+  return { utilization, bookedHours, availableHours, byDayOfWeek, scheduleSource: scheduleHours ? "ghl" : "inferred" };
+}
+
+/**
+ * Fetch the barber's weekly schedule from GHL Schedules API.
+ * Returns a map of day name → total available minutes, or null if unavailable.
+ * Cached for 1 hour since schedules rarely change.
+ */
+const scheduleCache = new Map(); // barberGhlId → { hours, expiresAt }
+const SCHEDULE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+async function getBarberScheduleHours(barberGhlId, locationId) {
+  // Check cache first
+  const cached = scheduleCache.get(barberGhlId);
+  if (cached && Date.now() < cached.expiresAt) return cached.hours;
+
+  try {
+    const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+    if (!ghlBarber) {
+      console.warn("[Analytics] ghlBarber SDK not available for schedule lookup");
+      return null;
+    }
+
+    const httpClient = ghlBarber.getHttpClient();
+    const resp = await httpClient.get(
+      `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
+    );
+
+    const schedules = resp.data?.schedules || [];
+    if (schedules.length === 0) {
+      scheduleCache.set(barberGhlId, { hours: null, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
+      return null;
+    }
+
+    // Use the first schedule (barbers typically have one)
+    const schedule = schedules[0];
+    const dayMap = {}; // "sunday" → totalMinutes
+
+    for (const rule of schedule.rules || []) {
+      if (rule.type !== "wday" || !rule.day) continue;
+
+      let dayMinutes = 0;
+      for (const interval of rule.intervals || []) {
+        const fromMinutes = parseTimeToMinutes(interval.from);
+        const toMinutes = parseTimeToMinutes(interval.to);
+        if (fromMinutes !== null && toMinutes !== null && toMinutes > fromMinutes) {
+          dayMinutes += (toMinutes - fromMinutes);
+        }
+      }
+      dayMap[rule.day.toLowerCase()] = dayMinutes;
+    }
+
+    scheduleCache.set(barberGhlId, { hours: dayMap, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
+    return dayMap;
+  } catch (err) {
+    console.warn(`[Analytics] Failed to fetch GHL schedule for ${barberGhlId}:`, err.message);
+    scheduleCache.set(barberGhlId, { hours: null, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
+    return null;
+  }
+}
+
+/** Parse "HH:mm" to total minutes since midnight. Returns null on bad input. */
+function parseTimeToMinutes(timeStr) {
+  if (!timeStr) return null;
+  const parts = timeStr.split(":");
+  if (parts.length !== 2) return null;
+  const h = parseInt(parts[0], 10);
+  const m = parseInt(parts[1], 10);
+  if (isNaN(h) || isNaN(m)) return null;
+  return h * 60 + m;
+}
+
+/**
+ * Compute total available minutes from a GHL schedule over a date range.
+ * @param {Object} scheduleHours - map of day name → minutes (e.g., { monday: 480 })
+ * @param {string} startDateStr - YYYY-MM-DD
+ * @param {string} endDateStr - YYYY-MM-DD
+ */
+function computeAvailableMinutesFromSchedule(scheduleHours, startDateStr, endDateStr) {
+  const dayNameMap = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  let totalMinutes = 0;
+
+  const current = new Date(startDateStr + "T12:00:00Z"); // noon to avoid DST issues
+  const end = new Date(endDateStr + "T12:00:00Z");
+
+  while (current <= end) {
+    const dayName = dayNameMap[current.getUTCDay()];
+    const dayMinutes = scheduleHours[dayName] || 0;
+    totalMinutes += dayMinutes;
+    current.setUTCDate(current.getUTCDate() + 1);
+  }
+
+  return totalMinutes;
+}
+
+/**
+ * Fallback: estimate available minutes from appointment spans.
+ * Uses earliest-to-latest appointment span per day, min 4 hours.
+ */
+function computeAvailableMinutesFromAppointments(appointments) {
+  const dateSpans = {};
+  for (const appt of appointments) {
+    const start = new Date(appt.start_time);
+    const dateKey = start.toISOString().split("T")[0];
+    if (!dateSpans[dateKey]) {
+      dateSpans[dateKey] = { earliest: start, latest: new Date(appt.end_time) };
+    } else {
+      if (start < dateSpans[dateKey].earliest) dateSpans[dateKey].earliest = start;
+      const end = new Date(appt.end_time);
+      if (end > dateSpans[dateKey].latest) dateSpans[dateKey].latest = end;
+    }
+  }
+
+  let totalMinutes = 0;
+  for (const dateKey of Object.keys(dateSpans)) {
+    const span = dateSpans[dateKey];
+    const spanMinutes = (span.latest - span.earliest) / (1000 * 60);
+    totalMinutes += Math.max(spanMinutes, 240); // min 4 hours
+  }
+  return totalMinutes;
 }
 
 /**
@@ -765,13 +946,13 @@ async function getVisitFrequencyDistribution(barberGhlId, locationId) {
     return { buckets: buildEmptyBuckets(), totalClients: 0, avgFrequency: null };
   }
 
-  // Bucket definitions
+  // Bucket definitions — ranges are [inclusive, exclusive)
   const bucketDefs = [
     { label: "< 14 days", range: [0, 14], count: 0 },
-    { label: "14–21 days", range: [14, 21], count: 0 },
-    { label: "22–35 days", range: [21, 35], count: 0 },
-    { label: "36–60 days", range: [35, 60], count: 0 },
-    { label: "60+ days", range: [60, Infinity], count: 0 },
+    { label: "14–21 days", range: [14, 22], count: 0 },
+    { label: "22–35 days", range: [22, 36], count: 0 },
+    { label: "36–60 days", range: [36, 61], count: 0 },
+    { label: "60+ days", range: [61, Infinity], count: 0 },
   ];
 
   for (const gap of avgGaps) {
@@ -831,9 +1012,17 @@ async function getDiagnostics(barberGhlId, locationId, periodDays = 30) {
 
 /**
  * Fetch all Tier 1 metrics in one call.
- * Returns the complete health check data.
+ * Returns the complete health check data plus previous-period values for trend arrows.
+ *
+ * For flex metrics (revenue, tip, no-show, cancellation), computes the equivalent
+ * prior period (e.g., 30d current → previous 30d window before that).
+ * For fixed metrics (rebooking, active clients, regulars), trend arrows come from
+ * the monthly trends table (Phase 3) — not computed here.
  */
 async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
+  // Compute previous period date range for trend comparison
+  const prevRange = getPreviousPeriodRange(periodDays);
+
   const [
     rebooking,
     firstVisitRebooking,
@@ -843,6 +1032,11 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
     avgTip,
     noShow,
     cancellation,
+    // Previous period — flex metrics only (rate-only, no repeat offenders needed)
+    prevAvgRevenue,
+    prevAvgTip,
+    prevNoShow,
+    prevCancellation,
   ] = await Promise.all([
     getRebookingRate(barberGhlId, locationId),
     getFirstVisitRebookingRate(barberGhlId, locationId),
@@ -852,6 +1046,11 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
     getAvgTipPercentage(barberGhlId, locationId, periodDays),
     getNoShowRate(barberGhlId, locationId, periodDays),
     getCancellationRate(barberGhlId, locationId, periodDays),
+    // Previous period queries — use startDateOverride + endDate for exact prior window
+    getAvgRevenuePerVisit(barberGhlId, locationId, periodDays, prevRange.endDate, prevRange.startDate),
+    getAvgTipPercentage(barberGhlId, locationId, periodDays, prevRange.endDate, prevRange.startDate),
+    getNoShowRate(barberGhlId, locationId, periodDays, prevRange.endDate, prevRange.startDate),
+    getCancellationRate(barberGhlId, locationId, periodDays, prevRange.endDate, prevRange.startDate),
   ]);
 
   return {
@@ -863,6 +1062,14 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
     avgTipPercentage: avgTip,
     noShowRate: noShow,
     cancellationRate: cancellation,
+    // Previous period values for trend arrow computation on iOS
+    previousPeriod: {
+      avgRevenuePerVisit: prevAvgRevenue.avgRevenue,
+      avgServiceRevenue: prevAvgRevenue.avgServiceRevenue,
+      avgTipPercentage: prevAvgTip.avgTipPercentage,
+      noShowRate: prevNoShow.rate,
+      cancellationRate: prevCancellation.rate,
+    },
   };
 }
 
@@ -937,7 +1144,35 @@ function getStartDate(periodDays) {
 }
 
 /**
- * Extract a contact name from the appointment title.
+ * Get the previous period's equivalent periodDays for trend comparison.
+ * For numeric periods: returns 2x the period (e.g., 30d current → 30-60d prior).
+ * For YTD: returns the same number of days into the prior year.
+ *
+ * Returns { prevPeriodDays, prevEndDate } where prevEndDate caps queries
+ * to only the previous window (not overlapping with current).
+ */
+function getPreviousPeriodRange(periodDays) {
+  if (periodDays === "ytd") {
+    const now = new Date();
+    const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 86400000) + 1;
+    return {
+      startDate: `${now.getFullYear() - 1}-01-01`,
+      endDate: new Date(now.getFullYear() - 1, 0, dayOfYear).toISOString().split("T")[0],
+    };
+  }
+  const now = new Date();
+  const end = new Date(now);
+  end.setDate(end.getDate() - periodDays);
+  const start = new Date(end);
+  start.setDate(start.getDate() - periodDays);
+  return {
+    startDate: start.toISOString().split("T")[0],
+    endDate: end.toISOString().split("T")[0],
+  };
+}
+
+/**
+ * Extract a contact name from the appointment title (fallback only).
  * GHL appointment titles are typically like "Haircut w/ Drew - John Smith"
  * or just the contact name.
  */
@@ -949,6 +1184,33 @@ function extractContactName(title) {
     return title.substring(dashIdx + 3).trim() || title;
   }
   return title;
+}
+
+/**
+ * Batch-lookup contact names from client_financials table.
+ * Returns a Map<contactId, contactName>.
+ * Falls back to extractContactName(title) if not found in client_financials.
+ */
+async function getContactNames(contactIds) {
+  const nameMap = new Map();
+  if (!contactIds || contactIds.length === 0) return nameMap;
+
+  const uniqueIds = [...new Set(contactIds)];
+
+  const { data, error } = await supabase
+    .from("client_financials")
+    .select("contact_id, contact_name")
+    .in("contact_id", uniqueIds);
+
+  if (!error && data) {
+    for (const row of data) {
+      if (row.contact_name) {
+        nameMap.set(row.contact_id, row.contact_name);
+      }
+    }
+  }
+
+  return nameMap;
 }
 
 /**
@@ -985,6 +1247,8 @@ module.exports = {
   parsePeriod,
   // Exported for testing / cron
   getServiceTypeMap,
+  getContactNames,
+  getPreviousPeriodRange,
   EVALUATION_WINDOWS,
   DEFAULT_EVAL_WINDOW,
   COMPLETED_STATUSES,
