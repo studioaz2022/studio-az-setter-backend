@@ -295,10 +295,17 @@ function buildUserPrompt(barberName, snapshot, trendHistory) {
 
 /**
  * Parse the detected career stage from the coaching response.
- * Looks for patterns like "Career Stage: Stage 2" or "Stage 2 — Professional Barber"
+ * Prioritizes the mandated "Career Stage: Stage X" format, then falls back to looser patterns.
  */
 function parseDetectedStage(response) {
-  // Try to find "Stage X" pattern
+  // Priority 1: mandated format "Career Stage: Stage X"
+  const mandatedMatch = response.match(/Career\s+Stage:\s+Stage\s+(\d)/i);
+  if (mandatedMatch) {
+    const stage = parseInt(mandatedMatch[1], 10);
+    if (stage >= 1 && stage <= 5) return stage;
+  }
+
+  // Priority 2: general "Stage X" pattern (e.g. "Stage: 2", "Stage 3")
   const stageMatch = response.match(
     /(?:Career\s+)?Stage[:\s]+(?:Stage\s+)?(\d)/i
   );
@@ -307,13 +314,14 @@ function parseDetectedStage(response) {
     if (stage >= 1 && stage <= 5) return stage;
   }
 
-  // Try "solidly in Stage X" or "moving toward Stage X"
+  // Priority 3: contextual mentions like "solidly in Stage X"
   const inStageMatch = response.match(/(?:in|at|toward)\s+Stage\s+(\d)/i);
   if (inStageMatch) {
     const stage = parseInt(inStageMatch[1], 10);
     if (stage >= 1 && stage <= 5) return stage;
   }
 
+  console.warn("[AI Coach] Could not parse career stage from coaching response");
   return null;
 }
 
@@ -358,25 +366,28 @@ async function requestCoaching(barberGhlId, locationId) {
     `[AI Coach] Snapshot date: ${snapshot.snapshot_date}, trend months: ${trendHistory.length}`
   );
 
-  // 5. Call Claude API with prompt caching
+  // 5. Call Claude API with prompt caching (30s timeout)
   const startTime = Date.now();
-  const response = await anthropic.messages.create({
-    model: MODEL,
-    max_tokens: 2048,
-    system: [
-      {
-        type: "text",
-        text: systemPrompt,
-        cache_control: { type: "ephemeral" },
-      },
-    ],
-    messages: [
-      {
-        role: "user",
-        content: userPrompt,
-      },
-    ],
-  });
+  const response = await anthropic.messages.create(
+    {
+      model: MODEL,
+      max_tokens: 2048,
+      system: [
+        {
+          type: "text",
+          text: systemPrompt,
+          cache_control: { type: "ephemeral" },
+        },
+      ],
+      messages: [
+        {
+          role: "user",
+          content: userPrompt,
+        },
+      ],
+    },
+    { timeout: 30000 }
+  );
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   const coachingResponse =
