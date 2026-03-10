@@ -9,7 +9,7 @@ const {
   getCohortAnalysis,
   parsePeriod,
 } = require("./analyticsQueries");
-const { runNightlySnapshot, computeShopAverages } = require("./snapshotCron");
+const { runNightlySnapshot, computeShopAverages, backfillSnapshots } = require("./snapshotCron");
 const { runMonthlyRollup, getMonthlyTrends } = require("./monthlyRollup");
 const {
   requestCoaching,
@@ -90,6 +90,43 @@ router.post("/analytics/snapshot", async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Manual snapshot error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/analytics/backfill
+ *
+ * Backfill daily snapshots for a date range.
+ * Query params:
+ *   ?start=2025-09-01  — start date (inclusive, required)
+ *   ?end=2026-03-10    — end date (inclusive, defaults to today)
+ *
+ * WARNING: Long-running operation. Call in monthly chunks to avoid timeout.
+ */
+router.post("/analytics/backfill", async (req, res) => {
+  try {
+    const start = req.query.start;
+    const end = req.query.end || new Date().toISOString().split("T")[0];
+
+    if (!start) {
+      return res.status(400).json({ success: false, error: "Missing required ?start= parameter (YYYY-MM-DD)" });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return res.status(400).json({ success: false, error: "Dates must be in YYYY-MM-DD format" });
+    }
+
+    console.log(`[Analytics] Backfill triggered: ${start} → ${end}`);
+
+    const results = await backfillSnapshots(start, end);
+
+    res.json({
+      success: true,
+      ...results,
+    });
+  } catch (error) {
+    console.error("[Analytics] Backfill error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

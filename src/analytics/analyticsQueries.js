@@ -37,9 +37,9 @@ function getEvalWindow(serviceType) {
  *
  * Returns: { strict, forgiving, total, rebooked, pending, notRebooked }
  */
-async function getRebookingRate(barberGhlId, locationId) {
+async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
   // Get all completed appointments for this barber, joined with service type
-  const { data: appointments, error } = await supabase
+  const { data: rawAppointments, error } = await supabase
     .from("appointments")
     .select("id, contact_id, calendar_id, start_time, status")
     .eq("assigned_user_id", barberGhlId)
@@ -48,13 +48,21 @@ async function getRebookingRate(barberGhlId, locationId) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`Rebooking query failed: ${error.message}`);
-  if (!appointments || appointments.length === 0) {
+  if (!rawAppointments || rawAppointments.length === 0) {
+    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
+  }
+
+  // Filter out appointments after asOfDate for historical accuracy
+  const appointments = asOfDate
+    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppointments;
+  if (appointments.length === 0) {
     return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
   }
 
   // Load service type mappings
   const serviceTypeMap = await getServiceTypeMap();
-  const now = new Date();
+  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
 
   // Group appointments by contact_id, ordered by time
   const byContact = {};
@@ -138,8 +146,8 @@ async function getRebookingRate(barberGhlId, locationId) {
  *
  * Returns: { strict, forgiving, total, rebooked, pending, notRebooked }
  */
-async function getFirstVisitRebookingRate(barberGhlId, locationId) {
-  const { data: appointments, error } = await supabase
+async function getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate = null) {
+  const { data: rawAppointments, error } = await supabase
     .from("appointments")
     .select("id, contact_id, calendar_id, start_time, status")
     .eq("assigned_user_id", barberGhlId)
@@ -148,12 +156,20 @@ async function getFirstVisitRebookingRate(barberGhlId, locationId) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`First-visit rebooking query failed: ${error.message}`);
-  if (!appointments || appointments.length === 0) {
+  if (!rawAppointments || rawAppointments.length === 0) {
+    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
+  }
+
+  // Filter out appointments after asOfDate for historical accuracy
+  const appointments = asOfDate
+    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppointments;
+  if (appointments.length === 0) {
     return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
   }
 
   const serviceTypeMap = await getServiceTypeMap();
-  const now = new Date();
+  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
 
   // Group by contact
   const byContact = {};
@@ -204,12 +220,13 @@ async function getFirstVisitRebookingRate(barberGhlId, locationId) {
  *
  * Returns: { total, newClients, returningClients }
  */
-async function getActiveClientCount(barberGhlId, locationId) {
-  const sixtyDaysAgo = new Date();
+async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
+  const ref = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const sixtyDaysAgo = new Date(ref);
   sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
   // Get ALL completed appointments for this barber (need lifetime data for new/returning split)
-  const { data: allAppts, error } = await supabase
+  const { data: rawAppts, error } = await supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
@@ -218,11 +235,19 @@ async function getActiveClientCount(barberGhlId, locationId) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`Active clients query failed: ${error.message}`);
-  if (!allAppts || allAppts.length === 0) {
+  if (!rawAppts || rawAppts.length === 0) {
     return { total: 0, newClients: 0, returningClients: 0 };
   }
 
-  // Find clients active in the last 60 days
+  // Filter out appointments after asOfDate for historical accuracy
+  const allAppts = asOfDate
+    ? rawAppts.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppts;
+  if (allAppts.length === 0) {
+    return { total: 0, newClients: 0, returningClients: 0 };
+  }
+
+  // Find clients active in the last 60 days (relative to asOfDate or today)
   const activeContacts = new Set();
   const firstVisitByContact = {};
 
@@ -266,8 +291,8 @@ async function getActiveClientCount(barberGhlId, locationId) {
  *
  * Returns: { count, totalBookings, regularBookingPercentage }
  */
-async function getRegularsCount(barberGhlId, locationId) {
-  const { data: appointments, error } = await supabase
+async function getRegularsCount(barberGhlId, locationId, asOfDate = null) {
+  const { data: rawAppointments, error } = await supabase
     .from("appointments")
     .select("contact_id, calendar_id, start_time")
     .eq("assigned_user_id", barberGhlId)
@@ -276,12 +301,20 @@ async function getRegularsCount(barberGhlId, locationId) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`Regulars query failed: ${error.message}`);
-  if (!appointments || appointments.length === 0) {
+  if (!rawAppointments || rawAppointments.length === 0) {
+    return { count: 0, totalBookings: 0, regularBookingPercentage: null };
+  }
+
+  // Filter out appointments after asOfDate for historical accuracy
+  const appointments = asOfDate
+    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppointments;
+  if (appointments.length === 0) {
     return { count: 0, totalBookings: 0, regularBookingPercentage: null };
   }
 
   const serviceTypeMap = await getServiceTypeMap();
-  const now = new Date();
+  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
 
   // Group by contact
   const byContact = {};
@@ -570,8 +603,8 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30, end
  *
  * Returns: { strict, forgiving, atritedCount, atRiskCount, totalClients }
  */
-async function getAttritionRate(barberGhlId, locationId) {
-  const { data: appointments, error } = await supabase
+async function getAttritionRate(barberGhlId, locationId, asOfDate = null) {
+  const { data: rawAppointments, error } = await supabase
     .from("appointments")
     .select("contact_id, calendar_id, start_time")
     .eq("assigned_user_id", barberGhlId)
@@ -580,12 +613,20 @@ async function getAttritionRate(barberGhlId, locationId) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`Attrition query failed: ${error.message}`);
-  if (!appointments || appointments.length === 0) {
+  if (!rawAppointments || rawAppointments.length === 0) {
+    return { strict: null, forgiving: null, atritedCount: 0, atRiskCount: 0, totalClients: 0 };
+  }
+
+  // Filter out appointments after asOfDate for historical accuracy
+  const appointments = asOfDate
+    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppointments;
+  if (appointments.length === 0) {
     return { strict: null, forgiving: null, atritedCount: 0, atRiskCount: 0, totalClients: 0 };
   }
 
   const serviceTypeMap = await getServiceTypeMap();
-  const now = new Date();
+  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
 
   // Group by contact — take most recent appointment
   const byContact = {};
@@ -632,9 +673,9 @@ async function getAttritionRate(barberGhlId, locationId) {
  *
  * Returns: { weeks: [{ weekStart, weekEnd, count }], movingAverage: number, total: number }
  */
-async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
+async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate = null) {
   // Get all completed appointments for this barber
-  const { data: appointments, error } = await supabase
+  const { data: rawAppointments, error } = await supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
@@ -643,7 +684,15 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
     .order("start_time", { ascending: true });
 
   if (error) throw new Error(`New client trend query failed: ${error.message}`);
-  if (!appointments || appointments.length === 0) {
+  if (!rawAppointments || rawAppointments.length === 0) {
+    return { weeks: [], movingAverage: null, total: 0 };
+  }
+
+  // Filter out appointments after asOfDate for historical accuracy
+  const appointments = asOfDate
+    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    : rawAppointments;
+  if (appointments.length === 0) {
     return { weeks: [], movingAverage: null, total: 0 };
   }
 
@@ -655,8 +704,8 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
     }
   }
 
-  // Build week buckets (going back numWeeks from today)
-  const now = new Date();
+  // Build week buckets (going back numWeeks from asOfDate or today)
+  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
   const weeks = [];
   for (let i = numWeeks - 1; i >= 0; i--) {
     const weekEnd = new Date(now);
@@ -706,18 +755,27 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8) {
  *
  * Returns: { utilization, bookedHours, availableHours, byDayOfWeek }
  */
-async function getChairUtilization(barberGhlId, locationId, periodDays = 30) {
-  const startDate = getStartDate(periodDays);
+async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asOfDate = null) {
+  const startDate = getStartDate(periodDays, asOfDate);
+  const endDateStr = asOfDate || new Date().toISOString().split("T")[0];
 
   // Get all appointments (including no-shows — they still used a slot)
-  const { data: appointments, error } = await supabase
+  let apptQuery = supabase
     .from("appointments")
     .select("start_time, end_time, status")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
-    .order("start_time", { ascending: true });
+    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
+
+  // Cap upper bound when computing historical snapshots
+  if (asOfDate) {
+    apptQuery = apptQuery.lte("start_time", new Date(asOfDate + "T23:59:59Z").toISOString());
+  }
+
+  apptQuery = apptQuery.order("start_time", { ascending: true });
+
+  const { data: appointments, error } = await apptQuery;
 
   if (error) throw new Error(`Chair utilization query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
@@ -753,7 +811,7 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30) {
   if (scheduleHours) {
     // Use GHL schedule: count available hours for each calendar day in the period
     totalAvailableMinutes = computeAvailableMinutesFromSchedule(
-      scheduleHours, startDate, new Date().toISOString().split("T")[0]
+      scheduleHours, startDate, endDateStr
     );
   } else {
     // Fallback: infer from appointment spans
@@ -1132,13 +1190,13 @@ function round(num, decimals) {
  * Get a start date string (YYYY-MM-DD) for a period in days.
  * Supports special values: "ytd" for year-to-date.
  */
-function getStartDate(periodDays) {
+function getStartDate(periodDays, asOfDate = null) {
+  const ref = asOfDate ? new Date(asOfDate + "T12:00:00Z") : new Date();
   if (periodDays === "ytd") {
-    const now = new Date();
-    return `${now.getFullYear()}-01-01`;
+    return `${ref.getFullYear()}-01-01`;
   }
 
-  const d = new Date();
+  const d = new Date(ref);
   d.setDate(d.getDate() - periodDays);
   return d.toISOString().split("T")[0];
 }
@@ -1151,16 +1209,15 @@ function getStartDate(periodDays) {
  * Returns { prevPeriodDays, prevEndDate } where prevEndDate caps queries
  * to only the previous window (not overlapping with current).
  */
-function getPreviousPeriodRange(periodDays) {
+function getPreviousPeriodRange(periodDays, asOfDate = null) {
+  const now = asOfDate ? new Date(asOfDate + "T12:00:00Z") : new Date();
   if (periodDays === "ytd") {
-    const now = new Date();
     const dayOfYear = Math.floor((now - new Date(now.getFullYear(), 0, 1)) / 86400000) + 1;
     return {
       startDate: `${now.getFullYear() - 1}-01-01`,
       endDate: new Date(now.getFullYear() - 1, 0, dayOfYear).toISOString().split("T")[0],
     };
   }
-  const now = new Date();
   const end = new Date(now);
   end.setDate(end.getDate() - periodDays);
   const start = new Date(end);

@@ -27,7 +27,24 @@ const SNAPSHOT_PERIOD_DAYS = 30;
 /**
  * Compute all metrics for a single barber and return a snapshot row.
  */
-async function computeBarberSnapshot(barberGhlId, locationId) {
+async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
+  const snapshotDate = asOfDate || new Date().toISOString().split("T")[0];
+
+  // Compute explicit start date for flex-window metrics
+  const periodStartDate = (() => {
+    const d = asOfDate ? new Date(asOfDate + "T12:00:00Z") : new Date();
+    d.setDate(d.getDate() - SNAPSHOT_PERIOD_DAYS);
+    return d.toISOString().split("T")[0];
+  })();
+
+  // Category B functions use lt() (strictly less than) for endDate,
+  // so pass the day AFTER the snapshot date to include it
+  const endDateForQuery = (() => {
+    const d = new Date(snapshotDate + "T12:00:00Z");
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split("T")[0];
+  })();
+
   const [
     rebooking,
     firstVisitRebooking,
@@ -41,23 +58,23 @@ async function computeBarberSnapshot(barberGhlId, locationId) {
     newClientTrend,
     chairUtil,
   ] = await Promise.all([
-    getRebookingRate(barberGhlId, locationId),
-    getFirstVisitRebookingRate(barberGhlId, locationId),
-    getActiveClientCount(barberGhlId, locationId),
-    getRegularsCount(barberGhlId, locationId),
-    getAvgRevenuePerVisit(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS),
-    getAvgTipPercentage(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS),
-    getNoShowRate(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS),
-    getCancellationRate(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS),
-    getAttritionRate(barberGhlId, locationId),
-    getNewClientTrend(barberGhlId, locationId, 1), // just current week count
-    getChairUtilization(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS),
+    getRebookingRate(barberGhlId, locationId, asOfDate),
+    getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate),
+    getActiveClientCount(barberGhlId, locationId, asOfDate),
+    getRegularsCount(barberGhlId, locationId, asOfDate),
+    getAvgRevenuePerVisit(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, endDateForQuery, periodStartDate),
+    getAvgTipPercentage(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, endDateForQuery, periodStartDate),
+    getNoShowRate(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, endDateForQuery, periodStartDate),
+    getCancellationRate(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, endDateForQuery, periodStartDate),
+    getAttritionRate(barberGhlId, locationId, asOfDate),
+    getNewClientTrend(barberGhlId, locationId, 1, asOfDate),
+    getChairUtilization(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, asOfDate),
   ]);
 
   return {
     barber_ghl_id: barberGhlId,
     location_id: locationId,
-    snapshot_date: new Date().toISOString().split("T")[0],
+    snapshot_date: snapshotDate,
 
     // Tier 1
     rebooking_rate_strict: rebooking.strict,
@@ -265,10 +282,79 @@ function startSnapshotCron() {
   console.log("[Snapshot Cron] Nightly snapshot cron initialized (2:00 AM Central, startup backfill enabled)");
 }
 
+/**
+ * Backfill daily snapshots for a date range, then run monthly rollups.
+ *
+ * @param {string} startDate - YYYY-MM-DD start (inclusive)
+ * @param {string} endDate   - YYYY-MM-DD end (inclusive)
+ * @returns {object} - { snapshotsCreated, datesProcessed, monthsRolled, errors }
+ */
+async function backfillSnapshots(startDate, endDate) {
+  const start = new Date(startDate + "T12:00:00Z");
+  const end = new Date(endDate + "T12:00:00Z");
+  const results = { snapshotsCreated: 0, errors: [], datesProcessed: 0 };
+
+  // Phase 1: Generate daily snapshots
+  const currentDate = new Date(start);
+  while (currentDate <= end) {
+    const dateStr = currentDate.toISOString().split("T")[0];
+    console.log(`[Backfill] Processing ${dateStr} (${results.datesProcessed + 1})...`);
+
+    for (const barber of BARBER_DATA) {
+      try {
+        const snapshot = await computeBarberSnapshot(barber.ghlUserId, BARBER_LOCATION_ID, dateStr);
+
+        if (snapshot) {
+          const { error: upsertError } = await supabase
+            .from("barber_analytics_snapshots")
+            .upsert(snapshot, {
+              onConflict: "barber_ghl_id,location_id,snapshot_date",
+            });
+
+          if (upsertError) {
+            results.errors.push({ date: dateStr, barber: barber.name, error: upsertError.message });
+          } else {
+            results.snapshotsCreated++;
+          }
+        }
+      } catch (err) {
+        results.errors.push({ date: dateStr, barber: barber.name, error: err.message });
+        console.error(`[Backfill] Error for ${barber.name} on ${dateStr}:`, err.message);
+      }
+    }
+
+    results.datesProcessed++;
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  // Phase 2: Run monthly rollups for each month in the range
+  const monthsToRollup = new Set();
+  const d = new Date(start);
+  while (d <= end) {
+    monthsToRollup.add(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-01`);
+    d.setMonth(d.getMonth() + 1);
+  }
+
+  results.monthsRolled = [];
+  for (const month of monthsToRollup) {
+    try {
+      console.log(`[Backfill] Running monthly rollup for ${month}...`);
+      const rollupResult = await runMonthlyRollup(month);
+      results.monthsRolled.push({ month, ...rollupResult });
+    } catch (err) {
+      results.errors.push({ month, error: err.message });
+    }
+  }
+
+  console.log(`[Backfill] Complete: ${results.snapshotsCreated} snapshots, ${results.monthsRolled.length} months rolled, ${results.errors.length} errors`);
+  return results;
+}
+
 module.exports = {
   runNightlySnapshot,
   computeShopAverages,
   startSnapshotCron,
   computeBarberSnapshot,
   checkAndBackfill,
+  backfillSnapshots,
 };
