@@ -19,6 +19,7 @@ const {
   getNewClientTrend,
   getChairUtilization,
 } = require("./analyticsQueries");
+const { runMonthlyRollup } = require("./monthlyRollup");
 
 // Default period for flex-window metrics in the nightly snapshot
 const SNAPSHOT_PERIOD_DAYS = 30;
@@ -117,6 +118,15 @@ async function runNightlySnapshot() {
 
   const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   console.log(`[Snapshot Cron] Completed in ${elapsed}s — ${results.success} success, ${results.failed} failed`);
+
+  // Run monthly rollup for the current month after snapshots are written
+  try {
+    console.log("[Snapshot Cron] Running monthly rollup for current month...");
+    const rollupResults = await runMonthlyRollup();
+    console.log(`[Snapshot Cron] Monthly rollup done — ${rollupResults.success} barbers, shop avg: ${rollupResults.shopAverage}`);
+  } catch (err) {
+    console.error("[Snapshot Cron] Monthly rollup failed:", err.message);
+  }
 
   return results;
 }

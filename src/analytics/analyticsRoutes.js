@@ -8,6 +8,7 @@ const {
   parsePeriod,
 } = require("./analyticsQueries");
 const { runNightlySnapshot, computeShopAverages } = require("./snapshotCron");
+const { runMonthlyRollup, getMonthlyTrends } = require("./monthlyRollup");
 
 const router = express.Router();
 
@@ -41,6 +42,28 @@ router.get("/analytics/shop-averages", async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Shop averages error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/analytics/monthly-rollup
+ *
+ * Manually trigger the monthly rollup (for testing or backfilling).
+ * Optional query param: ?month=2026-03-01 to target a specific month.
+ */
+router.post("/analytics/monthly-rollup", async (req, res) => {
+  try {
+    const targetMonth = req.query.month || undefined;
+    console.log(`[Analytics] Manual monthly rollup triggered${targetMonth ? ` for ${targetMonth}` : ""}`);
+    const results = await runMonthlyRollup(targetMonth);
+
+    res.json({
+      success: true,
+      ...results,
+    });
+  } catch (error) {
+    console.error("[Analytics] Manual monthly rollup error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
@@ -121,6 +144,51 @@ router.get("/:barberGhlId/analytics/diagnostics", async (req, res) => {
     });
   } catch (error) {
     console.error(`[Analytics] Diagnostics error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/barbers/:barberGhlId/analytics/trends
+ *
+ * Returns monthly trend data for a barber (line chart data).
+ * Query params:
+ *   ?months=6  — number of months of history (default 6)
+ *   ?includeShopAvg=true — also return SHOP_AVERAGE trends for peer comparison
+ */
+router.get("/:barberGhlId/analytics/trends", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const months = parseInt(req.query.months, 10) || 6;
+    const includeShopAvg = req.query.includeShopAvg === "true";
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    console.log(`[Analytics] Trends for barber ${barberGhlId}, months=${months}, shopAvg=${includeShopAvg}`);
+
+    // Compute the current month's rollup on-demand so trends are always fresh
+    try {
+      await runMonthlyRollup();
+    } catch (rollupErr) {
+      console.warn("[Analytics] On-demand rollup failed (returning cached data):", rollupErr.message);
+    }
+
+    const barberTrends = await getMonthlyTrends(barberGhlId, locationId, months);
+
+    const response = {
+      success: true,
+      barberGhlId,
+      months,
+      trends: barberTrends,
+    };
+
+    if (includeShopAvg) {
+      const shopTrends = await getMonthlyTrends("SHOP_AVERAGE", locationId, months);
+      response.shopAverageTrends = shopTrends;
+    }
+
+    res.json(response);
+  } catch (error) {
+    console.error(`[Analytics] Trends error for ${req.params.barberGhlId}:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
