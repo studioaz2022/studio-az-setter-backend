@@ -15,6 +15,7 @@ const {
   requestCoaching,
   getLatestCoachingSession,
 } = require("./coachingService");
+const { backfillAppointments } = require("./appointmentBackfill");
 
 const router = express.Router();
 
@@ -127,6 +128,78 @@ router.post("/analytics/backfill", async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Backfill error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/analytics/backfill-appointments
+ *
+ * Backfill GHL appointments into Supabase for a date range.
+ * Fetches from GHL API day-by-day and upserts to appointments table.
+ * Existing rows (from webhooks) are preserved — only new rows inserted.
+ *
+ * Query params:
+ *   ?start=2025-09-01  — start date (inclusive, required)
+ *   ?end=2026-03-10    — end date (inclusive, defaults to today)
+ *
+ * Run this BEFORE the analytics snapshot backfill, since snapshot metrics
+ * depend on the appointments table being populated.
+ *
+ * For ranges > 45 days, runs async and responds immediately (check server logs).
+ */
+router.post("/analytics/backfill-appointments", async (req, res) => {
+  try {
+    const start = req.query.start;
+    const end = req.query.end || new Date().toISOString().split("T")[0];
+
+    if (!start) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required ?start= parameter (YYYY-MM-DD)",
+      });
+    }
+
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(start) || !/^\d{4}-\d{2}-\d{2}$/.test(end)) {
+      return res.status(400).json({
+        success: false,
+        error: "Dates must be in YYYY-MM-DD format",
+      });
+    }
+
+    const startMs = new Date(start + "T00:00:00Z").getTime();
+    const endMs = new Date(end + "T23:59:59Z").getTime();
+    const dayCount = Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24));
+
+    console.log(`[Analytics] Appointment backfill triggered: ${start} → ${end} (${dayCount} days)`);
+
+    // For large ranges, run async to avoid Render's request timeout (~30-60s)
+    if (dayCount > 45) {
+      backfillAppointments(start, end)
+        .then((results) => {
+          console.log("[Analytics] Async appointment backfill complete:", JSON.stringify(results));
+        })
+        .catch((err) => {
+          console.error("[Analytics] Async appointment backfill failed:", err.message);
+        });
+
+      return res.json({
+        success: true,
+        async: true,
+        days: dayCount,
+        message: `Backfill started for ${dayCount} days (${start} → ${end}). Check server logs for progress.`,
+      });
+    }
+
+    // For smaller ranges, run synchronously and return results
+    const results = await backfillAppointments(start, end);
+
+    res.json({
+      success: true,
+      ...results,
+    });
+  } catch (error) {
+    console.error("[Analytics] Appointment backfill error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
