@@ -5,8 +5,7 @@ const { supabase } = require("../clients/supabaseClient");
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { mapGHLAppointmentToSupabase } = require("../clients/appointmentWebhooks");
-
-const BARBER_LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID || "GLRkNAxfPtWTqTiN83xj";
+const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
 /**
  * Backfill appointments from GHL into Supabase for a date range.
@@ -40,13 +39,31 @@ async function backfillAppointments(startDate, endDate) {
     const dateStr = currentDate.toISOString().split("T")[0];
 
     try {
-      // Fetch all appointments for this day across all calendars
-      const events = await fetchAppointmentsForDateRange({
-        locationId: BARBER_LOCATION_ID,
-        startTime: dayStart.getTime(),
-        endTime: dayEnd.getTime(),
-        sdkInstance: ghlBarber,
-      });
+      // GHL API requires userId — fetch per-barber and deduplicate by event ID
+      const eventMap = new Map();
+      for (const barber of BARBER_DATA) {
+        try {
+          const barberEvents = await fetchAppointmentsForDateRange({
+            locationId: BARBER_LOCATION_ID,
+            startTime: dayStart.getTime(),
+            endTime: dayEnd.getTime(),
+            userId: barber.ghlUserId,
+            sdkInstance: ghlBarber,
+          });
+          for (const evt of barberEvents) {
+            if (evt.id && !eventMap.has(evt.id)) {
+              eventMap.set(evt.id, evt);
+            }
+          }
+          // Small delay between barbers to avoid rate limiting
+          if (BARBER_DATA.indexOf(barber) < BARBER_DATA.length - 1) {
+            await new Promise((resolve) => setTimeout(resolve, 100));
+          }
+        } catch (barberErr) {
+          console.warn(`[Appt Backfill] ${dateStr}: error for ${barber.name}: ${barberErr.message}`);
+        }
+      }
+      const events = Array.from(eventMap.values());
 
       results.totalFetched += events.length;
 
