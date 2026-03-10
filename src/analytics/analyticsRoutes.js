@@ -9,6 +9,10 @@ const {
 } = require("./analyticsQueries");
 const { runNightlySnapshot, computeShopAverages } = require("./snapshotCron");
 const { runMonthlyRollup, getMonthlyTrends } = require("./monthlyRollup");
+const {
+  requestCoaching,
+  getLatestCoachingSession,
+} = require("./coachingService");
 
 const router = express.Router();
 
@@ -189,6 +193,66 @@ router.get("/:barberGhlId/analytics/trends", async (req, res) => {
     res.json(response);
   } catch (error) {
     console.error(`[Analytics] Trends error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/:barberGhlId/analytics/coaching
+ *
+ * Request a new AI coaching session. Gathers current metrics + 6-month trends,
+ * sends to Claude with Bossio Standard context, saves and returns the response.
+ * Enforces a 2-week cooldown between requests.
+ */
+router.post("/:barberGhlId/analytics/coaching", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    console.log(`[Analytics] Coaching request for barber ${barberGhlId}`);
+
+    const result = await requestCoaching(barberGhlId, locationId);
+
+    if (!result.success && result.error === "cooldown_active") {
+      return res.status(429).json(result);
+    }
+
+    res.json(result);
+  } catch (error) {
+    console.error(`[Analytics] Coaching error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/barbers/:barberGhlId/analytics/coaching/latest
+ *
+ * Fetch the most recent coaching session for a barber.
+ * Returns the coaching response, detected stage, cooldown status, and the metrics snapshot
+ * that was used at the time of the request.
+ */
+router.get("/:barberGhlId/analytics/coaching/latest", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+
+    console.log(`[Analytics] Latest coaching for barber ${barberGhlId}`);
+
+    const session = await getLatestCoachingSession(barberGhlId);
+
+    if (!session) {
+      return res.json({
+        success: true,
+        session: null,
+        message: "No coaching sessions found. Tap 'Explain My Stats' to get personalized coaching.",
+      });
+    }
+
+    res.json({
+      success: true,
+      session,
+    });
+  } catch (error) {
+    console.error(`[Analytics] Latest coaching error for ${req.params.barberGhlId}:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

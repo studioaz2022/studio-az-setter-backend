@@ -12,6 +12,7 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.78.0",
     "@gohighlevel/api-client": "^2.2.2",
     "@instantdb/admin": "^0.22.148",
     "@supabase/supabase-js": "^2.48.1",
