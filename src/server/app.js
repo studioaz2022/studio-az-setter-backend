@@ -97,6 +97,7 @@ const {
   batchDeleteTranscripts,
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
+const analyticsRoutes = require("../analytics/analyticsRoutes");
 
 // ═══ ENVIRONMENT VARIABLES ═══
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
@@ -6553,6 +6554,9 @@ function createApp() {
       return res.status(500).json({ success: false, error: error.message });
     }
   });
+
+  // ═══ ANALYTICS ROUTES ═══
+  app.use("/api/barbers", analyticsRoutes);
 
   return app;
 }
