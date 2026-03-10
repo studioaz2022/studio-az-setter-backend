@@ -159,7 +159,7 @@ router.get("/:barberGhlId/analytics/diagnostics", async (req, res) => {
 router.get("/:barberGhlId/analytics/trends", async (req, res) => {
   try {
     const { barberGhlId } = req.params;
-    const months = parseInt(req.query.months, 10) || 6;
+    const months = Math.min(Math.max(parseInt(req.query.months, 10) || 6, 1), 24);
     const includeShopAvg = req.query.includeShopAvg === "true";
     const locationId = req.query.locationId || BARBER_LOCATION_ID;
 
