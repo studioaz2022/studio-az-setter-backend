@@ -1,8 +1,8 @@
--- Analytics tables for barber performance tracking
--- Phase 1: analytics_snapshots, analytics_monthly_trends, coaching_sessions
+-- Barber analytics tables for performance tracking
+-- Uses distinct table names to avoid conflict with existing analytics_snapshots (tattoo shop)
 
 -- Daily snapshot of each barber's metrics (written by nightly cron)
-CREATE TABLE IF NOT EXISTS analytics_snapshots (
+CREATE TABLE IF NOT EXISTS barber_analytics_snapshots (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     barber_ghl_id TEXT NOT NULL,
     location_id TEXT NOT NULL,
@@ -34,11 +34,14 @@ CREATE TABLE IF NOT EXISTS analytics_snapshots (
     UNIQUE(barber_ghl_id, location_id, snapshot_date)
 );
 
-CREATE INDEX idx_snapshots_barber_date ON analytics_snapshots(barber_ghl_id, snapshot_date DESC);
-CREATE INDEX idx_snapshots_location_date ON analytics_snapshots(location_id, snapshot_date DESC);
+CREATE INDEX IF NOT EXISTS idx_barber_snapshots_barber_date
+ON barber_analytics_snapshots(barber_ghl_id, snapshot_date DESC);
+
+CREATE INDEX IF NOT EXISTS idx_barber_snapshots_location_date
+ON barber_analytics_snapshots(location_id, snapshot_date DESC);
 
 -- Monthly rollup of daily snapshots (for trend charts)
-CREATE TABLE IF NOT EXISTS analytics_monthly_trends (
+CREATE TABLE IF NOT EXISTS barber_monthly_trends (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     barber_ghl_id TEXT NOT NULL,
     location_id TEXT NOT NULL,
@@ -70,7 +73,8 @@ CREATE TABLE IF NOT EXISTS analytics_monthly_trends (
     UNIQUE(barber_ghl_id, location_id, month)
 );
 
-CREATE INDEX idx_monthly_barber_month ON analytics_monthly_trends(barber_ghl_id, month DESC);
+CREATE INDEX IF NOT EXISTS idx_barber_monthly_barber_month
+ON barber_monthly_trends(barber_ghl_id, month DESC);
 
 -- AI Coach sessions (stores coaching request/response pairs)
 CREATE TABLE IF NOT EXISTS coaching_sessions (
@@ -91,4 +95,5 @@ CREATE TABLE IF NOT EXISTS coaching_sessions (
     next_available_at TIMESTAMPTZ NOT NULL  -- requested_at + 14 days
 );
 
-CREATE INDEX idx_coaching_barber ON coaching_sessions(barber_ghl_id, requested_at DESC);
+CREATE INDEX IF NOT EXISTS idx_coaching_barber
+ON coaching_sessions(barber_ghl_id, requested_at DESC);
