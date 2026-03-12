@@ -6,7 +6,7 @@
 //   - transactions: contact_id, artist_ghl_id, gross_amount, service_price, tip_amount, session_date
 //   - barber_service_prices: calendar_id, service_type, barber_name
 
-const { supabase } = require("../clients/supabaseClient");
+const { supabase, fetchAllRows } = require("../clients/supabaseClient");
 
 // Service-type evaluation windows (days)
 const EVALUATION_WINDOWS = {
@@ -39,14 +39,13 @@ function getEvalWindow(serviceType) {
  */
 async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
   // Get all completed appointments for this barber, joined with service type
-  const { data: rawAppointments, error } = await supabase
+  const { data: rawAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("id, contact_id, calendar_id, start_time, status")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Rebooking query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -148,14 +147,13 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
  * Returns: { strict, forgiving, total, rebooked, pending, notRebooked }
  */
 async function getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate = null) {
-  const { data: rawAppointments, error } = await supabase
+  const { data: rawAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("id, contact_id, calendar_id, start_time, status")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`First-visit rebooking query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -228,14 +226,13 @@ async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
   sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
   // Get ALL completed appointments for this barber (need lifetime data for new/returning split)
-  const { data: rawAppts, error } = await supabase
+  const { data: rawAppts, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Active clients query failed: ${error.message}`);
   if (!rawAppts || rawAppts.length === 0) {
@@ -295,14 +292,13 @@ async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
  * Returns: { count, totalBookings, regularBookingPercentage }
  */
 async function getRegularsCount(barberGhlId, locationId, asOfDate = null) {
-  const { data: rawAppointments, error } = await supabase
+  const { data: rawAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, calendar_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Regulars query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -610,14 +606,13 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30, end
  * Returns: { strict, forgiving, atritedCount, atRiskCount, totalClients }
  */
 async function getAttritionRate(barberGhlId, locationId, asOfDate = null) {
-  const { data: rawAppointments, error } = await supabase
+  const { data: rawAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, calendar_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Attrition query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -682,14 +677,13 @@ async function getAttritionRate(barberGhlId, locationId, asOfDate = null) {
  */
 async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate = null) {
   // Get all completed appointments for this barber
-  const { data: rawAppointments, error } = await supabase
+  const { data: rawAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`New client trend query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -974,14 +968,13 @@ function computeAvailableMinutesFromAppointments(appointments) {
  * Returns: { buckets: [{ label, range, count, percentage }], totalClients, avgFrequency }
  */
 async function getVisitFrequencyDistribution(barberGhlId, locationId) {
-  const { data: appointments, error } = await supabase
+  const { data: appointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Visit frequency query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
@@ -1412,14 +1405,13 @@ async function getRevenueProjection(barberGhlId, locationId) {
  * }
  */
 async function getCohortAnalysis(barberGhlId, locationId) {
-  const { data: appointments, error } = await supabase
+  const { data: appointments, error } = await fetchAllRows(supabase
     .from("appointments")
     .select("contact_id, start_time")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true })
-    .limit(10000);
+    .order("start_time", { ascending: true }));
 
   if (error) throw new Error(`Cohort analysis query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {

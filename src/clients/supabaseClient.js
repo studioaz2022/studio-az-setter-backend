@@ -23,5 +23,29 @@ if (SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY) {
   console.warn('[Supabase] Client not initialized - missing credentials');
 }
 
-module.exports = { supabase };
+/**
+ * Fetch all rows from a Supabase query, paginating past the 1000-row server limit.
+ * Pass a query builder (without .limit() or .range()) and this handles pagination.
+ *
+ * @param {object} queryBuilder - Supabase query chain (e.g., supabase.from('x').select('y').eq('z', val))
+ * @param {number} pageSize - Rows per page (default 1000, Supabase max)
+ * @returns {Promise<{data: Array, error: object|null}>}
+ */
+async function fetchAllRows(queryBuilder, pageSize = 1000) {
+  const allData = [];
+  let from = 0;
+
+  while (true) {
+    const { data, error } = await queryBuilder.range(from, from + pageSize - 1);
+    if (error) return { data: allData, error };
+    if (!data || data.length === 0) break;
+    allData.push(...data);
+    if (data.length < pageSize) break; // Last page
+    from += pageSize;
+  }
+
+  return { data: allData, error: null };
+}
+
+module.exports = { supabase, fetchAllRows };
 
