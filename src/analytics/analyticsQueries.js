@@ -45,7 +45,8 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Rebooking query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -153,7 +154,8 @@ async function getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate = nu
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`First-visit rebooking query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -232,7 +234,8 @@ async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Active clients query failed: ${error.message}`);
   if (!rawAppts || rawAppts.length === 0) {
@@ -298,7 +301,8 @@ async function getRegularsCount(barberGhlId, locationId, asOfDate = null) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Regulars query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -468,7 +472,8 @@ async function getNoShowRate(barberGhlId, locationId, periodDays = 30, endDate =
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
+    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .limit(10000);
 
   if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
 
@@ -538,7 +543,8 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30, end
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
+    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .limit(10000);
 
   if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
 
@@ -610,7 +616,8 @@ async function getAttritionRate(barberGhlId, locationId, asOfDate = null) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Attrition query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -681,7 +688,8 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`New client trend query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
@@ -773,7 +781,7 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     apptQuery = apptQuery.lte("start_time", new Date(asOfDate + "T23:59:59Z").toISOString());
   }
 
-  apptQuery = apptQuery.order("start_time", { ascending: true });
+  apptQuery = apptQuery.order("start_time", { ascending: true }).limit(10000);
 
   const { data: appointments, error } = await apptQuery;
 
@@ -972,7 +980,8 @@ async function getVisitFrequencyDistribution(barberGhlId, locationId) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Visit frequency query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
@@ -1409,7 +1418,8 @@ async function getCohortAnalysis(barberGhlId, locationId) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true });
+    .order("start_time", { ascending: true })
+    .limit(10000);
 
   if (error) throw new Error(`Cohort analysis query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
