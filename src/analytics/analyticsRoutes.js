@@ -171,11 +171,12 @@ router.post("/analytics/backfill-appointments", async (req, res) => {
     const endMs = new Date(end + "T23:59:59Z").getTime();
     const dayCount = Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24));
 
-    console.log(`[Analytics] Appointment backfill triggered: ${start} → ${end} (${dayCount} days)`);
+    const barberGhlId = req.query.barberGhlId || null;
+    console.log(`[Analytics] Appointment backfill triggered: ${start} → ${end} (${dayCount} days)${barberGhlId ? ` for barber ${barberGhlId}` : ""}`);
 
     // For large ranges, run async to avoid Render's request timeout (~30-60s)
     if (dayCount > 45) {
-      backfillAppointments(start, end)
+      backfillAppointments(start, end, barberGhlId)
         .then((results) => {
           console.log("[Analytics] Async appointment backfill complete:", JSON.stringify(results));
         })
@@ -192,7 +193,7 @@ router.post("/analytics/backfill-appointments", async (req, res) => {
     }
 
     // For smaller ranges, run synchronously and return results
-    const results = await backfillAppointments(start, end);
+    const results = await backfillAppointments(start, end, barberGhlId);
 
     res.json({
       success: true,

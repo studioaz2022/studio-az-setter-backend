@@ -218,7 +218,38 @@ async function getLatestSnapshot(barberGhlId, locationId) {
 }
 
 /**
+ * Get the earliest reliable month for a barber's trend data.
+ * Metrics like rebooking rate and attrition need 90+ days (2× the 45-day eval window)
+ * of appointment history to be accurate. Months before that threshold produce
+ * artificially inflated/deflated values due to insufficient lookback data.
+ *
+ * @returns {string|null} - YYYY-MM-DD of earliest reliable month, or null if no data
+ */
+async function getReliabilityBoundary(barberGhlId) {
+  const { data, error } = await supabase
+    .from("appointments")
+    .select("start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .in("status", ["showed", "confirmed"])
+    .order("start_time", { ascending: true })
+    .limit(1);
+
+  if (error || !data || data.length === 0) return null;
+
+  const earliest = new Date(data[0].start_time);
+  earliest.setDate(earliest.getDate() + 90); // 2× the 45-day eval window
+
+  // Round up to the first of the next month (partial months aren't reliable)
+  earliest.setMonth(earliest.getMonth() + 1);
+  earliest.setDate(1);
+
+  return earliest.toISOString().split("T")[0];
+}
+
+/**
  * Fetch 6-month trend history from monthly trends table.
+ * Automatically filters out months before the reliability boundary
+ * (where insufficient appointment history makes metrics unreliable).
  */
 async function getTrendHistory(barberGhlId, locationId, months = 6) {
   const startDate = new Date();
@@ -226,12 +257,20 @@ async function getTrendHistory(barberGhlId, locationId, months = 6) {
   const startMonth =
     startDate.toISOString().slice(0, 7) + "-01"; // e.g. "2025-09-01"
 
+  // Compute reliability boundary — earliest month where metrics are trustworthy
+  const reliableSince = await getReliabilityBoundary(barberGhlId);
+  const effectiveStart = reliableSince && reliableSince > startMonth ? reliableSince : startMonth;
+
+  if (reliableSince && reliableSince > startMonth) {
+    console.log(`[AI Coach] Reliability boundary: skipping trends before ${reliableSince} (data starts too recently)`);
+  }
+
   const { data, error } = await supabase
     .from("barber_monthly_trends")
     .select("*")
     .eq("barber_ghl_id", barberGhlId)
     .eq("location_id", locationId)
-    .gte("month", startMonth)
+    .gte("month", effectiveStart)
     .order("month", { ascending: true });
 
   if (error) {
@@ -374,7 +413,7 @@ async function requestCoaching(barberGhlId, locationId) {
   const response = await anthropic.messages.create(
     {
       model: MODEL,
-      max_tokens: 2048,
+      max_tokens: 4096,
       system: [
         {
           type: "text",

@@ -16,9 +16,10 @@ const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
  *
  * @param {string} startDate - YYYY-MM-DD (inclusive)
  * @param {string} endDate   - YYYY-MM-DD (inclusive)
+ * @param {string} [barberGhlId] - Optional: only backfill for this barber's userId
  * @returns {object} - { appointmentsInserted, appointmentsSkipped, daysProcessed, errors }
  */
-async function backfillAppointments(startDate, endDate) {
+async function backfillAppointments(startDate, endDate, barberGhlId = null) {
   if (!ghlBarber) {
     throw new Error("GHL Barber SDK not configured — set GHL_BARBER_SHOP_TOKEN env var");
   }
@@ -41,7 +42,10 @@ async function backfillAppointments(startDate, endDate) {
     try {
       // GHL API requires userId — fetch per-barber and deduplicate by event ID
       const eventMap = new Map();
-      for (const barber of BARBER_DATA) {
+      const barbers = barberGhlId
+        ? BARBER_DATA.filter((b) => b.ghlUserId === barberGhlId)
+        : BARBER_DATA;
+      for (const barber of barbers) {
         try {
           const barberEvents = await fetchAppointmentsForDateRange({
             locationId: BARBER_LOCATION_ID,
