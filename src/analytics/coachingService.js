@@ -332,16 +332,19 @@ function parseDetectedStage(response) {
 async function requestCoaching(barberGhlId, locationId) {
   const resolvedLocationId = locationId || BARBER_LOCATION_ID;
 
-  // 1. Check cooldown
-  const cooldown = await checkCooldown(barberGhlId);
-  if (!cooldown.available) {
-    return {
-      success: false,
-      error: "cooldown_active",
-      message: "Coaching is on cooldown. Try again after the waiting period.",
-      nextAvailableAt: cooldown.nextAvailableAt,
-      latestSession: formatSessionResponse(cooldown.latestSession),
-    };
+  // 1. Check cooldown (bypass for test accounts)
+  const COOLDOWN_BYPASS_IDS = ["1kFG5FWdUDhXLUX46snG"]; // Lionel — testing
+  if (!COOLDOWN_BYPASS_IDS.includes(barberGhlId)) {
+    const cooldown = await checkCooldown(barberGhlId);
+    if (!cooldown.available) {
+      return {
+        success: false,
+        error: "cooldown_active",
+        message: "Coaching is on cooldown. Try again after the waiting period.",
+        nextAvailableAt: cooldown.nextAvailableAt,
+        latestSession: formatSessionResponse(cooldown.latestSession),
+      };
+    }
   }
 
   // 2. Fetch current metrics snapshot
