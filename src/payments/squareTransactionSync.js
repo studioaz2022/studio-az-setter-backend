@@ -1194,7 +1194,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents, cashTipCents }) {
   // Check if already recorded — if so, update instead of insert (handles re-assignment)
   const { data: existing } = await supabase
     .from("transactions")
@@ -1267,29 +1267,30 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     }
   }
 
-  // Tip calculation — use Square's explicit values
+  // Tip calculation — use Square's explicit values + any additional cash tip
+  const cashTip = cashTipCents ? cashTipCents / 100 : 0;
   let servicePrice = null;
   let tipAmount = null;
 
   if (transactionType === "product_sale") {
     // Use listing price (before tax) if available
     servicePrice = basePriceCents ? basePriceCents / 100 : serviceAmount;
-    tipAmount = 0;
+    tipAmount = cashTip;
   } else if (transactionType === "deposit") {
     servicePrice = serviceAmount;
-    tipAmount = 0;
+    tipAmount = cashTip;
   } else if (squareTipCents != null && squareTipCents > 0) {
-    tipAmount = squareTipCents / 100;
+    tipAmount = squareTipCents / 100 + cashTip;
     servicePrice = serviceAmount;
   } else {
     servicePrice = serviceAmount;
-    tipAmount = 0;
+    tipAmount = cashTip;
   }
 
   // For product sales, record listing price as gross_amount (exclude sales tax)
   const recordedGross = (transactionType === "product_sale" && basePriceCents)
-    ? basePriceCents / 100
-    : grossAmount;
+    ? basePriceCents / 100 + cashTip
+    : grossAmount + cashTip;
 
   const { error } = await supabase.from("transactions").insert({
     contact_id: contactId,

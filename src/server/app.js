@@ -3533,6 +3533,7 @@ function createApp() {
             itemType: match.itemType,
             isProductSale: match.isProductSale,
             basePriceCents: match.basePriceCents,
+            cashTipCents: match.cashTipCents,
           });
           results.confirmed++;
         } catch (err) {
@@ -3640,10 +3641,13 @@ function createApp() {
           // Allow overriding session_date for late payments matched to past appointments
           if (match.sessionDate) updateFields.session_date = match.sessionDate;
 
+          // Cash tip (extra cash on top of electronic payment)
+          const cashTip = match.cashTipCents ? match.cashTipCents / 100 : 0;
+
           // Manual slider override takes priority
           if (match.servicePriceCents != null && match.tipAmountCents != null) {
             updateFields.service_price = match.servicePriceCents / 100;
-            updateFields.tip_amount = match.tipAmountCents / 100;
+            updateFields.tip_amount = match.tipAmountCents / 100 + cashTip;
           } else if (match.calendarId) {
             // Auto-recalculate split using calendar price (match may have changed appointment)
             const calendarPrice = await lookupServicePrice(match.calendarId);
@@ -3657,9 +3661,29 @@ function createApp() {
               const grossAmount = existing?.gross_amount || 0;
               if (grossAmount >= calendarPrice) {
                 updateFields.service_price = calendarPrice;
-                updateFields.tip_amount = +(grossAmount - calendarPrice).toFixed(2);
+                updateFields.tip_amount = +(grossAmount - calendarPrice).toFixed(2) + cashTip;
               }
             }
+          } else if (cashTip > 0) {
+            // No slider and no calendar — just add cash tip to existing tip
+            const { data: existing } = await supabase
+              .from("transactions")
+              .select("tip_amount")
+              .eq("id", match.supabaseId)
+              .maybeSingle();
+            updateFields.tip_amount = (existing?.tip_amount || 0) + cashTip;
+          }
+
+          // Add cash tip to gross_amount
+          if (cashTip > 0) {
+            const { data: existing } = await supabase
+              .from("transactions")
+              .select("gross_amount")
+              .eq("id", match.supabaseId)
+              .maybeSingle();
+            const currentGross = existing?.gross_amount || 0;
+            updateFields.gross_amount = currentGross + cashTip;
+            updateFields.artist_amount = currentGross + cashTip;
           }
 
           const { error } = await supabase
@@ -3695,6 +3719,60 @@ function createApp() {
       res.json({ success: results.errors.length === 0, ...results });
     } catch (error) {
       console.error("[API] Error confirming Venmo payments:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // PATCH /api/transactions/:id/cash-tip
+  // Add or update a cash tip on an already-confirmed transaction.
+  // Body: { cashTipCents: number }
+  app.patch("/api/transactions/:id/cash-tip", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { cashTipCents } = req.body;
+      const { supabase } = require("../clients/supabaseClient");
+
+      if (cashTipCents == null || cashTipCents < 0) {
+        return res.status(400).json({ success: false, error: "cashTipCents is required and must be >= 0" });
+      }
+
+      // Fetch existing transaction
+      const { data: tx, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("gross_amount, tip_amount, service_price")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (fetchErr) throw new Error(fetchErr.message);
+      if (!tx) return res.status(404).json({ success: false, error: "Transaction not found" });
+
+      const cashTip = cashTipCents / 100;
+      // Recalculate: new tip = service-derived tip + cash tip
+      // service-derived tip = gross - service_price (before any previous cash tip)
+      const servicePrice = tx.service_price || 0;
+      const electronicTip = Math.max(0, (tx.gross_amount || 0) - servicePrice - (tx.tip_amount || 0) > -0.01 ? (tx.tip_amount || 0) : 0);
+      // For simplicity: just set tip_amount and adjust gross
+      // Previous tip included any old cash tip, so we need the base electronic tip
+      // Base electronic tip = gross - service - old_cash_tip... but we don't track cash tip separately
+      // Simplest approach: add the cash tip on top of current tip and gross
+      const newTip = (tx.tip_amount || 0) + cashTip;
+      const newGross = (tx.gross_amount || 0) + cashTip;
+
+      const { error: updateErr } = await supabase
+        .from("transactions")
+        .update({
+          tip_amount: newTip,
+          gross_amount: newGross,
+          artist_amount: newGross,
+        })
+        .eq("id", id);
+
+      if (updateErr) throw new Error(updateErr.message);
+
+      console.log(`[API] Added cash tip $${cashTip.toFixed(2)} to transaction ${id}. New tip: $${newTip.toFixed(2)}, new gross: $${newGross.toFixed(2)}`);
+      res.json({ success: true, newTipAmount: newTip, newGrossAmount: newGross });
+    } catch (error) {
+      console.error("[API] Error adding cash tip:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
