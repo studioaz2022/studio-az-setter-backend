@@ -3777,6 +3777,56 @@ function createApp() {
     }
   });
 
+  // PATCH /api/transactions/:id/split
+  // Adjust the service/tip split on an already-confirmed transaction.
+  // Body: { serviceCents: number, tipCents: number }
+  app.patch("/api/transactions/:id/split", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { serviceCents, tipCents } = req.body;
+      const { supabase } = require("../clients/supabaseClient");
+
+      if (serviceCents == null || tipCents == null) {
+        return res.status(400).json({ success: false, error: "serviceCents and tipCents are required" });
+      }
+      if (serviceCents < 0 || tipCents < 0) {
+        return res.status(400).json({ success: false, error: "serviceCents and tipCents must be >= 0" });
+      }
+
+      // Fetch existing transaction
+      const { data: tx, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("gross_amount, service_price, tip_amount")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (fetchErr) throw new Error(fetchErr.message);
+      if (!tx) return res.status(404).json({ success: false, error: "Transaction not found" });
+
+      const servicePrice = serviceCents / 100;
+      const tipAmount = tipCents / 100;
+      const newGross = servicePrice + tipAmount;
+
+      const { error: updateErr } = await supabase
+        .from("transactions")
+        .update({
+          service_price: servicePrice,
+          tip_amount: tipAmount,
+          gross_amount: newGross,
+          artist_amount: newGross,
+        })
+        .eq("id", id);
+
+      if (updateErr) throw new Error(updateErr.message);
+
+      console.log(`[API] Adjusted split for transaction ${id}. Service: $${servicePrice.toFixed(2)}, Tip: $${tipAmount.toFixed(2)}, Gross: $${newGross.toFixed(2)}`);
+      res.json({ success: true, servicePrice, tipAmount, grossAmount: newGross });
+    } catch (error) {
+      console.error("[API] Error adjusting split:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // ─── VENMO CONNECTION MANAGEMENT ────────────────────────────────────────────
 
   // GET /api/barbers/:barberGhlId/venmo/status
