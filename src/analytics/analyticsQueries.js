@@ -683,11 +683,22 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate
 /**
  * 2.3 Chair Utilization
  *
- * total booked appointment hours / total available hours for the period.
- * Available hours come from the barber's GHL schedule (Schedules API).
- * Falls back to appointment-span inference if schedule data is unavailable.
+ * Booked appointment hours / true available capacity for the period.
  *
- * Returns: { utilization, bookedHours, availableHours, byDayOfWeek }
+ * Capacity is computed from GHL data:
+ *   1. Fetch all schedules for the barber (one per calendar)
+ *   2. Fetch calendar configs for slot duration/interval
+ *   3. Fetch recurring blocking events (breaks, block slots) via Calendar Events API
+ *   4. For each day, generate all bookable start times per calendar from the schedule
+ *   5. Remove start times blocked by recurring events
+ *   6. Union all HC (haircut) start times → HC capacity (30-min slots)
+ *   7. H+B (haircut+beard) slots that extend beyond HC grid = break padding capacity
+ *   8. Total capacity = HC slots × 30min + H+B extra minutes
+ *
+ * One chair = one client at a time. HC calendars define the primary grid;
+ * H+B calendars only add capacity for minutes outside that grid (break paddings).
+ *
+ * Returns: { utilization, bookedHours, availableHours, weeklyCapacityHours, byDayOfWeek }
  */
 async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asOfDate = null) {
   const startDate = getStartDate(periodDays, asOfDate);
@@ -702,7 +713,6 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     .in("status", ALL_BOOKED_STATUSES)
     .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString());
 
-  // Cap upper bound when computing historical snapshots
   if (asOfDate) {
     apptQuery = apptQuery.lte("start_time", new Date(asOfDate + "T23:59:59Z").toISOString());
   }
@@ -713,12 +723,12 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
 
   if (error) throw new Error(`Chair utilization query failed: ${error.message}`);
   if (!appointments || appointments.length === 0) {
-    return { utilization: null, bookedHours: 0, availableHours: 0, byDayOfWeek: {} };
+    return { utilization: null, bookedHours: 0, availableHours: 0, weeklyCapacityHours: 0, byDayOfWeek: {} };
   }
 
   // Calculate booked hours (exclude cancelled — they freed the slot)
   let totalBookedMinutes = 0;
-  const byDay = {}; // day name → { bookedMinutes, workedDates }
+  const byDay = {};
   const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
   for (const appt of appointments) {
@@ -728,7 +738,7 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     const end = new Date(appt.end_time);
     const durationMinutes = (end - start) / (1000 * 60);
 
-    if (durationMinutes > 0 && durationMinutes < 480) { // sanity check: <8 hours
+    if (durationMinutes > 0 && durationMinutes < 480) {
       totalBookedMinutes += durationMinutes;
 
       const dayName = dayNames[start.getDay()];
@@ -738,15 +748,13 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     }
   }
 
-  // Get available hours from GHL schedule, with appointment-span fallback
-  const scheduleHours = await getBarberScheduleHours(barberGhlId, locationId);
+  // Compute true weekly capacity from GHL schedules + calendar configs + blocking events
+  const weeklyCapacity = await getBarberWeeklyCapacity(barberGhlId, locationId);
   let totalAvailableMinutes;
 
-  if (scheduleHours) {
-    // Use GHL schedule: count available hours for each calendar day in the period
-    totalAvailableMinutes = computeAvailableMinutesFromSchedule(
-      scheduleHours, startDate, endDateStr
-    );
+  if (weeklyCapacity) {
+    // Count how many of each day-of-week fall in the period
+    totalAvailableMinutes = computeCapacityForPeriod(weeklyCapacity, startDate, endDateStr);
   } else {
     // Fallback: infer from appointment spans
     totalAvailableMinutes = computeAvailableMinutesFromAppointments(appointments);
@@ -754,11 +762,13 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
 
   const bookedHours = round(totalBookedMinutes / 60, 1);
   const availableHours = round(totalAvailableMinutes / 60, 1);
+  const weeklyCapacityHours = weeklyCapacity
+    ? round(Object.values(weeklyCapacity.dayCapacityMinutes).reduce((a, b) => a + b, 0) / 60, 1)
+    : 0;
   const utilization = availableHours > 0
     ? round((bookedHours / availableHours) * 100, 1)
     : null;
 
-  // By day of week breakdown
   const byDayOfWeek = {};
   for (const [dayName, data] of Object.entries(byDay)) {
     const dayCount = data.workedDates.size;
@@ -769,65 +779,272 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     };
   }
 
-  return { utilization, bookedHours, availableHours, byDayOfWeek, scheduleSource: scheduleHours ? "ghl" : "inferred" };
+  return {
+    utilization,
+    bookedHours,
+    availableHours,
+    weeklyCapacityHours,
+    byDayOfWeek,
+    scheduleSource: weeklyCapacity ? "ghl_capacity" : "inferred",
+  };
+}
+
+// ── Capacity computation helpers ──────────────────────────────────────────────
+
+/** Cache: barberGhlId → { capacity, expiresAt } */
+const capacityCache = new Map();
+const CAPACITY_CACHE_TTL = 60 * 60 * 1000; // 1 hour
+
+/** Retry an async fn with exponential backoff on 429 errors. */
+async function retryWithBackoff(fn, baseDelay = 500, maxRetries = 3) {
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      if (attempt > 0) await new Promise((r) => setTimeout(r, baseDelay * Math.pow(2, attempt)));
+      else await new Promise((r) => setTimeout(r, baseDelay));
+      return await fn();
+    } catch (err) {
+      if (err?.statusCode === 429 && attempt < maxRetries) {
+        console.warn(`[Capacity] 429 rate limit, retry ${attempt + 1}/${maxRetries}...`);
+        continue;
+      }
+      if (attempt === maxRetries) {
+        console.warn(`[Capacity] Failed after ${maxRetries} retries: ${err.message}`);
+        return null;
+      }
+      throw err;
+    }
+  }
 }
 
 /**
- * Fetch the barber's weekly schedule from GHL Schedules API.
- * Returns a map of day name → total available minutes, or null if unavailable.
- * Cached for 1 hour since schedules rarely change.
+ * Compute a barber's true weekly capacity in minutes per day-of-week.
+ *
+ * Algorithm:
+ *   1. Fetch all GHL schedules for the barber → map calendar → schedule rules
+ *   2. Fetch each calendar's slot duration/interval config
+ *   3. Fetch recurring blocking events (breaks, block slots) from Calendar Events API
+ *   4. For each day:
+ *      a. Generate HC start times from both HC calendars, union them
+ *      b. Remove any HC start where its 30-min window overlaps a blocking event
+ *      c. Build HC minute bitmap (each start × 30 min)
+ *      d. Generate H+B start times, remove blocked ones
+ *      e. H+B extra minutes = H+B minutes NOT already in HC bitmap
+ *      f. Day capacity = HC bitmap minutes + H+B extra minutes
+ *
+ * Returns: { dayCapacityMinutes: { monday: N, ... }, hcSlots: N, hbExtraMinutes: N }
  */
-const scheduleCache = new Map(); // barberGhlId → { hours, expiresAt }
-const SCHEDULE_CACHE_TTL = 60 * 60 * 1000; // 1 hour
-
-async function getBarberScheduleHours(barberGhlId, locationId) {
-  // Check cache first
-  const cached = scheduleCache.get(barberGhlId);
-  if (cached && Date.now() < cached.expiresAt) return cached.hours;
+async function getBarberWeeklyCapacity(barberGhlId, locationId) {
+  const cached = capacityCache.get(barberGhlId);
+  if (cached && Date.now() < cached.expiresAt) return cached.capacity;
 
   try {
     const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
     if (!ghlBarber) {
-      console.warn("[Analytics] ghlBarber SDK not available for schedule lookup");
+      console.warn("[Capacity] ghlBarber SDK not available");
       return null;
     }
 
     const httpClient = ghlBarber.getHttpClient();
-    const resp = await httpClient.get(
+
+    // 1. Fetch barber's schedules
+    const schedResp = await httpClient.get(
       `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
     );
-
-    const schedules = resp.data?.schedules || [];
+    const schedules = schedResp.data?.schedules || [];
     if (schedules.length === 0) {
-      scheduleCache.set(barberGhlId, { hours: null, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
+      capacityCache.set(barberGhlId, { capacity: null, expiresAt: Date.now() + CAPACITY_CACHE_TTL });
       return null;
     }
 
-    // Use the first schedule (barbers typically have one)
-    const schedule = schedules[0];
-    const dayMap = {}; // "sunday" → totalMinutes
-
-    for (const rule of schedule.rules || []) {
-      if (rule.type !== "wday" || !rule.day) continue;
-
-      let dayMinutes = 0;
-      for (const interval of rule.intervals || []) {
-        const fromMinutes = parseTimeToMinutes(interval.from);
-        const toMinutes = parseTimeToMinutes(interval.to);
-        if (fromMinutes !== null && toMinutes !== null && toMinutes > fromMinutes) {
-          dayMinutes += (toMinutes - fromMinutes);
-        }
-      }
-      dayMap[rule.day.toLowerCase()] = dayMinutes;
+    // Map calendarId → schedule
+    const calSchedules = {};
+    for (const s of schedules) {
+      for (const calId of s.calendarIds || []) calSchedules[calId] = s;
     }
 
-    scheduleCache.set(barberGhlId, { hours: dayMap, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
-    return dayMap;
+    // 2. Collect all calendar IDs linked to schedules, then classify by slot duration.
+    // This picks up both kioskConfig calendars AND F&F calendars automatically.
+    const allCalIds = Object.keys(calSchedules);
+    if (allCalIds.length === 0) {
+      capacityCache.set(barberGhlId, { capacity: null, expiresAt: Date.now() + CAPACITY_CACHE_TTL });
+      return null;
+    }
+
+    // 3. Fetch calendar configs (slot duration) with delays to avoid rate limiting
+    const calConfigs = {};
+    for (const calId of allCalIds) {
+      const config = await retryWithBackoff(async () => {
+        const calResp = await httpClient.get(`/calendars/${calId}`);
+        const cal = calResp.data?.calendar || calResp.data;
+        return { slotDuration: cal.slotDuration || 30, slotInterval: cal.slotInterval || 30 };
+      }, 500);
+      calConfigs[calId] = config || { slotDuration: 30, slotInterval: 30 };
+    }
+
+    // Classify: HC = slotDuration <= 30, H+B = slotDuration > 30
+    const finalHcCalIds = [];
+    const finalHbCalIds = [];
+    for (const calId of allCalIds) {
+      if (calConfigs[calId].slotDuration > 30) {
+        finalHbCalIds.push(calId);
+      } else {
+        finalHcCalIds.push(calId);
+      }
+    }
+
+    // 4. Fetch recurring blocking events (breaks, block slots)
+    await new Promise((r) => setTimeout(r, 300));
+    const blocksByDay = await getRecurringBlocksByDay(httpClient, locationId, barberGhlId);
+
+    // 5. Compute capacity per day
+    const allDays = ["monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday"];
+    const dayCapacityMinutes = {};
+    let totalHcSlots = 0;
+    let totalHbExtra = 0;
+
+    for (const day of allDays) {
+      const dayBlocks = blocksByDay[day] || [];
+
+      // Generate HC start times (union of all HC calendars)
+      const hcStarts = new Set();
+      for (const calId of finalHcCalIds) {
+        const schedule = calSchedules[calId];
+        if (!schedule) continue;
+        const dayRule = (schedule.rules || []).find((r) => r.type === "wday" && r.day === day);
+        if (!dayRule) continue;
+
+        const slotInterval = calConfigs[calId]?.slotInterval || 30;
+        const slotDuration = calConfigs[calId]?.slotDuration || 30;
+        for (const iv of dayRule.intervals || []) {
+          const fromMin = parseTimeToMinutes(iv.from);
+          const toMin = parseTimeToMinutes(iv.to);
+          if (fromMin == null || toMin == null) continue;
+          for (let m = fromMin; m + slotDuration <= toMin; m += slotInterval) {
+            hcStarts.add(m);
+          }
+        }
+      }
+
+      // Remove HC starts blocked by events
+      const filteredHcStarts = new Set();
+      for (const st of hcStarts) {
+        if (!isBlockedSlot(st, 30, dayBlocks)) filteredHcStarts.add(st);
+      }
+
+      // HC minute bitmap
+      const hcMinBitmap = new Set();
+      for (const st of filteredHcStarts) {
+        for (let m = st; m < st + 30; m++) hcMinBitmap.add(m);
+      }
+
+      // H+B extra minutes (beyond HC grid)
+      const hbExtraMinutes = new Set();
+      for (const calId of finalHbCalIds) {
+        const schedule = calSchedules[calId];
+        if (!schedule) continue;
+        const dayRule = (schedule.rules || []).find((r) => r.type === "wday" && r.day === day);
+        if (!dayRule) continue;
+
+        const slotDuration = calConfigs[calId]?.slotDuration || 45;
+        const slotInterval = calConfigs[calId]?.slotInterval || 30;
+        for (const iv of dayRule.intervals || []) {
+          const fromMin = parseTimeToMinutes(iv.from);
+          const toMin = parseTimeToMinutes(iv.to);
+          if (fromMin == null || toMin == null) continue;
+          for (let st = fromMin; st + slotDuration <= toMin; st += slotInterval) {
+            if (isBlockedSlot(st, slotDuration, dayBlocks)) continue;
+            for (let m = st; m < st + slotDuration; m++) {
+              if (!hcMinBitmap.has(m)) hbExtraMinutes.add(m);
+            }
+          }
+        }
+      }
+
+      const dayMinutes = filteredHcStarts.size * 30 + hbExtraMinutes.size;
+      dayCapacityMinutes[day] = dayMinutes;
+      totalHcSlots += filteredHcStarts.size;
+      totalHbExtra += hbExtraMinutes.size;
+    }
+
+    const capacity = { dayCapacityMinutes, hcSlots: totalHcSlots, hbExtraMinutes: totalHbExtra };
+    capacityCache.set(barberGhlId, { capacity, expiresAt: Date.now() + CAPACITY_CACHE_TTL });
+
+    const totalMin = Object.values(dayCapacityMinutes).reduce((a, b) => a + b, 0);
+    console.log(
+      `[Capacity] ${barberGhlId}: ${totalHcSlots} HC slots (${round(totalHcSlots * 30 / 60, 1)}h) ` +
+      `+ ${totalHbExtra}min H+B extra = ${round(totalMin / 60, 1)}h/week`
+    );
+
+    return capacity;
   } catch (err) {
-    console.warn(`[Analytics] Failed to fetch GHL schedule for ${barberGhlId}:`, err.message);
-    scheduleCache.set(barberGhlId, { hours: null, expiresAt: Date.now() + SCHEDULE_CACHE_TTL });
+    console.warn(`[Capacity] Failed for ${barberGhlId}:`, err.message);
+    capacityCache.set(barberGhlId, { capacity: null, expiresAt: Date.now() + CAPACITY_CACHE_TTL });
     return null;
   }
+}
+
+/**
+ * Fetch recurring blocking events (breaks, block slots) from GHL Calendar Events API.
+ * Returns: { monday: [{fromMin, toMin}], ... }
+ *
+ * Uses Version 2021-04-15 header (required — 2021-07-28 returns empty).
+ */
+async function getRecurringBlocksByDay(httpClient, locationId, barberGhlId) {
+  // Fetch events for a reference week (one week ahead to get recurring patterns)
+  const now = new Date();
+  const nextMon = new Date(now);
+  nextMon.setDate(now.getDate() + ((8 - now.getDay()) % 7 || 7)); // next Monday
+  const nextSun = new Date(nextMon);
+  nextSun.setDate(nextMon.getDate() + 6);
+
+  const startMs = new Date(
+    nextMon.toLocaleDateString("en-CA", { timeZone: "America/Chicago" }) + "T00:00:00-05:00"
+  ).getTime();
+  const endMs = new Date(
+    nextSun.toLocaleDateString("en-CA", { timeZone: "America/Chicago" }) + "T23:59:59-05:00"
+  ).getTime();
+
+  try {
+    const result = await retryWithBackoff(async () => {
+      const resp = await httpClient.get(
+        `/calendars/events?locationId=${locationId}&startTime=${startMs}&endTime=${endMs}&userId=${barberGhlId}`,
+        { headers: { Version: "2021-04-15" } }
+      );
+      return resp.data?.events || [];
+    }, 500);
+    const events = result || [];
+    const recurring = events.filter((e) => e.isRecurring);
+
+    const blocksByDay = {};
+    for (const ev of recurring) {
+      const s = new Date(ev.startTime);
+      const e = new Date(ev.endTime);
+      const day = s
+        .toLocaleDateString("en-US", { weekday: "long", timeZone: "America/Chicago" })
+        .toLowerCase();
+      const chicagoStart = new Date(s.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      const chicagoEnd = new Date(e.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      const fromMin = chicagoStart.getHours() * 60 + chicagoStart.getMinutes();
+      const toMin = chicagoEnd.getHours() * 60 + chicagoEnd.getMinutes();
+
+      if (!blocksByDay[day]) blocksByDay[day] = [];
+      blocksByDay[day].push({ fromMin, toMin });
+    }
+
+    return blocksByDay;
+  } catch (err) {
+    console.warn(`[Capacity] Failed to fetch blocking events: ${err.message}`);
+    return {};
+  }
+}
+
+/** Check if a slot (startMin, duration) overlaps any blocking event. */
+function isBlockedSlot(startMin, duration, blocks) {
+  const endMin = startMin + duration;
+  for (const b of blocks) {
+    if (startMin < b.toMin && endMin > b.fromMin) return true;
+  }
+  return false;
 }
 
 /** Parse "HH:mm" to total minutes since midnight. Returns null on bad input. */
@@ -842,22 +1059,19 @@ function parseTimeToMinutes(timeStr) {
 }
 
 /**
- * Compute total available minutes from a GHL schedule over a date range.
- * @param {Object} scheduleHours - map of day name → minutes (e.g., { monday: 480 })
- * @param {string} startDateStr - YYYY-MM-DD
- * @param {string} endDateStr - YYYY-MM-DD
+ * Compute total available minutes over a date range using weekly capacity.
+ * Counts how many of each day-of-week fall in the range and multiplies.
  */
-function computeAvailableMinutesFromSchedule(scheduleHours, startDateStr, endDateStr) {
+function computeCapacityForPeriod(weeklyCapacity, startDateStr, endDateStr) {
   const dayNameMap = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   let totalMinutes = 0;
 
-  const current = new Date(startDateStr + "T12:00:00Z"); // noon to avoid DST issues
+  const current = new Date(startDateStr + "T12:00:00Z");
   const end = new Date(endDateStr + "T12:00:00Z");
 
   while (current <= end) {
     const dayName = dayNameMap[current.getUTCDay()];
-    const dayMinutes = scheduleHours[dayName] || 0;
-    totalMinutes += dayMinutes;
+    totalMinutes += weeklyCapacity.dayCapacityMinutes[dayName] || 0;
     current.setUTCDate(current.getUTCDate() + 1);
   }
 
@@ -886,7 +1100,7 @@ function computeAvailableMinutesFromAppointments(appointments) {
   for (const dateKey of Object.keys(dateSpans)) {
     const span = dateSpans[dateKey];
     const spanMinutes = (span.latest - span.earliest) / (1000 * 60);
-    totalMinutes += Math.max(spanMinutes, 240); // min 4 hours
+    totalMinutes += Math.max(spanMinutes, 240);
   }
   return totalMinutes;
 }
