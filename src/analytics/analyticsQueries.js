@@ -720,13 +720,35 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
     return _emptyUtilization(periodDays);
   }
 
-  // Find this barber's calendar IDs from kioskConfig
+  // Get ALL calendar IDs for this barber (public + F&F) from schedules.
+  // kioskConfig only has public-facing calendars, but F&F appointments use the same chair.
   const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
-  if (!barberConfig || !barberConfig.calendars) {
-    console.warn(`[ChairUtil] No calendar config for barber ${barberGhlId}`);
+  const kioskCalendarIds = barberConfig?.calendars ? Object.values(barberConfig.calendars) : [];
+
+  // Fetch all calendar IDs from the barber's schedules (includes F&F)
+  let calendarIds = [...kioskCalendarIds];
+  try {
+    const httpClient = ghlBarber.getHttpClient();
+    const schedResp = await httpClient.get(
+      `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
+    );
+    const schedules = schedResp.data?.schedules || [];
+    const schedCalIds = new Set();
+    for (const s of schedules) {
+      for (const calId of s.calendarIds || []) schedCalIds.add(calId);
+    }
+    // Merge: keep kioskConfig order, add any extra F&F calendars
+    for (const calId of schedCalIds) {
+      if (!calendarIds.includes(calId)) calendarIds.push(calId);
+    }
+  } catch (err) {
+    console.warn(`[ChairUtil] Schedule calendar lookup failed: ${err.message}`);
+  }
+
+  if (calendarIds.length === 0) {
+    console.warn(`[ChairUtil] No calendars found for barber ${barberGhlId}`);
     return _emptyUtilization(periodDays);
   }
-  const calendarIds = Object.values(barberConfig.calendars);
 
   // Determine date range (Central time)
   const centralNow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
@@ -894,7 +916,7 @@ async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds,
   const events = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, startMs, endMs);
 
   // 4. Calculate appointment minutes (exclude cancelled, exclude breaks/blocks)
-  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events);
+  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events, calendarIds);
 
   // 5. Compute
   const capacityMinutes = freeSlotMinutes + appointmentMinutes;
@@ -996,13 +1018,24 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     }
   }
 
-  // 2. Fetch calendar events for the period
-  const startMs = new Date(startDate + "T00:00:00-06:00").getTime();
-  const endMs = new Date(endDateStr + "T23:59:59-06:00").getTime();
-  const events = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, startMs, endMs);
+  // 2. Fetch appointments from Supabase (authoritative for past data, avoids
+  //    Calendar Events API double-counting issues with future/unsynced events)
+  const { data: appointments, error: apptError } = await supabase
+    .from("appointments")
+    .select("start_time, end_time, status")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", ALL_BOOKED_STATUSES)
+    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .lte("start_time", new Date(endDateStr + "T23:59:59Z").toISOString())
+    .order("start_time", { ascending: true });
 
-  // 3. Process events to get appointment minutes
-  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events);
+  if (apptError) {
+    console.warn(`[ChairUtil Historical] Appointment query failed: ${apptError.message}`);
+  }
+
+  // 3. Calculate appointment minutes from Supabase data
+  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processSupabaseAppointments(appointments || []);
 
   // 4. Generate slot grid from openHours for each day in the period
   let totalGridMinutes = 0;
@@ -1101,8 +1134,10 @@ async function _fetchCalendarEvents(httpClient, locationId, userId, startMs, end
 /**
  * Process calendar events: calculate appointment minutes and per-day breakdown.
  * Excludes cancelled appointments and non-appointment events (breaks, blocks).
+ * If calendarIds is provided, only counts appointments on those calendars.
  */
-function _processEvents(events) {
+function _processEvents(events, calendarIds = null) {
+  const calFilter = calendarIds ? new Set(calendarIds) : null;
   let appointmentMinutes = 0;
   let appointmentCount = 0;
   const byDay = {};
@@ -1120,6 +1155,9 @@ function _processEvents(events) {
     const status = (ev.appointmentStatus || "").toLowerCase();
     if (status === "cancelled") continue;
 
+    // Skip appointments on calendars not in our tracking set
+    if (calFilter && ev.calendarId && !calFilter.has(ev.calendarId)) continue;
+
     const start = new Date(ev.startTime);
     const end = new Date(ev.endTime);
     const durationMinutes = (end - start) / (1000 * 60);
@@ -1129,6 +1167,48 @@ function _processEvents(events) {
       appointmentCount++;
 
       // Central time day-of-week for byDayOfWeek
+      const centralDate = new Date(start.toLocaleString("en-US", { timeZone: "America/Chicago" }));
+      const dayName = dayNames[centralDate.getDay()];
+      const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(start);
+      if (!byDay[dayName]) byDay[dayName] = { bookedMinutes: 0, workedDates: new Set() };
+      byDay[dayName].bookedMinutes += durationMinutes;
+      byDay[dayName].workedDates.add(dateKey);
+    }
+  }
+
+  const byDayOfWeek = {};
+  for (const [dayName, data] of Object.entries(byDay)) {
+    const dayCount = data.workedDates.size;
+    byDayOfWeek[dayName] = {
+      avgBookedHours: dayCount > 0 ? round(data.bookedMinutes / dayCount / 60, 1) : 0,
+      daysWorked: dayCount,
+    };
+  }
+
+  return { appointmentMinutes, appointmentCount, byDayOfWeek };
+}
+
+/**
+ * Process Supabase appointment rows for historical utilization.
+ * Similar to _processEvents but works with Supabase appointment format.
+ */
+function _processSupabaseAppointments(appointments) {
+  let appointmentMinutes = 0;
+  let appointmentCount = 0;
+  const byDay = {};
+  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+  for (const appt of appointments) {
+    if (appt.status === "cancelled") continue;
+
+    const start = new Date(appt.start_time);
+    const end = new Date(appt.end_time);
+    const durationMinutes = (end - start) / (1000 * 60);
+
+    if (durationMinutes > 0 && durationMinutes < 480) {
+      appointmentMinutes += durationMinutes;
+      appointmentCount++;
+
       const centralDate = new Date(start.toLocaleString("en-US", { timeZone: "America/Chicago" }));
       const dayName = dayNames[centralDate.getDay()];
       const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(start);
