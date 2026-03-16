@@ -920,28 +920,79 @@ async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds,
 }
 
 /**
- * MODE 2 — Historical: Calendar Events + calendar openHours.
+ * MODE 2 — Historical: Calendar Events + calendar openHours/schedule rules.
  * Reconstructs capacity from calendar configuration for past periods
  * where Free Slots API is unavailable.
  *
- * Uses calendar openHours (NOT schedule rules) to generate the slot grid.
+ * Prefers calendar openHours; falls back to schedule rules if openHours is empty
+ * (some barbers configure availability via Schedules API instead of calendar openHours).
  */
 async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
   const httpClient = ghlBarber.getHttpClient();
 
   // 1. Fetch calendar configs → extract openHours, slotDuration, slotInterval
   const calConfigs = {};
+  let hasAnyOpenHours = false;
+
   for (const calId of calendarIds) {
     try {
       const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
       const cal = calResp?.calendar || calResp;
+      const rawOpenHours = cal?.openHours;
+      // openHours can be an array (populated) or {} (empty object) or undefined
+      const openHours = Array.isArray(rawOpenHours) && rawOpenHours.length > 0 ? rawOpenHours : null;
+      if (openHours) hasAnyOpenHours = true;
+
       calConfigs[calId] = {
-        openHours: cal?.openHours || [],
+        openHours,
         slotDuration: cal?.slotDuration || 30,
         slotInterval: cal?.slotInterval || 30,
       };
     } catch (err) {
       console.warn(`[ChairUtil Historical] Calendar config failed for ${calId}: ${err.message}`);
+    }
+  }
+
+  // 1b. If no calendar has openHours, fetch schedule rules as fallback
+  //     Schedule rules use day names ('monday') and HH:mm intervals.
+  if (!hasAnyOpenHours) {
+    try {
+      const schedResp = await httpClient.get(
+        `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
+      );
+      const schedules = schedResp.data?.schedules || [];
+
+      // Map calendarId → schedule rules, convert to openHours-like format
+      for (const sched of schedules) {
+        for (const calId of sched.calendarIds || []) {
+          if (!calConfigs[calId]) continue;
+          const rules = (sched.rules || []).filter(r => r.type === "wday");
+          if (rules.length === 0) continue;
+
+          // Convert schedule rules to openHours format
+          const dayNameToNum = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
+          const openHours = [];
+          for (const rule of rules) {
+            const dayNum = dayNameToNum[rule.day];
+            if (dayNum == null) continue;
+            const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
+            if (intervals.length === 0) continue;
+
+            const hours = intervals.map(iv => {
+              const [fh, fm] = iv.from.split(":").map(Number);
+              const [th, tm] = iv.to.split(":").map(Number);
+              return { openHour: fh, openMinute: fm, closeHour: th, closeMinute: tm };
+            });
+            openHours.push({ daysOfTheWeek: [dayNum], hours });
+          }
+
+          if (openHours.length > 0) {
+            calConfigs[calId].openHours = openHours;
+          }
+        }
+      }
+    } catch (err) {
+      console.warn(`[ChairUtil Historical] Schedule rules fetch failed: ${err.message}`);
     }
   }
 
@@ -954,24 +1005,22 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events);
 
   // 4. Generate slot grid from openHours for each day in the period
-  //    and subtract slots displaced by appointments
   let totalGridMinutes = 0;
   const current = new Date(startDate + "T12:00:00Z");
   const end = new Date(endDateStr + "T12:00:00Z");
-  const dayIndexMap = { 0: "sunday", 1: "monday", 2: "tuesday", 3: "wednesday", 4: "thursday", 5: "friday", 6: "saturday" };
 
   while (current <= end) {
-    const dayName = dayIndexMap[current.getUTCDay()];
-    const dateStr = current.toISOString().split("T")[0];
+    const dayNum = current.getUTCDay(); // 0=Sun, 1=Mon, ...
 
     // Union all slot start times across calendars for this day
     const daySlotStarts = new Set();
     let effectiveSlotDuration = 30; // will use the HC (shortest) duration
 
     for (const [calId, config] of Object.entries(calConfigs)) {
-      // openHours format: [{ daysOfTheWeek: [1,2,3], hours: [{ openHour: 9, openMinute: 0, closeHour: 17, closeMinute: 0 }] }]
-      const dayNum = current.getUTCDay(); // 0=Sun, 1=Mon, ...
-      const matchingRule = (config.openHours || []).find(oh =>
+      const openHours = config.openHours;
+      if (!openHours) continue;
+
+      const matchingRule = openHours.find(oh =>
         (oh.daysOfTheWeek || []).includes(dayNum)
       );
       if (!matchingRule) continue;
