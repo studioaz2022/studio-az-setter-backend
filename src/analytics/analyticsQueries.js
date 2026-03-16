@@ -733,13 +733,36 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asO
   const endDateStr = asOfDate || centralNow;
   const startDate = getStartDate(periodDays, asOfDate);
 
-  // Decide mode: if range includes today or future, use live Free Slots API
-  const isLive = !asOfDate || asOfDate >= centralNow;
+  // Decide mode based on whether the range includes today
+  const rangeIncludesToday = !asOfDate || asOfDate >= centralNow;
+  const rangeStartsBeforeToday = startDate < centralNow;
 
   try {
-    if (isLive) {
+    if (rangeIncludesToday && rangeStartsBeforeToday) {
+      // HYBRID: past days use historical (openHours), today uses live (free slots)
+      // Then merge the two results
+      const yesterday = new Date(centralNow + "T12:00:00Z");
+      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+      const yesterdayStr = yesterday.toISOString().split("T")[0];
+
+      const [historical, live] = await Promise.all([
+        startDate <= yesterdayStr
+          ? _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, yesterdayStr, periodDays)
+          : null,
+        _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, centralNow, endDateStr, periodDays),
+      ]);
+
+      if (!historical) {
+        return live; // range starts today — no past days
+      }
+
+      // Merge: sum the minutes, recalculate utilization
+      return _mergeUtilization(historical, live, periodDays);
+    } else if (rangeIncludesToday) {
+      // Range starts today or later — pure live mode
       return await _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays);
     } else {
+      // Entirely in the past — pure historical mode
       return await _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays);
     }
   } catch (err) {
@@ -756,6 +779,48 @@ function _emptyUtilization(periodDays) {
     mode: "unavailable",
     // Legacy fields for iOS diagnostics view
     bookedHours: 0, availableHours: 0, byDayOfWeek: {}, scheduleSource: "unavailable",
+  };
+}
+
+/** Merge historical + live utilization results into a single combined result. */
+function _mergeUtilization(historical, live, periodDays) {
+  const capacityMinutes = historical.capacityMinutes + live.capacityMinutes;
+  const utilizedMinutes = historical.utilizedMinutes + live.utilizedMinutes;
+  const freeSlotMinutes = historical.freeSlotMinutes + live.freeSlotMinutes;
+  const appointmentCount = historical.appointmentCount + live.appointmentCount;
+
+  const utilization = capacityMinutes > 0
+    ? round((utilizedMinutes / capacityMinutes) * 100, 1)
+    : null;
+
+  // Merge byDayOfWeek
+  const byDayOfWeek = { ...historical.byDayOfWeek };
+  for (const [day, data] of Object.entries(live.byDayOfWeek)) {
+    if (byDayOfWeek[day]) {
+      const totalMinutes = byDayOfWeek[day].avgBookedHours * byDayOfWeek[day].daysWorked * 60
+        + data.avgBookedHours * data.daysWorked * 60;
+      const totalDays = byDayOfWeek[day].daysWorked + data.daysWorked;
+      byDayOfWeek[day] = {
+        avgBookedHours: totalDays > 0 ? round(totalMinutes / totalDays / 60, 1) : 0,
+        daysWorked: totalDays,
+      };
+    } else {
+      byDayOfWeek[day] = data;
+    }
+  }
+
+  return {
+    utilization,
+    capacityMinutes,
+    utilizedMinutes,
+    freeSlotMinutes,
+    appointmentCount,
+    periodDays,
+    mode: "hybrid",
+    bookedHours: round(utilizedMinutes / 60, 1),
+    availableHours: round(capacityMinutes / 60, 1),
+    byDayOfWeek,
+    scheduleSource: "hybrid",
   };
 }
 
