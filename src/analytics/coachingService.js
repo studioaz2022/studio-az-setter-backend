@@ -368,7 +368,7 @@ function parseDetectedStage(response) {
  * Request coaching for a barber.
  * Main entry point — checks cooldown, gathers metrics, calls Claude, saves response.
  */
-async function requestCoaching(barberGhlId, locationId) {
+async function requestCoaching(barberGhlId, locationId, focusMetric, scorecardContext) {
   const resolvedLocationId = locationId || BARBER_LOCATION_ID;
 
   // 1. Check cooldown (bypass for test accounts)
@@ -399,10 +399,33 @@ async function requestCoaching(barberGhlId, locationId) {
   // 4. Build prompts
   const barberName = getBarberName(barberGhlId);
   const systemPrompt = buildSystemPrompt();
-  const userPrompt = buildUserPrompt(barberName, snapshot, trendHistory);
+  let userPrompt = buildUserPrompt(barberName, snapshot, trendHistory);
+
+  // Append scorecard context if provided (from Money Leak Scorecard → Ask the Coach flow)
+  if (focusMetric || scorecardContext) {
+    let focusAddendum = "\n\n[SCORECARD CONTEXT]\n";
+    if (focusMetric) {
+      focusAddendum += `The barber's current focus area from their Money Leak Scorecard is: ${focusMetric}.\n`;
+    }
+    if (scorecardContext) {
+      const sc = scorecardContext;
+      const parts = [];
+      if (sc.moneyOnFloor != null) parts.push(`$${Number(sc.moneyOnFloor).toFixed(0)} left on the floor`);
+      if (sc.rebookRate != null) parts.push(`non-regular rebook rate: ${Number(sc.rebookRate).toFixed(1)}%`);
+      if (sc.rebookGoal != null) parts.push(`capacity-based rebook goal: ${Number(sc.rebookGoal).toFixed(1)}%`);
+      if (sc.attemptRate != null) parts.push(`rebook attempt rate (booked next visit before leaving): ${Number(sc.attemptRate).toFixed(1)}%`);
+      if (sc.weeklyGoal != null) parts.push(`weekly income goal: $${Number(sc.weeklyGoal).toFixed(0)}`);
+      if (sc.currentPace != null) parts.push(`current weekly pace: $${Number(sc.currentPace).toFixed(0)}`);
+      if (parts.length > 0) {
+        focusAddendum += `Their scorecard shows: ${parts.join(", ")}.\n`;
+      }
+    }
+    focusAddendum += `Prioritize coaching around their focus area while still addressing any critical issues. Reference their specific scorecard numbers (money on the floor, rebook rate vs goal, attempt rate) in your advice.`;
+    userPrompt += focusAddendum;
+  }
 
   console.log(
-    `[AI Coach] Requesting coaching for ${barberName} (${barberGhlId})`
+    `[AI Coach] Requesting coaching for ${barberName} (${barberGhlId})${focusMetric ? ` [focus: ${focusMetric}]` : ""}`
   );
   console.log(
     `[AI Coach] Snapshot date: ${snapshot.snapshot_date}, trend months: ${trendHistory.length}`
@@ -463,17 +486,28 @@ async function requestCoaching(barberGhlId, locationId) {
     chair_utilization: snapshot.chair_utilization,
   };
 
+  const sessionRow = {
+    barber_ghl_id: barberGhlId,
+    location_id: resolvedLocationId,
+    metrics_snapshot: metricsSnapshot,
+    trend_history: trendHistory.length > 0 ? trendHistory : null,
+    coaching_response: coachingResponse,
+    detected_stage: detectedStage,
+    next_available_at: nextAvailableAt.toISOString(),
+  };
+
+  // Store scorecard context if it was provided (for audit / history)
+  if (focusMetric || scorecardContext) {
+    sessionRow.metrics_snapshot = {
+      ...metricsSnapshot,
+      focus_metric: focusMetric || null,
+      scorecard_context: scorecardContext || null,
+    };
+  }
+
   const { error: insertError } = await supabase
     .from("coaching_sessions")
-    .insert({
-      barber_ghl_id: barberGhlId,
-      location_id: resolvedLocationId,
-      metrics_snapshot: metricsSnapshot,
-      trend_history: trendHistory.length > 0 ? trendHistory : null,
-      coaching_response: coachingResponse,
-      detected_stage: detectedStage,
-      next_available_at: nextAvailableAt.toISOString(),
-    });
+    .insert(sessionRow);
 
   if (insertError) {
     console.error(

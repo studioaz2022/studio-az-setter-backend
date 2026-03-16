@@ -349,9 +349,12 @@ router.post("/:barberGhlId/analytics/coaching", async (req, res) => {
     const { barberGhlId } = req.params;
     const locationId = req.query.locationId || BARBER_LOCATION_ID;
 
-    console.log(`[Analytics] Coaching request for barber ${barberGhlId}`);
+    const focusMetric = req.body?.focusMetric || null;
+    const scorecardContext = req.body?.scorecardContext || null;
 
-    const result = await requestCoaching(barberGhlId, locationId);
+    console.log(`[Analytics] Coaching request for barber ${barberGhlId}${focusMetric ? ` [focus: ${focusMetric}]` : ""}`);
+
+    const result = await requestCoaching(barberGhlId, locationId, focusMetric, scorecardContext);
 
     if (!result.success && result.error === "cooldown_active") {
       return res.status(429).json(result);
