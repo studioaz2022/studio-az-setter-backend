@@ -937,24 +937,39 @@ async function getBarberWeeklyCapacity(barberGhlId, locationId) {
         for (let m = st; m < st + 30; m++) hcMinBitmap.add(m);
       }
 
-      // H+B extra minutes (beyond HC grid)
+      // H+B break padding minutes — ONLY count extra minutes that are
+      // adjacent to the HC grid (break paddings between HC blocks).
+      // H+B time that extends before/after the HC grid doesn't count as
+      // extra capacity — the barber is only available during HC hours,
+      // and break paddings are the only real extra time H+B can consume.
       const hbExtraMinutes = new Set();
-      for (const calId of finalHbCalIds) {
-        const schedule = calSchedules[calId];
-        if (!schedule) continue;
-        const dayRule = (schedule.rules || []).find((r) => r.type === "wday" && r.day === day);
-        if (!dayRule) continue;
+      if (hcMinBitmap.size > 0) {
+        const hcMin = Math.min(...hcMinBitmap);
+        const hcMax = Math.max(...hcMinBitmap);
 
-        const slotDuration = calConfigs[calId]?.slotDuration || 45;
-        const slotInterval = calConfigs[calId]?.slotInterval || 30;
-        for (const iv of dayRule.intervals || []) {
-          const fromMin = parseTimeToMinutes(iv.from);
-          const toMin = parseTimeToMinutes(iv.to);
-          if (fromMin == null || toMin == null) continue;
-          for (let st = fromMin; st + slotDuration <= toMin; st += slotInterval) {
-            if (isBlockedSlot(st, slotDuration, dayBlocks)) continue;
-            for (let m = st; m < st + slotDuration; m++) {
-              if (!hcMinBitmap.has(m)) hbExtraMinutes.add(m);
+        for (const calId of finalHbCalIds) {
+          const schedule = calSchedules[calId];
+          if (!schedule) continue;
+          const dayRule = (schedule.rules || []).find((r) => r.type === "wday" && r.day === day);
+          if (!dayRule) continue;
+
+          const slotDuration = calConfigs[calId]?.slotDuration || 45;
+          const slotInterval = calConfigs[calId]?.slotInterval || 30;
+          for (const iv of dayRule.intervals || []) {
+            const fromMin = parseTimeToMinutes(iv.from);
+            const toMin = parseTimeToMinutes(iv.to);
+            if (fromMin == null || toMin == null) continue;
+            for (let st = fromMin; st + slotDuration <= toMin; st += slotInterval) {
+              if (isBlockedSlot(st, slotDuration, dayBlocks)) continue;
+              for (let m = st; m < st + slotDuration; m++) {
+                // Only count minutes that are: (a) not already in the HC grid,
+                // AND (b) within the HC grid's span (between first and last HC minute).
+                // This restricts H+B extra to break paddings between HC blocks,
+                // excluding time before/after the barber's HC working hours.
+                if (!hcMinBitmap.has(m) && m >= hcMin && m <= hcMax + 1) {
+                  hbExtraMinutes.add(m);
+                }
+              }
             }
           }
         }
