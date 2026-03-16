@@ -218,6 +218,13 @@ async function handleAppointmentUpdated(payload) {
     }
   }
 
+  // Clear checked_in_at if appointment is cancelled or no-show
+  const isNoShow = status === 'noshow' || status === 'Noshow' || status === 'no_show';
+  if (isCancelled || isNoShow) {
+    appointment.checked_in_at = null;
+    console.log(`🔄 Clearing checked_in_at for ${isCancelled ? 'cancelled' : 'no-show'} appointment ${appointment.id}`);
+  }
+
   // --- Upsert (now includes reschedule fields if applicable) ---
   const { error } = await supabase
     .from('appointments')

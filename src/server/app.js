@@ -5906,7 +5906,28 @@ function createApp() {
         }
       }
 
-      // 3. Send push notification to barber/artist
+      // 3. Write checked_in_at to Supabase appointments table
+      if (matchedAppointmentId) {
+        try {
+          const { data: updated, error: checkinError } = await supabase
+            .from("appointments")
+            .update({ checked_in_at: new Date().toISOString() })
+            .eq("id", matchedAppointmentId)
+            .select("id");
+
+          if (checkinError) {
+            console.error("⚠️ [KIOSK] Supabase checked_in_at update error:", checkinError.message);
+          } else if (!updated || updated.length === 0) {
+            console.log(`⚠️ [KIOSK] Appointment ${matchedAppointmentId} not found in Supabase (GHL webhook may not have synced yet) — check-in continues`);
+          } else {
+            console.log(`✅ [KIOSK] Set checked_in_at on appointment ${matchedAppointmentId}`);
+          }
+        } catch (dbErr) {
+          console.error("⚠️ [KIOSK] Supabase checked_in_at write failed:", dbErr.message);
+        }
+      }
+
+      // 4. Send push notification to barber/artist
       const { data: profile, error: profileError } = await supabase
         .from("profiles")
         .select("id")
