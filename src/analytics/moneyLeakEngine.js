@@ -177,7 +177,7 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
     getChairUtilization(barberGhlId, locationId, 30),
   ]);
 
-  const newClientsThisMonth = activeClients.newClients || 0;
+  const recentNewClients = activeClients.newClients || 0;
   const currentRebookRate = rebooking.strict; // strict = default (includes pending)
   const chairUtilization = chairUtil.utilization;
   const goalRebookRate = getGoalRebookRate(chairUtilization);
@@ -191,7 +191,7 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
       lostRegulars: null,
       annualValuePerRegular: null,
       nonRegularCount: rebooking.nonRegularCount || 0,
-      newClientsThisMonth,
+      recentNewClients,
       currentRebookRate,
       goalRebookRate: Math.round(goalRebookRate * 10) / 10,
       conversionGap: null,
@@ -204,7 +204,7 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
   }
 
   const conversionGap = Math.max(0, goalRebookRate - currentRebookRate);
-  const lostRegulars = Math.round(newClientsThisMonth * (conversionGap / 100));
+  const lostRegulars = Math.round(recentNewClients * (conversionGap / 100));
   const visitsPerYear = Math.round((365 / avgFrequencyDays) * 10) / 10;
   const annualValuePerRegular = Math.round(avgRevenuePerVisit * visitsPerYear * 100) / 100;
   const totalAmount = Math.round(lostRegulars * annualValuePerRegular * 100) / 100;
@@ -214,7 +214,7 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
     lostRegulars,
     annualValuePerRegular,
     nonRegularCount: rebooking.nonRegularCount || 0,
-    newClientsThisMonth,
+    recentNewClients,
     currentRebookRate,
     goalRebookRate: Math.round(goalRebookRate * 10) / 10,
     conversionGap: Math.round(conversionGap * 10) / 10,
@@ -369,7 +369,7 @@ async function computeFullScorecard(barberGhlId, locationId) {
   return {
     moneyOnTheFloor,
 
-    newClientsThisMonth: moneyOnTheFloor.newClientsThisMonth,
+    recentNewClients: moneyOnTheFloor.recentNewClients,
 
     rebookRate: {
       current: moneyOnTheFloor.currentRebookRate,
