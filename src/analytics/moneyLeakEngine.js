@@ -8,9 +8,11 @@ const {
   getRebookingRate,
   getActiveClientCount,
   getAvgRevenuePerVisit,
+  getAvgTipPercentage,
   getVisitFrequencyDistribution,
   getChairUtilization,
 } = require("./analyticsQueries");
+const { getServicePriceMap } = require("../config/barberServicePrices");
 const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
 // Completed appointment statuses (mirrored from analyticsQueries)
@@ -279,10 +281,11 @@ async function computeWeeklyGoal(barberGhlId, locationId) {
 
 /**
  * Compute the current week's revenue pace.
- * Extrapolates based on days elapsed this week.
+ * Uses actual revenue earned so far PLUS projected revenue from upcoming
+ * booked appointments (calendar price × (1 + avg tip %)).
  */
 async function computeCurrentPace(barberGhlId, locationId) {
-  // Get Monday of the current week (Central time)
+  // Get Monday and Sunday of the current week (Central time)
   const now = new Date();
   const centralDateStr = new Intl.DateTimeFormat("en-CA", {
     timeZone: "America/Chicago",
@@ -295,11 +298,15 @@ async function computeCurrentPace(barberGhlId, locationId) {
   monday.setUTCDate(monday.getUTCDate() + diff);
   const mondayStr = monday.toISOString().split("T")[0];
 
+  const sunday = new Date(monday);
+  sunday.setUTCDate(monday.getUTCDate() + 6);
+  const sundayStr = sunday.toISOString().split("T")[0];
+
   // Days elapsed (1 = Monday, 7 = Sunday)
   const daysElapsed = day === 0 ? 7 : day;
 
-  // Get this week's revenue
-  const { data: transactions, error } = await supabase
+  // 1. Actual revenue earned this week (transactions already recorded)
+  const { data: transactions, error: txError } = await supabase
     .from("transactions")
     .select("gross_amount")
     .eq("artist_ghl_id", barberGhlId)
@@ -308,7 +315,7 @@ async function computeCurrentPace(barberGhlId, locationId) {
     .gte("session_date", mondayStr)
     .lte("session_date", centralDateStr);
 
-  if (error) throw new Error(`Current pace query failed: ${error.message}`);
+  if (txError) throw new Error(`Current pace query failed: ${txError.message}`);
 
   let currentWeekRevenue = 0;
   for (const t of (transactions || [])) {
@@ -316,15 +323,65 @@ async function computeCurrentPace(barberGhlId, locationId) {
   }
   currentWeekRevenue = Math.round(currentWeekRevenue * 100) / 100;
 
-  // Extrapolate: assume 5 work days per week (can refine with GHL schedule later)
-  const workDaysPerWeek = 5;
-  const pace = daysElapsed > 0
-    ? Math.round((currentWeekRevenue / Math.min(daysElapsed, workDaysPerWeek)) * workDaysPerWeek * 100) / 100
-    : null;
+  // 2. Upcoming booked appointments for the rest of this week
+  //    (tomorrow through Sunday, or today if no transactions yet)
+  const upcomingStartDate = centralDateStr; // include today's remaining appointments
+  const { data: upcomingAppts, error: apptError } = await supabase
+    .from("appointments")
+    .select("calendar_id, start_time")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", ["confirmed", "booked"])
+    .gt("start_time", centralDateStr + "T00:00:00Z")
+    .lte("start_time", sundayStr + "T23:59:59Z");
+
+  if (apptError) {
+    console.warn(`[Pace] Upcoming appointments query failed: ${apptError.message}`);
+  }
+
+  // 3. Look up service prices per calendar
+  const priceMap = await getServicePriceMap();
+
+  let projectedFromBookings = 0;
+  let bookedAppointmentCount = 0;
+  const unmatchedCalendars = new Set();
+
+  for (const appt of (upcomingAppts || [])) {
+    const price = priceMap.get(appt.calendar_id);
+    if (price != null) {
+      projectedFromBookings += price;
+      bookedAppointmentCount++;
+    } else if (appt.calendar_id) {
+      unmatchedCalendars.add(appt.calendar_id);
+    }
+  }
+
+  if (unmatchedCalendars.size > 0) {
+    console.warn(`[Pace] ${unmatchedCalendars.size} calendar(s) without prices: ${[...unmatchedCalendars].join(", ")}`);
+  }
+
+  // 4. Add avg tip % on top of projected service revenue
+  let tipMultiplier = 1;
+  try {
+    const tipData = await getAvgTipPercentage(barberGhlId, locationId, 90);
+    if (tipData.avgTipPercentage != null && tipData.avgTipPercentage > 0) {
+      tipMultiplier = 1 + (tipData.avgTipPercentage / 100);
+    }
+  } catch (err) {
+    console.warn(`[Pace] Tip percentage lookup failed: ${err.message}`);
+  }
+
+  projectedFromBookings = Math.round(projectedFromBookings * tipMultiplier * 100) / 100;
+
+  // 5. Projected weekly total = actual earned + projected from remaining bookings
+  const projectedRevenue = Math.round((currentWeekRevenue + projectedFromBookings) * 100) / 100;
 
   return {
-    pace,
+    pace: projectedRevenue,
     currentWeekRevenue,
+    projectedFromBookings,
+    bookedAppointmentCount,
+    tipMultiplier: Math.round(tipMultiplier * 1000) / 1000,
     daysElapsed,
   };
 }
@@ -365,7 +422,8 @@ async function computeFullScorecard(barberGhlId, locationId) {
       goal: null, bestWeekRevenue: null, bestWeekDate: null,
     }),
     safeCompute(() => computeCurrentPace(barberGhlId, locationId), {
-      pace: null, currentWeekRevenue: null, daysElapsed: null,
+      pace: null, currentWeekRevenue: null, projectedFromBookings: null,
+      bookedAppointmentCount: null, tipMultiplier: null, daysElapsed: null,
     }),
   ]);
 
@@ -405,6 +463,9 @@ async function computeFullScorecard(barberGhlId, locationId) {
       bestWeekRevenue: weeklyGoalData.bestWeekRevenue,
       bestWeekDate: weeklyGoalData.bestWeekDate,
       currentWeekRevenue: currentPaceData.currentWeekRevenue,
+      projectedFromBookings: currentPaceData.projectedFromBookings,
+      bookedAppointmentCount: currentPaceData.bookedAppointmentCount,
+      tipMultiplier: currentPaceData.tipMultiplier,
       daysElapsed: currentPaceData.daysElapsed,
     },
 
