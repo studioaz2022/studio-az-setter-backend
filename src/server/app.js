@@ -98,7 +98,7 @@ const {
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
 const analyticsRoutes = require("../analytics/analyticsRoutes");
-const { startSnapshotCron } = require("../analytics/snapshotCron");
+const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;
@@ -6723,6 +6723,9 @@ function createApp() {
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();
+
+  // ═══ MONDAY MONEY LEAK RITUAL CRON ═══
+  startMondayRitualCron();
 
   return app;
 }

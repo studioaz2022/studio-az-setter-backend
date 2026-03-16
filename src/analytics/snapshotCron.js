@@ -19,6 +19,8 @@ const {
   getChairUtilization,
 } = require("./analyticsQueries");
 const { runMonthlyRollup } = require("./monthlyRollup");
+const { computeFullScorecard } = require("./moneyLeakEngine");
+const apnsService = require("../services/apnsService");
 
 // Default period for flex-window metrics in the nightly snapshot
 const SNAPSHOT_PERIOD_DAYS = 30;
@@ -346,6 +348,212 @@ async function backfillSnapshots(startDate, endDate) {
   return results;
 }
 
+/**
+ * Get the Monday date string (YYYY-MM-DD) for a given date, in Central time.
+ */
+function getMondayStr(date = new Date()) {
+  const centralDateStr = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+  }).format(date); // "YYYY-MM-DD"
+
+  const today = new Date(centralDateStr + "T12:00:00Z");
+  const day = today.getUTCDay(); // 0=Sun, 1=Mon, ...
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(today);
+  monday.setUTCDate(monday.getUTCDate() + diff);
+  return monday.toISOString().split("T")[0];
+}
+
+/**
+ * Run the Monday Ritual for all barbers:
+ * 1. Compute full scorecard
+ * 2. Save to money_leak_scorecard table
+ * 3. Send push notification
+ */
+async function runMondayRitual() {
+  const startTime = Date.now();
+  const weekStart = getMondayStr();
+  console.log(`[Monday Ritual] Starting for week of ${weekStart}...`);
+
+  const results = { success: 0, failed: 0, pushSent: 0, pushFailed: 0, errors: [] };
+
+  for (const barber of BARBER_DATA) {
+    try {
+      // 1. Compute scorecard
+      const scorecard = await computeFullScorecard(barber.ghlUserId, BARBER_LOCATION_ID);
+
+      // 2. Save to money_leak_scorecard table
+      const moneyLeaked = scorecard.moneyOnTheFloor?.totalAmount;
+      const row = {
+        barber_ghl_id: barber.ghlUserId,
+        location_id: BARBER_LOCATION_ID,
+        week_start: weekStart,
+        total_money_leaked: moneyLeaked,
+        biggest_leak_name: "rebook_rate", // primary leak is always rebook rate for now
+        biggest_leak_amount: moneyLeaked,
+        focus_metric: "rebook_rate",
+        focus_current: scorecard.rebookRate?.current,
+        focus_goal: scorecard.rebookRate?.goal,
+        weekly_income_goal: scorecard.goalVsPace?.weeklyGoal,
+        weekly_income_pace: scorecard.goalVsPace?.currentPace,
+        goal_delta: scorecard.goalVsPace?.delta,
+        best_week_revenue: scorecard.goalVsPace?.bestWeekRevenue,
+        best_week_date: scorecard.goalVsPace?.bestWeekDate,
+        rebook_attempt_rate: scorecard.rebookAttemptRate?.rate,
+        scorecard_data: scorecard,
+        computed_at: new Date().toISOString(),
+      };
+
+      const { error: upsertErr } = await supabase
+        .from("money_leak_scorecard")
+        .upsert(row, { onConflict: "barber_ghl_id,location_id,week_start" });
+
+      if (upsertErr) {
+        throw new Error(`Scorecard upsert failed: ${upsertErr.message}`);
+      }
+
+      results.success++;
+      console.log(`[Monday Ritual] ✅ ${barber.name} scorecard saved`);
+
+      // 3. Send push notification
+      try {
+        // Look up Supabase profile by GHL user ID
+        const { data: profile, error: profileErr } = await supabase
+          .from("profiles")
+          .select("id")
+          .eq("ghl_user_id", barber.ghlUserId)
+          .single();
+
+        if (profileErr || !profile) {
+          console.warn(`[Monday Ritual] ⚠️ No profile for ${barber.name} (${barber.ghlUserId}) — skipping push`);
+          continue;
+        }
+
+        // Get active push tokens
+        const { data: tokens, error: tokenErr } = await supabase
+          .from("push_tokens")
+          .select("token")
+          .eq("user_id", profile.id)
+          .eq("is_active", true);
+
+        if (tokenErr || !tokens || tokens.length === 0) {
+          console.warn(`[Monday Ritual] ⚠️ No push tokens for ${barber.name} — skipping push`);
+          continue;
+        }
+
+        // Build notification
+        const moneyStr = moneyLeaked != null
+          ? `$${Math.round(moneyLeaked).toLocaleString()}`
+          : "Check your scorecard";
+        const rebookCurrent = scorecard.rebookRate?.current;
+        const rebookGoal = scorecard.rebookRate?.goal;
+
+        const notification = {
+          title: "Your Money Leak Report is ready.",
+          body: moneyLeaked != null
+            ? `You left ${moneyStr} on the floor this month. New client rebook: ${rebookCurrent != null ? Math.round(rebookCurrent) + "%" : "N/A"} → ${rebookGoal != null ? Math.round(rebookGoal) + "%" : "N/A"}.`
+            : "Your weekly scorecard is ready. Tap to see your numbers.",
+          type: "money_leak_scorecard",
+        };
+
+        for (const tokenRecord of tokens) {
+          try {
+            await apnsService.send(tokenRecord.token, notification, {
+              collapseId: `scorecard-${weekStart}`,
+            });
+            results.pushSent++;
+          } catch (pushErr) {
+            results.pushFailed++;
+            console.error(`[Monday Ritual] ❌ Push failed for ${barber.name}:`, pushErr.message);
+          }
+        }
+      } catch (pushErr) {
+        // Push failure shouldn't fail the whole barber
+        console.error(`[Monday Ritual] ⚠️ Push error for ${barber.name}:`, pushErr.message);
+      }
+    } catch (err) {
+      results.failed++;
+      results.errors.push({ barber: barber.name, error: err.message });
+      console.error(`[Monday Ritual] ❌ ${barber.name} failed:`, err.message);
+    }
+  }
+
+  const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+  console.log(
+    `[Monday Ritual] Completed in ${elapsed}s — ${results.success} scorecards, ` +
+    `${results.pushSent} pushes sent, ${results.failed} failed`
+  );
+
+  return results;
+}
+
+/**
+ * Start the Monday ritual cron schedule.
+ * Fires every Monday at 7:00 AM Central time.
+ */
+function startMondayRitualCron() {
+  function scheduleNext() {
+    const now = new Date();
+
+    // Get current Central time
+    const centralFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const parts = centralFormatter.formatToParts(now);
+    const getPart = (type) => parts.find(p => p.type === type)?.value;
+    const centralHour = parseInt(getPart("hour"), 10);
+    const centralMinute = parseInt(getPart("minute"), 10);
+
+    // Get current Central day of week (0=Sun, 1=Mon, ...)
+    const centralDayFormatter = new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/Chicago",
+      weekday: "short",
+    });
+    const centralDayStr = centralDayFormatter.format(now); // "Mon", "Tue", etc.
+    const dayMap = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+    const centralDay = dayMap[centralDayStr];
+
+    // Calculate minutes until next Monday 7:00 AM Central
+    const currentMinutes = centralHour * 60 + centralMinute;
+    const targetMinutes = 7 * 60; // 7:00 AM
+
+    let daysUntilMonday;
+    if (centralDay === 1 && currentMinutes < targetMinutes) {
+      // It's Monday and before 7 AM — fire today
+      daysUntilMonday = 0;
+    } else {
+      // Days until next Monday
+      daysUntilMonday = (8 - centralDay) % 7; // 8-currentDay mod 7
+      if (daysUntilMonday === 0) daysUntilMonday = 7; // already past Monday 7am → next week
+    }
+
+    const minutesUntilTarget = (daysUntilMonday * 24 * 60) + (targetMinutes - currentMinutes);
+    const msUntilNext = minutesUntilTarget * 60 * 1000;
+
+    const hoursUntil = (msUntilNext / 3600000).toFixed(1);
+    console.log(`[Monday Ritual] Next run in ${hoursUntil} hours (Monday 7:00 AM Central)`);
+
+    setTimeout(async () => {
+      try {
+        await runMondayRitual();
+      } catch (err) {
+        console.error("[Monday Ritual] Unhandled error:", err.message);
+      }
+      scheduleNext();
+    }, msUntilNext);
+  }
+
+  scheduleNext();
+  console.log("[Monday Ritual] Monday ritual cron initialized (7:00 AM Central, every Monday)");
+}
+
 module.exports = {
   runNightlySnapshot,
   computeShopAverages,
@@ -353,4 +561,6 @@ module.exports = {
   computeBarberSnapshot,
   checkAndBackfill,
   backfillSnapshots,
+  runMondayRitual,
+  startMondayRitualCron,
 };

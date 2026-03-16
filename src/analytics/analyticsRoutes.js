@@ -9,7 +9,7 @@ const {
   getCohortAnalysis,
   parsePeriod,
 } = require("./analyticsQueries");
-const { runNightlySnapshot, computeShopAverages, backfillSnapshots } = require("./snapshotCron");
+const { runNightlySnapshot, computeShopAverages, backfillSnapshots, runMondayRitual } = require("./snapshotCron");
 const { runMonthlyRollup, getMonthlyTrends } = require("./monthlyRollup");
 const {
   requestCoaching,
@@ -92,6 +92,27 @@ router.post("/analytics/snapshot", async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Manual snapshot error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/analytics/monday-ritual
+ *
+ * Manually trigger the Monday ritual (for testing or on-demand).
+ * Computes scorecards for all barbers, saves to DB, and sends push notifications.
+ */
+router.post("/analytics/monday-ritual", async (req, res) => {
+  try {
+    console.log("[Analytics] Manual Monday ritual triggered");
+    const results = await runMondayRitual();
+
+    res.json({
+      success: true,
+      ...results,
+    });
+  } catch (error) {
+    console.error("[Analytics] Manual Monday ritual error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
