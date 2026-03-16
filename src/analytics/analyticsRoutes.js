@@ -15,6 +15,7 @@ const {
   requestCoaching,
   getLatestCoachingSession,
 } = require("./coachingService");
+const { computeFullScorecard } = require("./moneyLeakEngine");
 const { backfillAppointments } = require("./appointmentBackfill");
 
 const router = express.Router();
@@ -306,6 +307,32 @@ router.get("/:barberGhlId/analytics/trends", async (req, res) => {
     res.json(response);
   } catch (error) {
     console.error(`[Analytics] Trends error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * GET /api/barbers/:barberGhlId/analytics/scorecard
+ *
+ * Returns the full Money Leak Scorecard: money on the floor, rebook rate,
+ * rebook attempt proxy, weekly goal vs pace.
+ */
+router.get("/:barberGhlId/analytics/scorecard", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    console.log(`[Analytics] Scorecard for barber ${barberGhlId}`);
+
+    const scorecard = await computeFullScorecard(barberGhlId, locationId);
+
+    res.json({
+      success: true,
+      barberGhlId,
+      ...scorecard,
+    });
+  } catch (error) {
+    console.error(`[Analytics] Scorecard error for ${req.params.barberGhlId}:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

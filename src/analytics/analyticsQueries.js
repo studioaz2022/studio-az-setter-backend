@@ -30,12 +30,13 @@ function getEvalWindow(serviceType) {
 }
 
 /**
- * 1.1 Rebooking Rate (Service-Type Aware)
+ * 1.1 Rebooking Rate (Non-Regulars Only, Rolling 90-Day Window)
  *
- * For each completed appointment, determine if the client returned to the same barber.
- * Uses service-type evaluation windows to classify clients as pending/rebooked/not rebooked.
+ * Only counts clients with < 3 lifetime appointments whose first visit
+ * was within the last 90 days. Regulars (3+ visits) are excluded —
+ * they're tracked by attrition rate.
  *
- * Returns: { strict, forgiving, total, rebooked, pending, notRebooked }
+ * Returns: { strict, forgiving, total, rebooked, pending, notRebooked, nonRegularCount }
  */
 async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
   // Get all completed appointments for this barber, joined with service type
@@ -49,7 +50,7 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
 
   if (error) throw new Error(`Rebooking query failed: ${error.message}`);
   if (!rawAppointments || rawAppointments.length === 0) {
-    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
+    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0, nonRegularCount: 0 };
   }
 
   // Filter out appointments after asOfDate for historical accuracy
@@ -57,12 +58,16 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
     ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
     : rawAppointments;
   if (appointments.length === 0) {
-    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
+    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0, nonRegularCount: 0 };
   }
 
   // Load service type mappings
   const serviceTypeMap = await getServiceTypeMap();
   const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+
+  // 90-day window cutoff — only consider contacts whose first visit is within this window
+  const ninetyDaysAgo = new Date(now);
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
 
   // Group appointments by contact_id, ordered by time
   const byContact = {};
@@ -78,10 +83,16 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
   // Per-service-type breakdown tracking
   const byServiceType = {};
 
-  // For each contact, look at their most recent appointment
-  // and determine if they should be counted as rebooked, pending, or not rebooked
   for (const contactId of Object.keys(byContact)) {
     const contactAppts = byContact[contactId];
+
+    // SKIP regulars — they're tracked by attrition rate
+    if (contactAppts.length >= 3) continue;
+
+    // Only include contacts whose first visit is within the 90-day window
+    const firstAppt = contactAppts[0];
+    if (new Date(firstAppt.start_time) < ninetyDaysAgo) continue;
+
     const lastAppt = contactAppts[contactAppts.length - 1];
     const serviceType = serviceTypeMap.get(lastAppt.calendar_id) || "haircut";
 
@@ -90,28 +101,22 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
       byServiceType[serviceType] = { rebooked: 0, pending: 0, notRebooked: 0 };
     }
 
-    if (contactAppts.length >= 2) {
-      // Client has returned at least once — rebooked
+    if (contactAppts.length === 2) {
+      // Came back once — rebooked
       rebooked++;
       byServiceType[serviceType].rebooked++;
-      continue;
-    }
-
-    // Single appointment — check if they're still within evaluation window
-    const evalWindow = getEvalWindow(serviceType);
-    const daysSince = daysBetween(new Date(lastAppt.start_time), now);
-
-    if (daysSince <= evalWindow) {
-      pending++;
-      byServiceType[serviceType].pending++;
-    } else if (daysSince <= evalWindow * 2) {
-      // Past evaluation window but within 2x — still pending for forgiving,
-      // not rebooked for strict
-      pending++;
-      byServiceType[serviceType].pending++;
     } else {
-      notRebooked++;
-      byServiceType[serviceType].notRebooked++;
+      // Single appointment — check eval window
+      const evalWindow = getEvalWindow(serviceType);
+      const daysSince = daysBetween(new Date(lastAppt.start_time), now);
+
+      if (daysSince <= evalWindow * 2) {
+        pending++;
+        byServiceType[serviceType].pending++;
+      } else {
+        notRebooked++;
+        byServiceType[serviceType].notRebooked++;
+      }
     }
   }
 
@@ -135,84 +140,11 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
     };
   }
 
-  return { strict, forgiving, total, rebooked, pending, notRebooked, serviceTypeBreakdown };
+  return { strict, forgiving, total, rebooked, pending, notRebooked, nonRegularCount: total, serviceTypeBreakdown };
 }
 
 /**
- * 1.2 First-Visit Rebooking Rate (Service-Type Aware)
- *
- * Of clients whose first-ever appointment with this barber was completed,
- * what % came back for a second visit?
- *
- * Returns: { strict, forgiving, total, rebooked, pending, notRebooked }
- */
-async function getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate = null) {
-  const { data: rawAppointments, error } = await fetchAllRows(supabase
-    .from("appointments")
-    .select("id, contact_id, calendar_id, start_time, status")
-    .eq("assigned_user_id", barberGhlId)
-    .eq("location_id", locationId)
-    .in("status", COMPLETED_STATUSES)
-    .order("start_time", { ascending: true }));
-
-  if (error) throw new Error(`First-visit rebooking query failed: ${error.message}`);
-  if (!rawAppointments || rawAppointments.length === 0) {
-    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
-  }
-
-  // Filter out appointments after asOfDate for historical accuracy
-  const appointments = asOfDate
-    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
-    : rawAppointments;
-  if (appointments.length === 0) {
-    return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0 };
-  }
-
-  const serviceTypeMap = await getServiceTypeMap();
-  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
-
-  // Group by contact
-  const byContact = {};
-  for (const appt of appointments) {
-    if (!byContact[appt.contact_id]) byContact[appt.contact_id] = [];
-    byContact[appt.contact_id].push(appt);
-  }
-
-  let rebooked = 0;
-  let pending = 0;
-  let notRebooked = 0;
-
-  for (const contactId of Object.keys(byContact)) {
-    const contactAppts = byContact[contactId];
-    const firstAppt = contactAppts[0];
-
-    if (contactAppts.length >= 2) {
-      rebooked++;
-      continue;
-    }
-
-    // Single appointment — classify based on evaluation window of the first visit
-    const serviceType = serviceTypeMap.get(firstAppt.calendar_id) || "haircut";
-    const evalWindow = getEvalWindow(serviceType);
-    const daysSince = daysBetween(new Date(firstAppt.start_time), now);
-
-    if (daysSince <= evalWindow * 2) {
-      pending++;
-    } else {
-      notRebooked++;
-    }
-  }
-
-  const total = rebooked + pending + notRebooked;
-  const strict = total > 0 ? round((rebooked / total) * 100, 1) : null;
-  const forgivingDenom = rebooked + notRebooked;
-  const forgiving = forgivingDenom > 0 ? round((rebooked / forgivingDenom) * 100, 1) : null;
-
-  return { strict, forgiving, total, rebooked, pending, notRebooked };
-}
-
-/**
- * 1.3 Active Client Count (with New vs. Returning Breakdown)
+ * 1.2 Active Client Count (with New vs. Returning Breakdown)
  *
  * Unique clients with at least one completed appointment in the last 60 days.
  * - New: first-ever appointment with this barber is within the 60-day window
@@ -1085,7 +1017,6 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
 
   const [
     rebooking,
-    firstVisitRebooking,
     activeClients,
     regulars,
     avgRevenue,
@@ -1099,7 +1030,6 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
     prevCancellation,
   ] = await Promise.all([
     getRebookingRate(barberGhlId, locationId),
-    getFirstVisitRebookingRate(barberGhlId, locationId),
     getActiveClientCount(barberGhlId, locationId),
     getRegularsCount(barberGhlId, locationId),
     getAvgRevenuePerVisit(barberGhlId, locationId, periodDays),
@@ -1115,7 +1045,6 @@ async function getHealthCheck(barberGhlId, locationId, periodDays = 30) {
 
   return {
     rebookingRate: rebooking,
-    firstVisitRebookingRate: firstVisitRebooking,
     activeClients,
     regulars,
     avgRevenuePerVisit: avgRevenue,
@@ -1552,7 +1481,6 @@ function computeCohortTrend(cohorts) {
 module.exports = {
   // Tier 1
   getRebookingRate,
-  getFirstVisitRebookingRate,
   getActiveClientCount,
   getRegularsCount,
   getAvgRevenuePerVisit,

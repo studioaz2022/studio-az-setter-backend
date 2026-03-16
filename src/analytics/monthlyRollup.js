@@ -15,7 +15,6 @@ const MIN_BARBERS_FOR_SHOP_AVG = 3;
 // The 6 peer-benchmarking metrics that get shop averages
 const SHOP_AVG_METRICS = [
   "rebooking_rate_forgiving",
-  "first_visit_rebooking_forgiving",
   "no_show_rate",
   "cancellation_rate",
   "avg_tip_percentage",
@@ -79,8 +78,8 @@ async function computeBarberMonthlyRollup(barberGhlId, locationId, monthStart, m
     // Rates — AVG of daily snapshots
     rebooking_rate_strict: avg("rebooking_rate_strict"),
     rebooking_rate_forgiving: avg("rebooking_rate_forgiving"),
-    first_visit_rebooking_strict: avg("first_visit_rebooking_strict"),
-    first_visit_rebooking_forgiving: avg("first_visit_rebooking_forgiving"),
+    first_visit_rebooking_strict: null,
+    first_visit_rebooking_forgiving: null,
     avg_revenue_per_visit: avg("avg_revenue_per_visit"),
     avg_tip_percentage: avg("avg_tip_percentage"),
     no_show_rate: avg("no_show_rate"),
@@ -133,7 +132,7 @@ function computeShopAverageMonthly(barberRollups, locationId, monthStart) {
     rebooking_rate_strict: null,
     rebooking_rate_forgiving: avgMetric("rebooking_rate_forgiving"),
     first_visit_rebooking_strict: null,
-    first_visit_rebooking_forgiving: avgMetric("first_visit_rebooking_forgiving"),
+    first_visit_rebooking_forgiving: null,
     avg_revenue_per_visit: null,
     avg_tip_percentage: avgMetric("avg_tip_percentage"),
     no_show_rate: avgMetric("no_show_rate"),

@@ -8,7 +8,6 @@ const { supabase } = require("../clients/supabaseClient");
 const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
 const {
   getRebookingRate,
-  getFirstVisitRebookingRate,
   getActiveClientCount,
   getRegularsCount,
   getAvgRevenuePerVisit,
@@ -47,7 +46,6 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
 
   const [
     rebooking,
-    firstVisitRebooking,
     activeClients,
     regulars,
     avgRevenue,
@@ -59,7 +57,6 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     chairUtil,
   ] = await Promise.all([
     getRebookingRate(barberGhlId, locationId, asOfDate),
-    getFirstVisitRebookingRate(barberGhlId, locationId, asOfDate),
     getActiveClientCount(barberGhlId, locationId, asOfDate),
     getRegularsCount(barberGhlId, locationId, asOfDate),
     getAvgRevenuePerVisit(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, endDateForQuery, periodStartDate),
@@ -79,8 +76,8 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     // Tier 1
     rebooking_rate_strict: rebooking.strict,
     rebooking_rate_forgiving: rebooking.forgiving,
-    first_visit_rebooking_strict: firstVisitRebooking.strict,
-    first_visit_rebooking_forgiving: firstVisitRebooking.forgiving,
+    first_visit_rebooking_strict: null,
+    first_visit_rebooking_forgiving: null,
     active_client_count: activeClients.total,
     active_new_count: activeClients.newClients,
     active_returning_count: activeClients.returningClients,
@@ -189,7 +186,7 @@ async function checkAndBackfill() {
 async function computeShopAverages(locationId, snapshotDate) {
   const { data: snapshots, error } = await supabase
     .from("barber_analytics_snapshots")
-    .select("rebooking_rate_forgiving, first_visit_rebooking_forgiving, no_show_rate, cancellation_rate, avg_tip_percentage, chair_utilization")
+    .select("rebooking_rate_forgiving, no_show_rate, cancellation_rate, avg_tip_percentage, chair_utilization")
     .eq("location_id", locationId)
     .eq("snapshot_date", snapshotDate);
 
@@ -211,7 +208,6 @@ async function computeShopAverages(locationId, snapshotDate) {
 
   return {
     rebookingForgiving: avg(snapshots.map(s => s.rebooking_rate_forgiving)),
-    firstVisitRebooking: avg(snapshots.map(s => s.first_visit_rebooking_forgiving)),
     noShowRate: avg(snapshots.map(s => s.no_show_rate)),
     cancellationRate: avg(snapshots.map(s => s.cancellation_rate)),
     avgTipPercentage: avg(snapshots.map(s => s.avg_tip_percentage)),
