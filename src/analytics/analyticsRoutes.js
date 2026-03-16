@@ -17,6 +17,7 @@ const {
 } = require("./coachingService");
 const { computeFullScorecard } = require("./moneyLeakEngine");
 const { backfillAppointments } = require("./appointmentBackfill");
+const { backfillCreatedAtForBarber } = require("./backfillCreatedAt");
 
 const router = express.Router();
 
@@ -223,6 +224,48 @@ router.post("/analytics/backfill-appointments", async (req, res) => {
     });
   } catch (error) {
     console.error("[Analytics] Appointment backfill error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * POST /api/barbers/analytics/backfill-created-at
+ *
+ * Backfill ghl_created_at for appointments with null values.
+ * Fetches each appointment individually from GHL to get the real dateAdded.
+ * Runs async (responds immediately, check server logs).
+ *
+ * Query params:
+ *   ?barberGhlId=1kFG5FWdUDhXLUX46snG  — required
+ */
+router.post("/analytics/backfill-created-at", async (req, res) => {
+  try {
+    const barberGhlId = req.query.barberGhlId;
+    if (!barberGhlId) {
+      return res.status(400).json({
+        success: false,
+        error: "Missing required ?barberGhlId= parameter",
+      });
+    }
+
+    console.log(`[Analytics] Created-at backfill triggered for barber ${barberGhlId}`);
+
+    // Run async — individual API calls take a while
+    backfillCreatedAtForBarber(barberGhlId)
+      .then((results) => {
+        console.log("[Analytics] Created-at backfill complete:", JSON.stringify(results));
+      })
+      .catch((err) => {
+        console.error("[Analytics] Created-at backfill failed:", err.message);
+      });
+
+    res.json({
+      success: true,
+      async: true,
+      message: `Created-at backfill started for barber ${barberGhlId}. Check server logs for progress.`,
+    });
+  } catch (error) {
+    console.error("[Analytics] Created-at backfill error:", error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });
