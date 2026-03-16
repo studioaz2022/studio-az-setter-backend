@@ -3777,6 +3777,38 @@ function createApp() {
     }
   });
 
+  // DELETE /api/transactions/:id
+  // Delete a manually-created transaction (cash/venmo/zelle recorded from the app).
+  app.delete("/api/transactions/:id", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const { supabase } = require("../clients/supabaseClient");
+
+      // Fetch the transaction to verify it exists and is a manual type
+      const { data: tx, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("id, payment_method, square_payment_id")
+        .eq("id", id)
+        .maybeSingle();
+
+      if (fetchErr) throw new Error(fetchErr.message);
+      if (!tx) return res.status(404).json({ success: false, error: "Transaction not found" });
+
+      const { error: deleteErr } = await supabase
+        .from("transactions")
+        .delete()
+        .eq("id", id);
+
+      if (deleteErr) throw new Error(deleteErr.message);
+
+      console.log(`[API] Deleted transaction ${id} (method: ${tx.payment_method})`);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[API] Error deleting transaction:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // PATCH /api/transactions/:id/split
   // Adjust the service/tip split on an already-confirmed transaction.
   // Body: { serviceCents: number, tipCents: number }
