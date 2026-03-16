@@ -27,18 +27,20 @@ async function backfillCreatedAtForBarber(barberGhlId) {
   console.log(`[CreatedAt Backfill] Starting for barber ${barberGhlId}...`);
 
   // 1. Find all appointments with null ghl_created_at for this barber
-  const appointments = await fetchAllRows("appointments", (query) =>
-    query
-      .select("id")
-      .eq("assigned_user_id", barberGhlId)
-      .eq("location_id", BARBER_LOCATION_ID)
-      .is("ghl_created_at", null)
-      .order("start_time", { ascending: true })
-  );
+  const { data: appointments, error } = await fetchAllRows(supabase
+    .from("appointments")
+    .select("id")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", BARBER_LOCATION_ID)
+    .is("ghl_created_at", null)
+    .order("start_time", { ascending: true }));
 
-  console.log(`[CreatedAt Backfill] Found ${appointments.length} appointments with null ghl_created_at`);
+  if (error) throw new Error(`Query for null ghl_created_at failed: ${error.message}`);
 
-  if (appointments.length === 0) {
+  const count = (appointments || []).length;
+  console.log(`[CreatedAt Backfill] Found ${count} appointments with null ghl_created_at`);
+
+  if (count === 0) {
     return { total: 0, updated: 0, notFound: 0, errors: 0 };
   }
 
@@ -46,7 +48,7 @@ async function backfillCreatedAtForBarber(barberGhlId) {
   let notFound = 0;
   let errors = 0;
 
-  for (let i = 0; i < appointments.length; i++) {
+  for (let i = 0; i < count; i++) {
     const appt = appointments[i];
 
     try {
@@ -91,7 +93,7 @@ async function backfillCreatedAtForBarber(barberGhlId) {
 
     // Progress log every 50 appointments
     if ((i + 1) % 50 === 0) {
-      console.log(`[CreatedAt Backfill] Progress: ${i + 1}/${appointments.length} (${updated} updated, ${notFound} not found, ${errors} errors)`);
+      console.log(`[CreatedAt Backfill] Progress: ${i + 1}/${count} (${updated} updated, ${notFound} not found, ${errors} errors)`);
     }
 
     // Rate limit
@@ -99,7 +101,7 @@ async function backfillCreatedAtForBarber(barberGhlId) {
   }
 
   const summary = {
-    total: appointments.length,
+    total: count,
     updated,
     notFound,
     errors,

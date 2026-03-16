@@ -44,6 +44,8 @@ function getGoalRebookRate(utilizationPct) {
  *   - didNotBookAndLost: didn't book and didn't return (THE LEAK)
  */
 async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90) {
+  const ATTRIBUTION_DAYS = 1; // next appointment must be CREATED within 1 day of the visit
+
   const startDate = new Date();
   startDate.setDate(startDate.getDate() - periodDays);
   const startDateStr = startDate.toISOString().split("T")[0];
@@ -67,7 +69,7 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
     };
   }
 
-  // Also get ALL appointments (including future/pending) to check for bookings created same day
+  // Also get ALL appointments (including future/pending) to check for bookings
   const { data: allBookings, error: bookErr } = await fetchAllRows(supabase
     .from("appointments")
     .select("id, contact_id, start_time, created_at, ghl_created_at")
@@ -97,17 +99,20 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
   let didNotBookAndLost = 0;
 
   for (const appt of periodAppointments) {
-    if (!appt.start_time || !appt.contact_id) continue; // skip bad data
-    const apptDate = appt.start_time.substring(0, 10); // "YYYY-MM-DD"
+    if (!appt.start_time || !appt.contact_id) continue;
+    const apptTime = new Date(appt.start_time).getTime();
+    const attributionWindow = ATTRIBUTION_DAYS * 24 * 60 * 60 * 1000; // ms
     const contactBookings = bookingsByContact[appt.contact_id] || [];
 
-    // Check if a future appointment was created on the same day as this appointment.
-    // Use created_at first, fall back to ghl_created_at (GHL's dateAdded).
-    const bookedSameDay = contactBookings.some(b => {
-      if (b.start_time <= appt.start_time) return false;
+    // Check if a future appointment was CREATED within the attribution window
+    // after this visit. "Created" = when the booking was made, not when the
+    // appointment is scheduled for.
+    const bookedWithinWindow = contactBookings.some(b => {
+      if (b.start_time <= appt.start_time) return false; // must be a future appointment
       const creationDate = b.created_at || b.ghl_created_at;
       if (!creationDate) return false;
-      return creationDate.substring(0, 10) === apptDate;
+      const createdTime = new Date(creationDate).getTime();
+      return createdTime >= apptTime && createdTime <= apptTime + attributionWindow;
     });
 
     // Check if the client has any subsequent COMPLETED appointment
@@ -115,7 +120,7 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
       a => a.contact_id === appt.contact_id && a.start_time > appt.start_time
     );
 
-    if (bookedSameDay) {
+    if (bookedWithinWindow) {
       bookedNextVisit++;
       if (hasReturned) {
         bookedAndReturned++;
