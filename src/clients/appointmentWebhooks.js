@@ -33,6 +33,8 @@ async function handleAppointmentCreated(payload) {
   // Set original times once at creation — never overwritten on reschedule
   appointment.original_start_time = appointment.start_time;
   appointment.original_end_time = appointment.end_time;
+  // Record when the appointment was created (for rebook attempt proxy)
+  appointment.created_at = new Date().toISOString();
 
   const { error } = await supabase
     .from('appointments')

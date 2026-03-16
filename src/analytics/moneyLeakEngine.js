@@ -49,7 +49,7 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
   // Get all completed appointments for this barber (need full history for "returned" check)
   const { data: allAppointments, error } = await fetchAllRows(supabase
     .from("appointments")
-    .select("id, contact_id, start_time, status, created_at")
+    .select("id, contact_id, start_time, status, created_at, ghl_created_at")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
@@ -68,7 +68,7 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
   // Also get ALL appointments (including future/pending) to check for bookings created same day
   const { data: allBookings, error: bookErr } = await fetchAllRows(supabase
     .from("appointments")
-    .select("id, contact_id, start_time, created_at")
+    .select("id, contact_id, start_time, created_at, ghl_created_at")
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .order("start_time", { ascending: true }));
@@ -95,31 +95,18 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
   let didNotBookAndLost = 0;
 
   for (const appt of periodAppointments) {
+    if (!appt.start_time || !appt.contact_id) continue; // skip bad data
     const apptDate = appt.start_time.substring(0, 10); // "YYYY-MM-DD"
     const contactBookings = bookingsByContact[appt.contact_id] || [];
 
-    // Check if a future appointment was created on the same day as this appointment
-    const hasCreatedAt = contactBookings.some(b => b.created_at);
-    let bookedSameDay = false;
-
-    if (hasCreatedAt) {
-      // Use created_at to check if a future booking was made the same day
-      bookedSameDay = contactBookings.some(b =>
-        b.start_time > appt.start_time &&
-        b.created_at &&
-        b.created_at.substring(0, 10) === apptDate
-      );
-    } else {
-      // Fallback: check if any future appointment exists within 1 day of this one
-      // (less accurate but works when created_at is missing)
-      bookedSameDay = contactBookings.some(b =>
-        b.start_time > appt.start_time &&
-        b.id !== appt.id
-      );
-      // Without created_at, we can't distinguish "booked same day" from "booked later"
-      // So we skip the attempt rate and just check if they returned
-      bookedSameDay = false; // conservative: mark as not booked
-    }
+    // Check if a future appointment was created on the same day as this appointment.
+    // Use created_at first, fall back to ghl_created_at (GHL's dateAdded).
+    const bookedSameDay = contactBookings.some(b => {
+      if (b.start_time <= appt.start_time) return false;
+      const creationDate = b.created_at || b.ghl_created_at;
+      if (!creationDate) return false;
+      return creationDate.substring(0, 10) === apptDate;
+    });
 
     // Check if the client has any subsequent COMPLETED appointment
     const hasReturned = allAppointments.some(
@@ -347,16 +334,39 @@ async function computeCurrentPace(barberGhlId, locationId) {
  * Aggregates all sub-computations into a single response.
  */
 async function computeFullScorecard(barberGhlId, locationId) {
+  // Run sub-computations in parallel; isolate failures so one broken metric
+  // doesn't take down the whole scorecard.
+  const safeCompute = async (fn, fallback) => {
+    try { return await fn(); } catch (err) {
+      console.error(`⚠️ Scorecard sub-computation failed: ${err.message}`);
+      return fallback;
+    }
+  };
+
   const [
     moneyOnTheFloor,
     rebookAttempt,
     weeklyGoalData,
     currentPaceData,
   ] = await Promise.all([
-    computeMoneyOnTheFloor(barberGhlId, locationId),
-    computeRebookAttemptRate(barberGhlId, locationId, 90),
-    computeWeeklyGoal(barberGhlId, locationId),
-    computeCurrentPace(barberGhlId, locationId),
+    safeCompute(() => computeMoneyOnTheFloor(barberGhlId, locationId), {
+      totalAmount: null, lostRegulars: null, annualValuePerRegular: null,
+      nonRegularCount: 0, recentNewClients: 0, currentRebookRate: null,
+      goalRebookRate: 55, conversionGap: null, avgRevenuePerVisit: null,
+      avgFrequencyDays: null, visitsPerYear: null, chairUtilization: null,
+      insufficientData: true,
+    }),
+    safeCompute(() => computeRebookAttemptRate(barberGhlId, locationId, 90), {
+      attemptRate: null, totalCompleted: 0, bookedNextVisit: 0, didNotBook: 0,
+      bookedAndReturned: 0, bookedAndDidNotReturn: 0,
+      didNotBookAndReturned: 0, didNotBookAndLost: 0,
+    }),
+    safeCompute(() => computeWeeklyGoal(barberGhlId, locationId), {
+      goal: null, bestWeekRevenue: null, bestWeekDate: null,
+    }),
+    safeCompute(() => computeCurrentPace(barberGhlId, locationId), {
+      pace: null, currentWeekRevenue: null, daysElapsed: null,
+    }),
   ]);
 
   // Goal vs Pace
