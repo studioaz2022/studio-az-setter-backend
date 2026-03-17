@@ -969,6 +969,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   const { BARBER_DATA } = require("../config/kioskConfig");
   const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
 
+  // Primary service types that define the capacity grid. Beard trims are minor
+  // add-ons — their short durations/intervals distort dead space and break cost.
+  const PRIMARY_CALENDAR_TYPES = new Set(["haircut", "haircut_beard", "hot_towel_shave"]);
+
   // ── 1. Fetch ALL schedule rules and compute union envelope per day ──
   // Each barber has multiple calendars (HC, H+B, BT, F&F) with potentially
   // different start/end times. The capacity envelope for each day is the
@@ -1045,7 +1049,6 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   // capacity grid. Beard trims are minor add-ons — their short durations/intervals
   // would artificially shrink minBookable and distort dead space detection.
   // We still fetch ALL calendar configs for per-appointment break reclaim math.
-  const PRIMARY_CALENDAR_TYPES = new Set(["haircut", "haircut_beard", "hot_towel_shave"]);
   const calendarSlotConfig = {};  // ALL calendars (for break reclaim)
   const primaryCalIds = new Set(); // only primary services (for capacity grid)
 
