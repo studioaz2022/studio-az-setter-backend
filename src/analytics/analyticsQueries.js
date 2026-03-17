@@ -969,9 +969,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   const { BARBER_DATA } = require("../config/kioskConfig");
   const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
 
-  // ── 1. Fetch schedule rules to determine working hours per day ──
-  // Use the "Work Hours" schedule (calendarIds: []) as the capacity envelope.
-  // Fall back to a calendar-linked schedule if Work Hours doesn't exist.
+  // ── 1. Fetch ALL schedule rules and compute union envelope per day ──
+  // Each barber has multiple calendars (HC, H+B, BT, F&F) with potentially
+  // different start/end times. The capacity envelope for each day is the
+  // union of all calendar schedules — earliest start to latest end.
   let scheduleRules = null; // { dayName → [{ from: "HH:mm", to: "HH:mm" }] }
   try {
     const schedResp = await httpClient.get(
@@ -979,23 +980,55 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     );
     const schedules = schedResp.data?.schedules || [];
 
-    let gridSchedule = schedules.find(s =>
-      (s.calendarIds || []).length === 0 && (s.rules || []).some(r => r.type === "wday" && r.intervals?.length > 0)
-    );
-    if (!gridSchedule) {
-      const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
-      gridSchedule = schedules.find(s => (s.calendarIds || []).includes(gridCalId));
+    // Collect intervals per day from Work Hours + haircut calendar schedules only.
+    // H+B schedules have fragmented windows (slots between breaks) that would
+    // inflate the envelope. Haircut calendars have continuous windows that
+    // represent the actual bookable chair time.
+    const hcCalIds = new Set();
+    if (barberConfig?.calendars) {
+      // Include haircut and beard_trim calendars (continuous schedules), not H+B
+      for (const [type, calId] of Object.entries(barberConfig.calendars)) {
+        if (type !== "haircut_beard") hcCalIds.add(calId);
+      }
     }
 
-    if (gridSchedule) {
-      scheduleRules = {};
-      for (const rule of (gridSchedule.rules || [])) {
+    const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
+    for (const sched of schedules) {
+      // Include Work Hours (no calendarIds) and haircut/beard_trim calendar schedules
+      const isWorkHours = (sched.calendarIds || []).length === 0;
+      const isHcSchedule = (sched.calendarIds || []).some(id => hcCalIds.has(id));
+      if (!isWorkHours && !isHcSchedule) continue;
+
+      for (const rule of (sched.rules || [])) {
         if (rule.type !== "wday") continue;
         const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
         if (intervals.length === 0) continue;
-        scheduleRules[rule.day] = intervals; // [{ from: "11:00", to: "16:30" }, ...]
+        if (!allDayIntervals[rule.day]) allDayIntervals[rule.day] = [];
+        for (const iv of intervals) {
+          const [fh, fm] = iv.from.split(":").map(Number);
+          const [th, tm] = iv.to.split(":").map(Number);
+          allDayIntervals[rule.day].push({ fromMin: fh * 60 + fm, toMin: th * 60 + tm });
+        }
       }
-      console.log(`[ChairUtil Historical] Using schedule "${gridSchedule.name || 'unnamed'}" — ${Object.keys(scheduleRules).length} working days`);
+    }
+
+    // For each day, compute the union envelope: earliest start → latest end
+    if (Object.keys(allDayIntervals).length > 0) {
+      scheduleRules = {};
+      for (const [day, intervals] of Object.entries(allDayIntervals)) {
+        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
+        const latest = Math.max(...intervals.map(iv => iv.toMin));
+        const eh = Math.floor(earliest / 60);
+        const em = earliest % 60;
+        const lh = Math.floor(latest / 60);
+        const lm = latest % 60;
+        scheduleRules[day] = [{
+          from: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
+          to: `${String(lh).padStart(2, "0")}:${String(lm).padStart(2, "0")}`,
+        }];
+      }
+      console.log(`[ChairUtil Historical] Union schedule envelope — ${Object.keys(scheduleRules).length} working days:`,
+        Object.entries(scheduleRules).map(([d, ivs]) => `${d}: ${ivs[0].from}-${ivs[0].to}`).join(", "));
     }
   } catch (err) {
     console.warn(`[ChairUtil Historical] Schedule rules fetch failed: ${err.message}`);
@@ -1064,11 +1097,12 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
 
     // Raw schedule capacity for this day (before break deductions)
     let rawCapacityMinutes = 0;
-    for (const iv of schedIntervals) {
+    const schedWindows = schedIntervals.map(iv => {
       const [fh, fm] = iv.from.split(":").map(Number);
       const [th, tm] = iv.to.split(":").map(Number);
       rawCapacityMinutes += (th * 60 + tm) - (fh * 60 + fm);
-    }
+      return { from: fh * 60 + fm, to: th * 60 + tm };
+    });
 
     // Fetch calendar events for this day from GHL
     const getCentralOffset = (ds) => {
@@ -1230,13 +1264,6 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     const minBookable = Math.min(...Object.values(calendarSlotConfig).map(c => c.slotDuration));
     const allNonCancelledEvents = sortedEvents.filter(ev => !ev.isCancelled);
     let deadSpaceMinutes = 0;
-
-    // Build the schedule window boundaries for this day (in minutes since midnight)
-    const schedWindows = schedIntervals.map(iv => {
-      const [fh, fm] = iv.from.split(":").map(Number);
-      const [th, tm] = iv.to.split(":").map(Number);
-      return { from: fh * 60 + fm, to: th * 60 + tm };
-    });
 
     // Use merged break ranges for adjacency checks
     const breakRanges = mergedBreaks.map(br => ({ start: br.startMin, end: br.endMin }));
