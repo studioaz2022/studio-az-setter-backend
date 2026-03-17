@@ -142,6 +142,13 @@ const IN_PERSON_CONSULTATION_CALENDARS = {
   CLAUDIA_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
 };
 
+// Tattoo appointment calendars (in-person sessions)
+const TATTOO_CALENDARS = {
+  JOAN_TATTOO: "0oW0C4kLB6qh1qa1WV9c",
+  ANDREW_TATTOO: "9KwARaShHhymNjgarXgA",
+  CLAUDIA_TATTOO: "Kzfh6YzvT9ck2qknjjJX",
+};
+
 // Translator calendars (online only)
 const TRANSLATOR_CALENDARS = {
   LIONEL_ONLINE: "mmLWt370a94tbaNQIgNw",
@@ -249,6 +256,7 @@ module.exports = {
   MESSAGE_DELAYS,
   CALENDARS,
   IN_PERSON_CONSULTATION_CALENDARS,
+  TATTOO_CALENDARS,
   TRANSLATOR_CALENDARS,
   TRANSLATOR_USER_IDS,
   CONSULTATION_CALENDARS,

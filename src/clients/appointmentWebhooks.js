@@ -10,10 +10,14 @@ const { subscribeToMeetSpace } = require('./workspaceEvents');
 const {
   CALENDARS,
   CONSULTATION_CALENDARS,
+  IN_PERSON_CONSULTATION_CALENDARS,
+  TATTOO_CALENDARS,
   TRANSLATOR_CALENDARS,
   GHL_USER_EMAILS,
 } = require('../config/constants');
-const { updateContact } = require('./ghlClient');
+const { updateContact, getContact } = require('./ghlClient');
+const { getOpportunitiesByContact, updateOpportunityStage } = require('./ghlOpportunityClient');
+const { getStageId } = require('../config/pipelineConfig');
 
 // Online consultation calendar IDs — these get Google Meet + Fireflies
 const ONLINE_CONSULT_CALENDAR_IDS = new Set([
@@ -26,6 +30,11 @@ const ALL_CONSULT_CALENDAR_IDS = new Set([
   ...Object.values(CALENDARS).filter(Boolean),
   ...Object.values(CONSULTATION_CALENDARS).filter(Boolean),
   ...Object.values(TRANSLATOR_CALENDARS).filter(Boolean),
+]);
+
+// Tattoo appointment calendar IDs
+const TATTOO_CALENDAR_IDS = new Set([
+  ...Object.values(TATTOO_CALENDARS).filter(Boolean),
 ]);
 
 /**
@@ -60,6 +69,9 @@ async function handleAppointmentCreated(payload) {
   // that don't already have a Google Meet link (i.e., manually booked via iOS or GHL UI)
   const rawAppt = payload.appointment || payload;
   await ensureGoogleMeetForConsultation(rawAppt);
+
+  // Update opportunity pipeline stage based on calendar type
+  await updateOpportunityForAppointment(rawAppt);
 }
 
 /**
@@ -108,7 +120,6 @@ async function ensureGoogleMeetForConsultation(rawAppt) {
 
     // Fetch contact email if available
     try {
-      const { getContact } = require('./ghlClient');
       const contact = await getContact(contactId);
       if (contact?.email) {
         attendeeEmails.push(contact.email);
@@ -153,6 +164,51 @@ async function ensureGoogleMeetForConsultation(rawAppt) {
   } catch (err) {
     // Non-blocking — appointment was already created successfully
     console.error('📹 Failed to create Google Meet for consultation (non-blocking):', err.message);
+  }
+}
+
+/**
+ * Update opportunity pipeline stage when an appointment is created.
+ * - Consultation (online or in-person) → "Consult Appointment"
+ * - Tattoo appointment → "Tattoo Booked"
+ */
+async function updateOpportunityForAppointment(rawAppt) {
+  const calendarId = rawAppt.calendarId;
+  const contactId = rawAppt.contactId;
+
+  if (!contactId) return;
+
+  let stageKey = null;
+  if (ALL_CONSULT_CALENDAR_IDS.has(calendarId)) {
+    stageKey = 'CONSULT_APPOINTMENT';
+  } else if (TATTOO_CALENDAR_IDS.has(calendarId)) {
+    stageKey = 'TATTOO_BOOKED';
+  }
+
+  if (!stageKey) return; // Not a tattoo shop calendar (e.g., barbershop)
+
+  const stageId = getStageId(stageKey);
+  if (!stageId) {
+    console.warn(`⚠️ [PIPELINE] No stage ID found for ${stageKey}`);
+    return;
+  }
+
+  try {
+    // Find the contact's existing opportunity
+    const opps = await getOpportunitiesByContact({ contactId });
+    const opportunities = opps?.opportunities || opps?.data?.opportunities || [];
+
+    if (opportunities.length === 0) {
+      console.log(`📊 [PIPELINE] No opportunity found for contact ${contactId} — skipping stage update`);
+      return;
+    }
+
+    const opportunityId = opportunities[0].id;
+    await updateOpportunityStage({ opportunityId, pipelineStageId: stageId });
+    console.log(`📊 [PIPELINE] Moved opportunity ${opportunityId} to ${stageKey}`);
+  } catch (err) {
+    // Non-blocking — appointment creation should not fail because of pipeline issues
+    console.error(`📊 [PIPELINE] Failed to update opportunity stage (non-blocking):`, err.message);
   }
 }
 
