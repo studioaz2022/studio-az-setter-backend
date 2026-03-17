@@ -1076,6 +1076,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     return value; // "mins" or missing = already minutes
   };
 
+  // GHL daysOfTheWeek: 0=Sun, 1=Mon, 2=Tue, ... 6=Sat
+  const ghDayToName = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const openHoursIntervals = {}; // dayName → [{ fromMin, toMin }] from calendar openHours
+
   for (const calId of allCalIds) {
     try {
       const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
@@ -1086,11 +1090,50 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         slotDuration: durMin,
         slotInterval: intMin,
       };
+      // Collect openHours from primary calendars as schedule fallback.
+      // Schedule rules sometimes miss days that openHours includes (e.g., Saturday).
+      if (primaryCalIds.has(calId) && cal?.openHours) {
+        for (const oh of cal.openHours) {
+          for (const dow of (oh.daysOfTheWeek || [])) {
+            const dayName = ghDayToName[dow];
+            if (!dayName) continue;
+            for (const hr of (oh.hours || [])) {
+              const fromMin = (hr.openHour || 0) * 60 + (hr.openMinute || 0);
+              const toMin = (hr.closeHour || 0) * 60 + (hr.closeMinute || 0);
+              if (toMin > fromMin) {
+                if (!openHoursIntervals[dayName]) openHoursIntervals[dayName] = [];
+                openHoursIntervals[dayName].push({ fromMin, toMin });
+              }
+            }
+          }
+        }
+      }
     } catch (err) {
       console.warn(`[ChairUtil Historical] Could not get slot config for ${calId}: ${err.message}`);
       calendarSlotConfig[calId] = { slotDuration: 30, slotInterval: 30 };
     }
   }
+
+  // Merge openHours into schedule envelope for days not covered by schedule rules.
+  // Schedule rules are the primary source, but openHours fills gaps (e.g., Saturday).
+  if (scheduleRules && Object.keys(openHoursIntervals).length > 0) {
+    for (const [day, intervals] of Object.entries(openHoursIntervals)) {
+      if (!scheduleRules[day]) {
+        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
+        const latest = Math.max(...intervals.map(iv => iv.toMin));
+        const eh = Math.floor(earliest / 60);
+        const em = earliest % 60;
+        const lh = Math.floor(latest / 60);
+        const lm = latest % 60;
+        scheduleRules[day] = [{
+          from: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
+          to: `${String(lh).padStart(2, "0")}:${String(lm).padStart(2, "0")}`,
+        }];
+        console.log(`[ChairUtil Historical] Added ${day} from openHours: ${scheduleRules[day][0].from}-${scheduleRules[day][0].to}`);
+      }
+    }
+  }
+
   // Default slot interval and minBookable from PRIMARY calendars only.
   // This ensures beard trim's 20-min interval doesn't shrink the break cost grid
   // or make 30-min gaps appear "bookable" when they're dead space on the HC grid.
@@ -1101,7 +1144,50 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     ([id, c]) => `${id.substring(0, 8)}…: dur=${c.slotDuration}, int=${c.slotInterval}`
   ).join(", "));
 
-  // ── 3. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
+  // ── 3. Fetch blocked slots for the full period ──
+  // Blocked slots are manually blocked time on the calendar (e.g., barber blocks
+  // off hours for personal time). These reduce capacity but aren't returned by
+  // the Calendar Events API — they come from a separate endpoint.
+  const blockedSlotsByDate = {}; // "YYYY-MM-DD" → [{ startMin, endMin }]
+  try {
+    const bsStartMs = new Date(startDate + "T00:00:00-06:00").getTime();
+    const bsEndMs = new Date(endDateStr + "T23:59:59-06:00").getTime();
+    const bsResp = await httpClient.get(
+      `/calendars/blocked-slots?locationId=${locationId}&userId=${barberGhlId}&startTime=${bsStartMs}&endTime=${bsEndMs}`,
+      { headers: { Version: "2021-04-15" } }
+    );
+    const blockedEvents = bsResp.data?.events || [];
+    const bsDateFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
+    const bsTimeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
+    const bsGetMin = (parts) => {
+      const h = parseInt(parts.find(p => p.type === "hour").value);
+      const m = parseInt(parts.find(p => p.type === "minute").value);
+      return h * 60 + m;
+    };
+    for (const bs of blockedEvents) {
+      if (bs.deleted) continue;
+      const s = new Date(bs.startTime);
+      const e = new Date(bs.endTime);
+      // Format date as YYYY-MM-DD in Central time
+      const dateParts = bsDateFmt.formatToParts(s);
+      const month = dateParts.find(p => p.type === "month").value;
+      const day = dateParts.find(p => p.type === "day").value;
+      const year = dateParts.find(p => p.type === "year").value;
+      const dateKey = `${year}-${month}-${day}`;
+      const startMin = bsGetMin(bsTimeFmt.formatToParts(s));
+      const endMin = bsGetMin(bsTimeFmt.formatToParts(e));
+      if (!blockedSlotsByDate[dateKey]) blockedSlotsByDate[dateKey] = [];
+      blockedSlotsByDate[dateKey].push({ startMin, endMin });
+    }
+    const totalBlocked = Object.values(blockedSlotsByDate).reduce((s, arr) => s + arr.reduce((a, b) => a + (b.endMin - b.startMin), 0), 0);
+    if (totalBlocked > 0) {
+      console.log(`[ChairUtil Historical] Blocked slots: ${Object.keys(blockedSlotsByDate).length} days, ${(totalBlocked / 60).toFixed(1)} hrs total`);
+    }
+  } catch (err) {
+    console.warn(`[ChairUtil Historical] Blocked slots fetch failed: ${err.message}`);
+  }
+
+  // ── 4. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
   const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
   const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
   const dayDisplayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
@@ -1184,9 +1270,33 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       })
       .sort((a, b) => a.startMs - b.startMs);
 
+    // Inject blocked slots as break events — they reduce capacity like breaks.
+    // Clamp to schedule window so blocks extending past schedule end don't over-count.
+    const dayBlockedSlots = blockedSlotsByDate[dateStr] || [];
+    const schedStart = Math.min(...schedWindows.map(w => w.from));
+    const schedEnd = Math.max(...schedWindows.map(w => w.to));
+    for (const bs of dayBlockedSlots) {
+      const clampedStart = Math.max(bs.startMin, schedStart);
+      const clampedEnd = Math.min(bs.endMin, schedEnd);
+      if (clampedEnd <= clampedStart) continue; // entirely outside schedule
+      sortedEvents.push({
+        startMs: 0, endMs: 0,
+        startMin: clampedStart, endMin: clampedEnd,
+        durationMin: clampedEnd - clampedStart,
+        isBreak: true, isBlocked: true, isCancelled: false,
+        title: "Blocked Slot", calendarId: null, contactId: null, raw: null,
+      });
+    }
+    // Re-sort after adding blocked slots
+    if (dayBlockedSlots.length > 0) {
+      sortedEvents.sort((a, b) => a.startMin - b.startMin);
+    }
+
     // Convert start/end to Central time minutes-since-midnight for slot math
     // (re-parse using timezone-aware formatting)
+    // Skip blocked slots — their startMin/endMin are already in Central time.
     for (const ev of sortedEvents) {
+      if (ev.isBlocked) continue;
       const startCentral = new Date(ev.raw.startTime);
       const endCentral = new Date(ev.raw.endTime);
       // Use Intl to get hours/minutes in Central time
