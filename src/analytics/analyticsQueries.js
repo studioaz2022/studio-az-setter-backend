@@ -801,6 +801,9 @@ function _emptyUtilization(periodDays) {
     mode: "unavailable",
     // Legacy fields for iOS diagnostics view
     bookedHours: 0, availableHours: 0, byDayOfWeek: {}, scheduleSource: "unavailable",
+    // Availability & Shop Impact metrics
+    rawScheduleMinutes: 0, discretionaryBlockedMinutes: 0,
+    availabilityIndex: null, shopImpact: null, blockedPercent: 0, atRisk: false,
   };
 }
 
@@ -831,6 +834,19 @@ function _mergeUtilization(historical, live, periodDays) {
     }
   }
 
+  // Merge availability metrics
+  const rawScheduleMinutes = (historical.rawScheduleMinutes || 0) + (live.rawScheduleMinutes || 0);
+  const discretionaryBlockedMinutes = (historical.discretionaryBlockedMinutes || 0) + (live.discretionaryBlockedMinutes || 0);
+  const availabilityIndex = rawScheduleMinutes > 0
+    ? round(((rawScheduleMinutes - discretionaryBlockedMinutes) / rawScheduleMinutes) * 100, 1)
+    : null;
+  const shopImpact = rawScheduleMinutes > 0
+    ? round((utilizedMinutes / rawScheduleMinutes) * 100, 1)
+    : null;
+  const blockedPercent = rawScheduleMinutes > 0
+    ? round((discretionaryBlockedMinutes / rawScheduleMinutes) * 100, 1)
+    : 0;
+
   return {
     utilization,
     capacityMinutes,
@@ -843,6 +859,9 @@ function _mergeUtilization(historical, live, periodDays) {
     availableHours: round(capacityMinutes / 60, 1),
     byDayOfWeek,
     scheduleSource: "hybrid",
+    rawScheduleMinutes, discretionaryBlockedMinutes,
+    availabilityIndex, shopImpact, blockedPercent,
+    atRisk: blockedPercent >= 25,
   };
 }
 
@@ -1152,7 +1171,12 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   // Blocked slots are manually blocked time on the calendar (e.g., barber blocks
   // off hours for personal time). These reduce capacity but aren't returned by
   // the Calendar Events API — they come from a separate endpoint.
+  // blockedSlotsByDate: all blocked slots (reduce capacity)
+  // discretionaryBlockedByDate: only non-recurring blocks (for availability/shop impact)
+  // Recurring blocks (isRecurring=true) are operational breaks (daily lunch) —
+  // they reduce capacity but don't count against availability index.
   const blockedSlotsByDate = {}; // "YYYY-MM-DD" → [{ startMin, endMin }]
+  const discretionaryBlockedByDate = {}; // same shape, only isRecurring=false
   try {
     const bsStartMs = new Date(startDate + "T00:00:00-06:00").getTime();
     const bsEndMs = new Date(endDateStr + "T23:59:59-06:00").getTime();
@@ -1172,9 +1196,9 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       if (bs.deleted) continue;
       const s = new Date(bs.startTime);
       const e = new Date(bs.endTime);
+      const isDiscretionary = !bs.isRecurring;
 
       // Split multi-day blocks into per-day segments.
-      // A block from Mar 5 10am → Mar 11 6pm needs entries for each day.
       const cursor = new Date(s);
       while (cursor < e) {
         const dateParts = bsDateFmt.formatToParts(cursor);
@@ -1183,25 +1207,25 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         const year = dateParts.find(p => p.type === "year").value;
         const dateKey = `${year}-${month}-${day}`;
 
-        // Start-of-day for this segment
         const segStart = bsGetMin(bsTimeFmt.formatToParts(cursor));
 
-        // End-of-day or block end, whichever comes first
         const dayMidnight = new Date(cursor);
         dayMidnight.setDate(dayMidnight.getDate() + 1);
         dayMidnight.setHours(0, 0, 0, 0);
-        // Convert midnight to Central time to find the day boundary
-        const segEndTime = e < dayMidnight ? e : dayMidnight;
         const segEnd = e < dayMidnight
           ? bsGetMin(bsTimeFmt.formatToParts(e))
-          : 24 * 60; // midnight = 1440
+          : 24 * 60;
 
         if (segEnd > segStart) {
           if (!blockedSlotsByDate[dateKey]) blockedSlotsByDate[dateKey] = [];
           blockedSlotsByDate[dateKey].push({ startMin: segStart, endMin: segEnd });
+
+          if (isDiscretionary) {
+            if (!discretionaryBlockedByDate[dateKey]) discretionaryBlockedByDate[dateKey] = [];
+            discretionaryBlockedByDate[dateKey].push({ startMin: segStart, endMin: segEnd });
+          }
         }
 
-        // Advance to next day at midnight
         cursor.setTime(dayMidnight.getTime());
       }
     }
@@ -1221,6 +1245,8 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   let totalCapacityMinutes = 0;
   let totalUtilizedMinutes = 0;
   let totalAppointmentCount = 0;
+  let totalRawScheduleMinutes = 0;       // schedule hours before any deductions
+  let totalDiscretionaryBlockedMinutes = 0; // non-recurring blocks (PTO, personal)
   const byDay = {}; // dayDisplayName → { bookedMinutes, workedDates: Set }
 
   const current = new Date(startDate + "T12:00:00Z");
@@ -1469,9 +1495,20 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     // ── Day capacity = raw schedule - break cost - dead space ──
     const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes - deadSpaceMinutes);
 
+    // Track discretionary blocked minutes for this day (clamped to schedule)
+    const dayDiscretionaryBlocks = discretionaryBlockedByDate[dateStr] || [];
+    let dayDiscretionaryBlockedMinutes = 0;
+    for (const db of dayDiscretionaryBlocks) {
+      const clampedStart = Math.max(db.startMin, schedStart);
+      const clampedEnd = Math.min(db.endMin, schedEnd);
+      if (clampedEnd > clampedStart) dayDiscretionaryBlockedMinutes += (clampedEnd - clampedStart);
+    }
+
     totalCapacityMinutes += dayCapacity;
     totalUtilizedMinutes += dayUtilized;
     totalAppointmentCount += dayApptCount;
+    totalRawScheduleMinutes += rawCapacityMinutes;
+    totalDiscretionaryBlockedMinutes += dayDiscretionaryBlockedMinutes;
 
     // Track by day-of-week
     if (dayApptCount > 0) {
@@ -1496,10 +1533,28 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     };
   }
 
-  // ── 5. Final utilization ──
+  // ── 5. Final utilization + availability metrics ──
   const utilization = totalCapacityMinutes > 0
     ? round((totalUtilizedMinutes / totalCapacityMinutes) * 100, 1)
     : null;
+
+  // Availability Index: % of raw schedule kept open (not blocked by discretionary blocks).
+  // Recurring breaks (daily lunch) don't count against availability.
+  const availabilityIndex = totalRawScheduleMinutes > 0
+    ? round(((totalRawScheduleMinutes - totalDiscretionaryBlockedMinutes) / totalRawScheduleMinutes) * 100, 1)
+    : null;
+
+  // Shop Impact: what % of the barber's full schedule is actually monetized.
+  // ShopImpact = Utilization × AvailabilityIndex (= utilized / rawSchedule)
+  const shopImpact = totalRawScheduleMinutes > 0
+    ? round((totalUtilizedMinutes / totalRawScheduleMinutes) * 100, 1)
+    : null;
+
+  // Blocked percentage for "at risk" indicator (discretionary blocks only).
+  // Show "at risk" when >= 25% of raw schedule is discretionary blocked time.
+  const blockedPercent = totalRawScheduleMinutes > 0
+    ? round((totalDiscretionaryBlockedMinutes / totalRawScheduleMinutes) * 100, 1)
+    : 0;
 
   return {
     utilization,
@@ -1513,6 +1568,13 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     availableHours: round(totalCapacityMinutes / 60, 1),
     byDayOfWeek,
     scheduleSource: "calendar_events_api",
+    // Availability & Shop Impact metrics
+    rawScheduleMinutes: totalRawScheduleMinutes,
+    discretionaryBlockedMinutes: totalDiscretionaryBlockedMinutes,
+    availabilityIndex,
+    shopImpact,
+    blockedPercent,
+    atRisk: blockedPercent >= 25,
   };
 }
 
