@@ -1132,10 +1132,11 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     "haircut_fnf", "haircut_beard_fnf",
   ]);
 
-  // ── 1. Fetch ALL schedule rules and compute union envelope per day ──
-  // Each barber has multiple calendars (HC, H+B, BT, F&F) with potentially
-  // different start/end times. The capacity envelope for each day is the
-  // union of all calendar schedules — earliest start to latest end.
+  // ── 1. Fetch schedule rules — Work Hours is authoritative ──
+  // Work Hours schedule (calendarIds=[]) defines the barber's actual working
+  // hours. Per-calendar schedules have wider windows to accommodate booking
+  // buffer and should NOT expand the capacity envelope.
+  // Fallback: if Work Hours doesn't exist, use HC-type calendar schedules.
   let scheduleRules = null; // { dayName → [{ from: "HH:mm", to: "HH:mm" }] }
   try {
     const schedResp = await httpClient.get(
@@ -1143,10 +1144,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     );
     const schedules = schedResp.data?.schedules || [];
 
-    // Only HC-type calendars define the capacity envelope. H+B calendars have
-    // extra padding (e.g., 15 min past HC end) to accommodate longer service
-    // durations — that padding shouldn't expand capacity. H+B overflow past HC
-    // slot boundaries is what creates >100% utilization as a reward.
+    // Separate Work Hours from per-calendar schedules
+    const workHoursSchedule = schedules.find(s => (s.calendarIds || []).length === 0);
+
+    // HC-type calendars as fallback if Work Hours doesn't exist
     const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
     const envelopeCalIds = new Set();
     if (barberConfig?.calendars) {
@@ -1155,13 +1156,14 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
     }
 
-    const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
-    for (const sched of schedules) {
-      // Include Work Hours (no calendarIds) and primary service calendar schedules
-      const isWorkHours = (sched.calendarIds || []).length === 0;
-      const isPrimarySchedule = (sched.calendarIds || []).some(id => envelopeCalIds.has(id));
-      if (!isWorkHours && !isPrimarySchedule) continue;
+    // Pick the authoritative schedule source
+    const sourceSchedules = workHoursSchedule
+      ? [workHoursSchedule]
+      : schedules.filter(s => (s.calendarIds || []).some(id => envelopeCalIds.has(id)));
+    const sourceLabel = workHoursSchedule ? "Work Hours" : "HC calendar fallback";
 
+    const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
+    for (const sched of sourceSchedules) {
       for (const rule of (sched.rules || [])) {
         if (rule.type !== "wday") continue;
         const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
@@ -1175,7 +1177,7 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
     }
 
-    // For each day, compute the union envelope: earliest start → latest end
+    // For each day, compute envelope from the authoritative source
     if (Object.keys(allDayIntervals).length > 0) {
       scheduleRules = {};
       for (const [day, intervals] of Object.entries(allDayIntervals)) {
@@ -1190,7 +1192,7 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
           to: `${String(lh).padStart(2, "0")}:${String(lm).padStart(2, "0")}`,
         }];
       }
-      console.log(`[ChairUtil Historical] Union schedule envelope — ${Object.keys(scheduleRules).length} working days:`,
+      console.log(`[ChairUtil Historical] Schedule envelope (${sourceLabel}) — ${Object.keys(scheduleRules).length} working days:`,
         Object.entries(scheduleRules).map(([d, ivs]) => `${d}: ${ivs[0].from}-${ivs[0].to}`).join(", "));
     }
   } catch (err) {

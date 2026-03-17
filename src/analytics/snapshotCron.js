@@ -30,7 +30,13 @@ const SNAPSHOT_PERIOD_DAYS = 30;
  * Compute all metrics for a single barber and return a snapshot row.
  */
 async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
-  const snapshotDate = asOfDate || new Date().toISOString().split("T")[0];
+  // When called without asOfDate (nightly cron at 2am), snapshot yesterday —
+  // today hasn't happened yet. Use Central time to determine "yesterday".
+  const snapshotDate = asOfDate || (() => {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(yesterday);
+  })();
 
   // Compute explicit start date for flex-window metrics
   const periodStartDate = (() => {
@@ -186,7 +192,10 @@ async function runNightlySnapshot() {
  * Only backfills today — historical gaps can be filled via the manual endpoint.
  */
 async function checkAndBackfill() {
-  const today = new Date().toISOString().split("T")[0];
+  // Check yesterday's snapshot (same logic as nightly cron — snapshot completed days)
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const today = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(yesterday);
 
   try {
     const { data: existing, error } = await supabase
