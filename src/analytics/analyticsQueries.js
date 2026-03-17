@@ -1062,9 +1062,13 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       calendarSlotConfig[calId] = { slotDuration: 30, slotInterval: 30 };
     }
   }
-  // Default slot interval for break cost alignment (use haircut calendar as baseline)
-  const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
-  const defaultSlotInterval = calendarSlotConfig[gridCalId]?.slotInterval || 30;
+  // Default slot interval for break cost alignment — use the SMALLEST interval
+  // across all of this barber's calendars. Using the haircut calendar alone
+  // over-penalizes barbers like Drew whose HC interval is 60 min (a 15-min break
+  // would round up to 60 instead of 30). The smallest interval represents the
+  // finest booking grid, giving the most accurate break cost.
+  const allIntervals = Object.values(calendarSlotConfig).map(c => c.slotInterval).filter(v => v > 0);
+  const defaultSlotInterval = allIntervals.length > 0 ? Math.min(...allIntervals) : 30;
   console.log(`[ChairUtil Historical] Calendar slot configs:`, Object.entries(calendarSlotConfig).map(
     ([id, c]) => `${id.substring(0, 8)}…: dur=${c.slotDuration}, int=${c.slotInterval}`
   ).join(", "));
