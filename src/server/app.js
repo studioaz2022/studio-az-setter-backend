@@ -5758,35 +5758,31 @@ function createApp() {
 
       // 1. If appointmentId is provided (from carousel), use it directly.
       //    Otherwise fall back to name-based matching for tattoo check-ins.
+      //
+      //    NOTE: We do NOT mark the appointment as "showed" in GHL here.
+      //    The kiosk check-in is an operational record (checked_in_at in Supabase),
+      //    not a source of truth for appointment status. The "showed" status change
+      //    was triggering GHL AppointmentUpdate webhooks that upserted rows into
+      //    Supabase with incorrect created_at timestamps, corrupting utilization data.
+      //    Appointment status should be managed by GHL's own flows or the barber.
       if (matchedAppointmentId) {
-        // Mark appointment as "showed" and extract contactId if missing
-        try {
-          await sdk.calendars.editAppointment(
-            { eventId: matchedAppointmentId },
-            { appointmentStatus: "showed", toNotify: false }
-          );
-          console.log(`✅ [KIOSK] Marked appointment ${matchedAppointmentId} as showed for ${customerName}`);
-
-          // If we don't have a contactId yet, fetch the appointment to get it
-          if (!matchedContactId) {
-            try {
-              const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
-              // SDK returns { appointment: { contactId, ... }, traceId: ... }
-              const evt = apptData?.appointment || apptData?.event || apptData;
-              const apptContact = evt?.contactId || evt?.contact?.id;
-              if (apptContact) {
-                matchedContactId = apptContact;
-                console.log(`✅ [KIOSK] Extracted contactId ${matchedContactId} from appointment`);
-              } else {
-                console.log(`⚠️ [KIOSK] getAppointment returned no contactId. Keys:`, Object.keys(apptData || {}));
-              }
-            } catch (fetchErr) {
-              console.error("⚠️ [KIOSK] Could not fetch appointment for contactId:", fetchErr.message);
+        // Fetch appointment to get contactId if we don't have it
+        if (!matchedContactId) {
+          try {
+            const apptData = await sdk.calendars.getAppointment({ eventId: matchedAppointmentId });
+            const evt = apptData?.appointment || apptData?.event || apptData;
+            const apptContact = evt?.contactId || evt?.contact?.id;
+            if (apptContact) {
+              matchedContactId = apptContact;
+              console.log(`✅ [KIOSK] Extracted contactId ${matchedContactId} from appointment`);
+            } else {
+              console.log(`⚠️ [KIOSK] getAppointment returned no contactId. Keys:`, Object.keys(apptData || {}));
             }
+          } catch (fetchErr) {
+            console.error("⚠️ [KIOSK] Could not fetch appointment for contactId:", fetchErr.message);
           }
-        } catch (apptErr) {
-          console.error("⚠️ [KIOSK] Appointment status update failed:", apptErr.message);
         }
+        console.log(`✅ [KIOSK] Appointment ${matchedAppointmentId} matched for ${customerName} (check-in only, no GHL status change)`);
       } else if (type !== "name_only") {
         // Legacy fallback: match by name (used by tattoo check-in)
         try {
@@ -5816,11 +5812,8 @@ function createApp() {
           if (match) {
             matchedAppointmentId = match.id;
             matchedContactId = matchedContactId || match.contact?.id;
-            await sdk.calendars.editAppointment(
-              { eventId: match.id },
-              { appointmentStatus: "showed", toNotify: false }
-            );
-            console.log(`✅ [KIOSK] Marked appointment ${match.id} as showed for ${customerName}`);
+            // NOTE: No longer marking as "showed" in GHL — kiosk only records checked_in_at
+            console.log(`✅ [KIOSK] Matched appointment ${match.id} for ${customerName} via name lookup (check-in only, no GHL status change)`);
           }
         } catch (apptErr) {
           console.error("⚠️ [KIOSK] Appointment lookup/update failed:", apptErr.message);

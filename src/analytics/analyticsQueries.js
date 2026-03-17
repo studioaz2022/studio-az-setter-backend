@@ -857,9 +857,22 @@ function _mergeUtilization(historical, live, periodDays) {
 async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
   const httpClient = ghlBarber.getHttpClient();
 
-  // Build epoch ms for API calls
-  const startMs = new Date(startDate + "T00:00:00-06:00").getTime();
-  const endMs = new Date(endDateStr + "T23:59:59-06:00").getTime();
+  // Build epoch ms for API calls.
+  // Use Intl to get the correct UTC offset for Central time (CST=-06:00, CDT=-05:00).
+  // Hardcoding -06:00 causes a 1-hour shift during CDT (Mar-Nov), bleeding queries
+  // into adjacent days and inflating/misattributing capacity.
+  const getCentralOffset = (dateStr) => {
+    const d = new Date(dateStr + "T12:00:00Z");
+    const utcStr = d.toLocaleString("en-US", { timeZone: "UTC" });
+    const centralStr = d.toLocaleString("en-US", { timeZone: "America/Chicago" });
+    return (new Date(utcStr) - new Date(centralStr)) / 60000; // offset in minutes
+  };
+  const offsetMin = getCentralOffset(startDate);
+  const offsetHrs = Math.floor(Math.abs(offsetMin) / 60);
+  const offsetMins = Math.abs(offsetMin) % 60;
+  const offsetStr = `${offsetMin >= 0 ? "-" : "+"}${String(offsetHrs).padStart(2, "0")}:${String(offsetMins).padStart(2, "0")}`;
+  const startMs = new Date(`${startDate}T00:00:00${offsetStr}`).getTime();
+  const endMs = new Date(`${endDateStr}T23:59:59${offsetStr}`).getTime();
 
   // 1. Fetch free slots for each calendar, union by start time
   const allFreeSlots = new Map(); // startTimeStr → durationMinutes (deduplicate overlaps)

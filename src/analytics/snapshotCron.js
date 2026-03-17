@@ -20,6 +20,7 @@ const {
 } = require("./analyticsQueries");
 const { runMonthlyRollup } = require("./monthlyRollup");
 const { computeFullScorecard } = require("./moneyLeakEngine");
+const { backfillAppointments } = require("./appointmentBackfill");
 const apnsService = require("../services/apnsService");
 
 // Default period for flex-window metrics in the nightly snapshot
@@ -113,6 +114,23 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
 async function runNightlySnapshot() {
   const startTime = Date.now();
   console.log("[Snapshot Cron] Starting nightly analytics snapshot...");
+
+  // --- Daily appointment sync: backfill last 7 days from GHL → Supabase ---
+  // Catches any appointments that webhooks missed (webhook misconfiguration,
+  // downtime, GHL not sending Create events for barbershop calendars, etc.)
+  try {
+    const syncEnd = new Date().toISOString().split("T")[0];
+    const syncStart = (() => {
+      const d = new Date();
+      d.setDate(d.getDate() - 7);
+      return d.toISOString().split("T")[0];
+    })();
+    console.log(`[Snapshot Cron] Syncing appointments ${syncStart} → ${syncEnd}...`);
+    const syncResults = await backfillAppointments(syncStart, syncEnd);
+    console.log(`[Snapshot Cron] Appointment sync done — ${syncResults.appointmentsInserted} inserted, ${syncResults.appointmentsSkipped} skipped, ${syncResults.errors?.length || 0} errors`);
+  } catch (err) {
+    console.error("[Snapshot Cron] Appointment sync failed (non-blocking):", err.message);
+  }
 
   const results = { success: 0, failed: 0, errors: [] };
 
