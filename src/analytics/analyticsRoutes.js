@@ -7,6 +7,7 @@ const {
   getDiagnostics,
   getRevenueProjection,
   getCohortAnalysis,
+  getChairUtilization,
   parsePeriod,
 } = require("./analyticsQueries");
 const { runNightlySnapshot, computeShopAverages, backfillSnapshots, runMondayRitual } = require("./snapshotCron");
@@ -18,6 +19,8 @@ const {
 const { computeFullScorecard } = require("./moneyLeakEngine");
 const { backfillAppointments } = require("./appointmentBackfill");
 const { backfillCreatedAtForBarber } = require("./backfillCreatedAt");
+const { supabase } = require("../clients/supabaseClient");
+const { BARBER_DATA } = require("../config/kioskConfig");
 
 const router = express.Router();
 
@@ -227,6 +230,133 @@ router.post("/analytics/backfill-appointments", async (req, res) => {
     res.status(500).json({ success: false, error: error.message });
   }
 });
+
+/**
+ * POST /api/barbers/analytics/backfill-utilization
+ *
+ * Backfill utilization snapshots (capacity_minutes, utilized_minutes, free_slot_minutes, utilization)
+ * for the last N weeks using getChairUtilization() in historical mode.
+ * Safe to re-run — upserts on existing snapshot rows.
+ *
+ * Query params:
+ *   ?barberGhlId=1kFG5FWdUDhXLUX46snG  — optional, omit for all barbers
+ *   ?weeks=8                            — default 8
+ */
+router.post("/analytics/backfill-utilization", async (req, res) => {
+  try {
+    const weeks = Math.min(Math.max(parseInt(req.query.weeks, 10) || 8, 1), 52);
+    const barberGhlId = req.query.barberGhlId || null;
+
+    // Build date range: today back to N weeks ago
+    const endDate = new Date();
+    const startDate = new Date();
+    startDate.setDate(startDate.getDate() - weeks * 7);
+
+    const barbers = barberGhlId
+      ? BARBER_DATA.filter(b => b.ghlUserId === barberGhlId)
+      : BARBER_DATA;
+
+    if (barberGhlId && barbers.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: `Barber ${barberGhlId} not found in BARBER_DATA`,
+      });
+    }
+
+    const totalDays = weeks * 7;
+    const totalCalls = barbers.length * totalDays;
+
+    console.log(
+      `[Backfill Utilization] Starting: ${barbers.length} barber(s), ${weeks} weeks (${totalDays} days), ~${totalCalls} calls`
+    );
+
+    // For ranges > 2 weeks, run async to avoid Render's request timeout
+    if (weeks > 2) {
+      runUtilizationBackfill(barbers, startDate, endDate, BARBER_LOCATION_ID)
+        .then((results) => {
+          console.log("[Backfill Utilization] Async complete:", JSON.stringify(results));
+        })
+        .catch((err) => {
+          console.error("[Backfill Utilization] Async failed:", err.message);
+        });
+
+      return res.json({
+        success: true,
+        async: true,
+        barbers: barbers.length,
+        weeks,
+        totalDays,
+        message: `Backfill started for ${barbers.length} barber(s) × ${totalDays} days. Check server logs for progress.`,
+      });
+    }
+
+    // For small ranges (≤2 weeks), run synchronously
+    const results = await runUtilizationBackfill(barbers, startDate, endDate, BARBER_LOCATION_ID);
+    res.json({ success: true, ...results });
+  } catch (error) {
+    console.error("[Backfill Utilization] Error:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * Run utilization backfill for given barbers and date range.
+ * Calls getChairUtilization(barber, location, 1, dateStr) for each day,
+ * then upserts capacity/utilization fields into barber_analytics_snapshots.
+ */
+async function runUtilizationBackfill(barbers, startDate, endDate, locationId) {
+  const results = { updated: 0, skipped: 0, errors: [] };
+  const currentDate = new Date(startDate);
+
+  while (currentDate <= endDate) {
+    const dateStr = currentDate.toISOString().split("T")[0];
+
+    for (const barber of barbers) {
+      try {
+        const util = await getChairUtilization(barber.ghlUserId, locationId, 1, dateStr);
+
+        // Skip days with zero capacity (barber wasn't scheduled)
+        if (!util || util.capacityMinutes === 0) {
+          results.skipped++;
+          continue;
+        }
+
+        // Upsert utilization fields into the snapshot row
+        // The utilization column is NUMERIC(5,4) storing 0.0000–1.0000
+        const { error: upsertErr } = await supabase
+          .from("barber_analytics_snapshots")
+          .upsert(
+            {
+              barber_ghl_id: barber.ghlUserId,
+              location_id: locationId,
+              snapshot_date: dateStr,
+              capacity_minutes: util.capacityMinutes,
+              utilized_minutes: util.utilizedMinutes,
+              free_slot_minutes: util.freeSlotMinutes,
+              utilization: util.utilization / 100, // Convert 0-100 → 0.0000-1.0000
+            },
+            { onConflict: "barber_ghl_id,location_id,snapshot_date" }
+          );
+
+        if (upsertErr) {
+          results.errors.push({ date: dateStr, barber: barber.name, error: upsertErr.message });
+        } else {
+          results.updated++;
+        }
+      } catch (err) {
+        results.errors.push({ date: dateStr, barber: barber.name, error: err.message });
+        console.error(`[Backfill Utilization] ❌ ${barber.name} ${dateStr}:`, err.message);
+      }
+    }
+
+    currentDate.setDate(currentDate.getDate() + 1);
+  }
+
+  console.log(
+    `[Backfill Utilization] Done: ${results.updated} updated, ${results.skipped} skipped, ${results.errors.length} errors`
+  );
+  return results;
+}
 
 /**
  * POST /api/barbers/analytics/backfill-created-at
