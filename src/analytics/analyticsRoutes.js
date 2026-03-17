@@ -334,6 +334,13 @@ async function runUtilizationBackfill(barbers, startDate, endDate, locationId) {
               utilized_minutes: util.utilizedMinutes,
               free_slot_minutes: util.freeSlotMinutes,
               utilization: util.utilization / 100, // Convert 0-100 → 0.0000-1.0000
+              // Availability-adjusted scoring
+              raw_schedule_minutes: util.rawScheduleMinutes || null,
+              discretionary_blocked_minutes: util.discretionaryBlockedMinutes || null,
+              availability_index: util.availabilityIndex != null ? util.availabilityIndex : null,
+              shop_impact: util.shopImpact != null ? util.shopImpact : null,
+              blocked_percent: util.blockedPercent != null ? util.blockedPercent : null,
+              at_risk: util.atRisk || false,
             },
             { onConflict: "barber_ghl_id,location_id,snapshot_date" }
           );

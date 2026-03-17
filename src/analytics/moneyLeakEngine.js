@@ -219,6 +219,12 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
   const avgRevenuePerVisit = avgRevenue.avgRevenue;
   const avgFrequencyDays = frequency.avgFrequency;
 
+  // Availability-adjusted scoring (from break-aware capacity engine)
+  const availabilityIndex = chairUtil.availabilityIndex ?? null;
+  const shopImpact = chairUtil.shopImpact ?? null;
+  const blockedPercent = chairUtil.blockedPercent ?? 0;
+  const atRisk = chairUtil.atRisk ?? false;
+
   // Can't compute without these inputs
   if (currentRebookRate == null || avgRevenuePerVisit == null || avgFrequencyDays == null || avgFrequencyDays === 0) {
     return {
@@ -234,6 +240,10 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
       avgFrequencyDays,
       visitsPerYear: null,
       chairUtilization,
+      availabilityIndex,
+      shopImpact,
+      blockedPercent,
+      atRisk,
       capacityZone: zone.name,
       zoneMessage: zone.message,
       zoneRelevance: zone.relevance,
@@ -260,6 +270,10 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
     avgFrequencyDays,
     visitsPerYear,
     chairUtilization,
+    availabilityIndex,
+    shopImpact,
+    blockedPercent,
+    atRisk,
     capacityZone: zone.name,
     zoneMessage: zone.message,
     zoneRelevance: zone.relevance,
@@ -501,6 +515,13 @@ async function computeFullScorecard(barberGhlId, locationId) {
       zone: moneyOnTheFloor.capacityZone,
       message: moneyOnTheFloor.zoneMessage,
       relevance: moneyOnTheFloor.zoneRelevance,
+    },
+
+    availability: {
+      availabilityIndex: moneyOnTheFloor.availabilityIndex,
+      shopImpact: moneyOnTheFloor.shopImpact,
+      blockedPercent: moneyOnTheFloor.blockedPercent,
+      atRisk: moneyOnTheFloor.atRisk,
     },
 
     rebookAttemptRate: {

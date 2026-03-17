@@ -950,12 +950,142 @@ async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds,
   // 4. Calculate appointment minutes (exclude cancelled, exclude breaks/blocks)
   const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events, calendarIds);
 
-  // 5. Compute
+  // 5. Compute basic utilization
   const capacityMinutes = freeSlotMinutes + appointmentMinutes;
   const utilizedMinutes = appointmentMinutes;
   const utilization = capacityMinutes > 0
     ? round((utilizedMinutes / capacityMinutes) * 100, 1)
     : null;
+
+  // 6. Fetch blocked slots + schedule rules for availability metrics
+  // The Free Slots API handles breaks/blocks for capacity, but we need
+  // to separately track discretionary blocked time for availability scoring.
+  const { BARBER_DATA } = require("../config/kioskConfig");
+  const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
+
+  let rawScheduleMinutes = 0;
+  let discretionaryBlockedMinutes = 0;
+  let availabilityIndex = null;
+  let shopImpact = null;
+  let blockedPercent = 0;
+
+  try {
+    // 6a. Fetch schedule rules to compute raw schedule minutes
+    const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
+    const envelopeCalIds = new Set();
+    if (barberConfig?.calendars) {
+      for (const [type, calId] of Object.entries(barberConfig.calendars)) {
+        if (ENVELOPE_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
+      }
+    }
+
+    const schedResp = await httpClient.get(
+      `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
+    );
+    const schedules = schedResp.data?.schedules || [];
+
+    const allDayIntervals = {};
+    for (const sched of schedules) {
+      const isWorkHours = (sched.calendarIds || []).length === 0;
+      const isPrimarySchedule = (sched.calendarIds || []).some(id => envelopeCalIds.has(id));
+      if (!isWorkHours && !isPrimarySchedule) continue;
+
+      for (const rule of (sched.rules || [])) {
+        if (rule.type !== "wday") continue;
+        const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
+        if (intervals.length === 0) continue;
+        if (!allDayIntervals[rule.day]) allDayIntervals[rule.day] = [];
+        for (const iv of intervals) {
+          const [fh, fm] = iv.from.split(":").map(Number);
+          const [th, tm] = iv.to.split(":").map(Number);
+          allDayIntervals[rule.day].push({ fromMin: fh * 60 + fm, toMin: th * 60 + tm });
+        }
+      }
+    }
+
+    // Compute raw schedule minutes for the period
+    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const cursor = new Date(startDate + "T12:00:00Z");
+    const endD = new Date(endDateStr + "T12:00:00Z");
+    while (cursor <= endD) {
+      const dayName = dayNames[cursor.getUTCDay()];
+      const intervals = allDayIntervals[dayName];
+      if (intervals) {
+        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
+        const latest = Math.max(...intervals.map(iv => iv.toMin));
+        rawScheduleMinutes += (latest - earliest);
+      }
+      cursor.setUTCDate(cursor.getUTCDate() + 1);
+    }
+
+    // 6b. Fetch blocked slots and separate discretionary from recurring
+    const bsStartMs = startMs;
+    const bsEndMs = endMs;
+    const bsResp = await httpClient.get(
+      `/calendars/blocked-slots?locationId=${locationId}&userId=${barberGhlId}&startTime=${bsStartMs}&endTime=${bsEndMs}`,
+      { headers: { Version: "2021-04-15" } }
+    );
+    const blockedEvents = bsResp.data?.events || [];
+    const bsDateFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
+    const bsTimeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
+    const bsGetMin = (parts) => {
+      const h = parseInt(parts.find(p => p.type === "hour").value);
+      const m = parseInt(parts.find(p => p.type === "minute").value);
+      return h * 60 + m;
+    };
+
+    for (const bs of blockedEvents) {
+      if (bs.deleted || bs.isRecurring) continue; // only discretionary (non-recurring)
+      const s = new Date(bs.startTime);
+      const e = new Date(bs.endTime);
+
+      // Split multi-day blocks into per-day segments
+      const bsCursor = new Date(s);
+      while (bsCursor < e) {
+        const dateParts = bsDateFmt.formatToParts(bsCursor);
+        const dateKey = `${dateParts.find(p => p.type === "year").value}-${dateParts.find(p => p.type === "month").value}-${dateParts.find(p => p.type === "day").value}`;
+
+        // Check if this day is within our query range
+        const bsDayName = dayNames[bsCursor.getUTCDay()];
+        const dayIntervals = allDayIntervals[bsDayName];
+
+        if (dayIntervals) {
+          const segStart = bsGetMin(bsTimeFmt.formatToParts(bsCursor));
+          const dayMidnight = new Date(bsCursor);
+          dayMidnight.setDate(dayMidnight.getDate() + 1);
+          dayMidnight.setHours(0, 0, 0, 0);
+          const segEnd = e < dayMidnight ? bsGetMin(bsTimeFmt.formatToParts(e)) : 24 * 60;
+
+          if (segEnd > segStart) {
+            // Clamp to schedule window
+            const schedStart = Math.min(...dayIntervals.map(iv => iv.fromMin));
+            const schedEnd = Math.max(...dayIntervals.map(iv => iv.toMin));
+            const clampedStart = Math.max(segStart, schedStart);
+            const clampedEnd = Math.min(segEnd, schedEnd);
+            if (clampedEnd > clampedStart) {
+              discretionaryBlockedMinutes += (clampedEnd - clampedStart);
+            }
+          }
+        }
+
+        const dayMidnight = new Date(bsCursor);
+        dayMidnight.setDate(dayMidnight.getDate() + 1);
+        dayMidnight.setHours(0, 0, 0, 0);
+        bsCursor.setTime(dayMidnight.getTime());
+      }
+    }
+
+    // Compute availability metrics
+    if (rawScheduleMinutes > 0) {
+      availabilityIndex = round(((rawScheduleMinutes - discretionaryBlockedMinutes) / rawScheduleMinutes) * 100, 1);
+      blockedPercent = round((discretionaryBlockedMinutes / rawScheduleMinutes) * 100, 1);
+      if (utilization !== null) {
+        shopImpact = round((utilization * availabilityIndex) / 100, 1);
+      }
+    }
+  } catch (err) {
+    console.warn(`[ChairUtil Live] Availability metrics failed: ${err.message}`);
+  }
 
   return {
     utilization,
@@ -970,6 +1100,13 @@ async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds,
     availableHours: round(capacityMinutes / 60, 1),
     byDayOfWeek,
     scheduleSource: "free_slots",
+    // Availability & Shop Impact metrics
+    rawScheduleMinutes,
+    discretionaryBlockedMinutes,
+    availabilityIndex,
+    shopImpact,
+    blockedPercent,
+    atRisk: blockedPercent >= 25,
   };
 }
 
