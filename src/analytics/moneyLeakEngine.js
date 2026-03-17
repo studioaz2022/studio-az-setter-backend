@@ -453,6 +453,191 @@ async function computeCurrentPace(barberGhlId, locationId) {
 }
 
 /**
+ * Cap Zone metric: Average revenue per utilized hour (90-day window).
+ * Shows whether a fully-booked barber is maximizing chair time.
+ */
+async function computeAvgRevenuePerHour(barberGhlId, locationId) {
+  const endDate = new Date().toISOString().split("T")[0];
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - 90);
+  const startDateStr = startDate.toISOString().split("T")[0];
+
+  // Total revenue from transactions
+  const { data: transactions, error: txErr } = await fetchAllRows(supabase
+    .from("transactions")
+    .select("gross_amount")
+    .eq("artist_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("transaction_type", ["session_payment"])
+    .gte("session_date", startDateStr)
+    .lte("session_date", endDate));
+
+  if (txErr) throw new Error(`Cap zone revenue query failed: ${txErr.message}`);
+
+  const totalRevenue = (transactions || []).reduce(
+    (sum, t) => sum + parseFloat(t.gross_amount || 0), 0
+  );
+
+  // Total utilized hours from daily snapshots
+  const { data: snapshots, error: snapErr } = await fetchAllRows(supabase
+    .from("barber_analytics_snapshots")
+    .select("utilized_minutes")
+    .eq("barber_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .gte("snapshot_date", startDateStr)
+    .lte("snapshot_date", endDate)
+    .not("utilized_minutes", "is", null));
+
+  if (snapErr) throw new Error(`Cap zone snapshot query failed: ${snapErr.message}`);
+
+  const totalUtilizedMinutes = (snapshots || []).reduce(
+    (sum, s) => sum + (s.utilized_minutes || 0), 0
+  );
+
+  if (totalUtilizedMinutes === 0 || totalRevenue === 0) return null;
+
+  const totalUtilizedHours = totalUtilizedMinutes / 60;
+  return Math.round((totalRevenue / totalUtilizedHours) * 100) / 100;
+}
+
+/**
+ * Cap Zone metric: Overflow demand — signals that a barber is turning away business.
+ *
+ * Two proxies:
+ *   1. fullyBookedDays: days in the last 30 where daily utilization = 100%
+ *   2. avgWaitDays: average gap between appointment creation and start time
+ *      for new clients (first visit with this barber) — longer waits = overflow
+ */
+async function computeOverflowDemand(barberGhlId, locationId) {
+  const now = new Date();
+  const thirtyDaysAgo = new Date(now);
+  thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+  const startStr = thirtyDaysAgo.toISOString().split("T")[0];
+  const endStr = now.toISOString().split("T")[0];
+
+  // 1. Fully booked days (utilization >= 100%)
+  const { data: snapshots, error: snapErr } = await fetchAllRows(supabase
+    .from("barber_analytics_snapshots")
+    .select("utilization")
+    .eq("barber_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .gte("snapshot_date", startStr)
+    .lte("snapshot_date", endStr)
+    .not("utilization", "is", null));
+
+  if (snapErr) throw new Error(`Overflow demand snapshot query failed: ${snapErr.message}`);
+
+  // utilization is stored as 0.0000-1.0000 in the snapshot table
+  const fullyBookedDays = (snapshots || []).filter(s => s.utilization >= 1.0).length;
+
+  // 2. Average wait days for new clients (90-day window for more data)
+  const ninetyDaysAgo = new Date(now);
+  ninetyDaysAgo.setDate(ninetyDaysAgo.getDate() - 90);
+  const ninetyStr = ninetyDaysAgo.toISOString().split("T")[0];
+
+  const { data: appointments, error: apptErr } = await fetchAllRows(supabase
+    .from("appointments")
+    .select("contact_id, start_time, created_at, ghl_created_at")
+    .eq("assigned_user_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("status", COMPLETED_STATUSES)
+    .gte("start_time", ninetyStr + "T00:00:00Z")
+    .order("start_time", { ascending: true }));
+
+  if (apptErr) throw new Error(`Overflow demand appointments query failed: ${apptErr.message}`);
+
+  // Find first-visit appointments (first time this contact appears)
+  const seenContacts = new Set();
+  const waitDays = [];
+  for (const appt of (appointments || [])) {
+    if (!appt.contact_id || seenContacts.has(appt.contact_id)) continue;
+    seenContacts.add(appt.contact_id);
+
+    const createdAt = appt.created_at || appt.ghl_created_at;
+    if (!createdAt || !appt.start_time) continue;
+
+    const created = new Date(createdAt).getTime();
+    const start = new Date(appt.start_time).getTime();
+    if (start <= created) continue; // skip if start is before creation (data issue)
+
+    const days = (start - created) / (1000 * 60 * 60 * 24);
+    if (days > 0 && days < 90) waitDays.push(days); // cap at 90 to filter outliers
+  }
+
+  const avgWaitDays = waitDays.length > 0
+    ? Math.round((waitDays.reduce((a, b) => a + b, 0) / waitDays.length) * 10) / 10
+    : null;
+
+  return { fullyBookedDays, avgWaitDays };
+}
+
+/**
+ * Cap Zone metric: Suggested price bump.
+ * Only triggers when utilization > 90% for 4+ consecutive weeks.
+ */
+async function computeSuggestedPriceBump(barberGhlId, locationId, avgRevenuePerVisit) {
+  if (avgRevenuePerVisit == null) return null;
+
+  // Check the last 8 weeks of snapshots for consecutive >90% utilization
+  const eightWeeksAgo = new Date();
+  eightWeeksAgo.setDate(eightWeeksAgo.getDate() - 56);
+  const startStr = eightWeeksAgo.toISOString().split("T")[0];
+
+  const { data: snapshots, error } = await fetchAllRows(supabase
+    .from("barber_analytics_snapshots")
+    .select("snapshot_date, utilization")
+    .eq("barber_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .gte("snapshot_date", startStr)
+    .not("utilization", "is", null)
+    .order("snapshot_date", { ascending: true }));
+
+  if (error) throw new Error(`Price bump query failed: ${error.message}`);
+  if (!snapshots || snapshots.length === 0) return null;
+
+  // Group by Mon-Sun weeks, compute weekly avg utilization
+  const weeklyUtils = {};
+  for (const s of snapshots) {
+    const date = new Date(s.snapshot_date + "T12:00:00Z");
+    const day = date.getUTCDay();
+    const diff = day === 0 ? -6 : 1 - day;
+    const monday = new Date(date);
+    monday.setUTCDate(monday.getUTCDate() + diff);
+    const weekKey = monday.toISOString().split("T")[0];
+
+    if (!weeklyUtils[weekKey]) weeklyUtils[weekKey] = [];
+    weeklyUtils[weekKey].push(s.utilization); // 0.0-1.0 scale
+  }
+
+  // Check for 4+ consecutive weeks above 90%
+  const weeks = Object.keys(weeklyUtils).sort();
+  let consecutiveHigh = 0;
+  let maxConsecutive = 0;
+  for (const week of weeks) {
+    const vals = weeklyUtils[week];
+    const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+    if (avg >= 0.90) {
+      consecutiveHigh++;
+      maxConsecutive = Math.max(maxConsecutive, consecutiveHigh);
+    } else {
+      consecutiveHigh = 0;
+    }
+  }
+
+  if (maxConsecutive < 4) return null;
+
+  // Suggest ~10% bump, rounded to nearest $5
+  const rawBump = avgRevenuePerVisit * 0.10;
+  const amount = Math.max(5, Math.round(rawBump / 5) * 5);
+
+  return {
+    amount,
+    consecutiveWeeksAbove90: maxConsecutive,
+    message: `You've been 90%+ booked for ${maxConsecutive} weeks. You could raise your cut by $${amount} and still stay booked.`,
+  };
+}
+
+/**
  * Compute the full Money Leak Scorecard.
  * Aggregates all sub-computations into a single response.
  */
@@ -500,6 +685,22 @@ async function computeFullScorecard(barberGhlId, locationId) {
     ? Math.round((currentPace - weeklyGoal) * 100) / 100
     : null;
 
+  // Cap Zone metrics — only computed when utilization >= 90%
+  let capZoneMetrics = null;
+  const zone = moneyOnTheFloor.capacityZone;
+  if (zone === "cap") {
+    const [avgRevPerHour, overflow, priceBump] = await Promise.all([
+      safeCompute(() => computeAvgRevenuePerHour(barberGhlId, locationId), null),
+      safeCompute(() => computeOverflowDemand(barberGhlId, locationId), { fullyBookedDays: 0, avgWaitDays: null }),
+      safeCompute(() => computeSuggestedPriceBump(barberGhlId, locationId, moneyOnTheFloor.avgRevenuePerVisit), null),
+    ]);
+    capZoneMetrics = {
+      avgRevenuePerHour: avgRevPerHour,
+      overflowDemand: overflow,
+      suggestedPriceBump: priceBump,
+    };
+  }
+
   return {
     moneyOnTheFloor,
 
@@ -523,6 +724,8 @@ async function computeFullScorecard(barberGhlId, locationId) {
       blockedPercent: moneyOnTheFloor.blockedPercent,
       atRisk: moneyOnTheFloor.atRisk,
     },
+
+    capZoneMetrics,
 
     rebookAttemptRate: {
       rate: rebookAttempt.attemptRate,
@@ -558,6 +761,9 @@ module.exports = {
   getGoalRebookRate,
   computeRebookAttemptRate,
   computeMoneyOnTheFloor,
+  computeAvgRevenuePerHour,
+  computeOverflowDemand,
+  computeSuggestedPriceBump,
   findBestWeek,
   computeWeeklyGoal,
   computeCurrentPace,
