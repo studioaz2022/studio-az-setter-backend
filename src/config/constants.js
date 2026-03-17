@@ -128,11 +128,18 @@ const MESSAGE_DELAYS = {
 
 // Calendar IDs for consult appointments
 // TEMP: Using test calendar for troubleshooting (will revert to real calendars later)
+// Artist online consultation calendars
 const CALENDARS = {
-  JOAN_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
-  JOAN_ONLINE: "2EJcAtrllnYOtuSx4Dua",
-  ANDREW_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
-  ANDREW_ONLINE: "2EJcAtrllnYOtuSx4Dua",
+  JOAN_ONLINE: "Y13HIK8jFgO45zyq4sk7",
+  ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
+  CLAUDIA_ONLINE: "6RVbtnlSgXsnv2yG18Bo",
+};
+
+// Artist in-person consultation calendars
+const IN_PERSON_CONSULTATION_CALENDARS = {
+  JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
+  ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
+  CLAUDIA_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
 };
 
 // Translator calendars (online only)
@@ -141,12 +148,15 @@ const TRANSLATOR_CALENDARS = {
   MARIA_ONLINE: "LMIAfVnFU7phKTXoIuse",
 };
 
-// Consultation calendars for artists (separate from tattoo calendars)
+// All consultation calendars (online + in-person + translator)
 // Used to detect consultation_ended events for quote verification
 const CONSULTATION_CALENDARS = {
-  CLAUDIA: "6RVbtnlSgXsnv2yG18Bo",
-  JOAN: "2EJcAtrllnYOtuSx4Dua",
-  // Add more artist consultation calendars here as needed
+  CLAUDIA_ONLINE: "6RVbtnlSgXsnv2yG18Bo",
+  CLAUDIA_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
+  JOAN_ONLINE: "Y13HIK8jFgO45zyq4sk7",
+  JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
+  ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
+  ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
 };
 
 // GHL User IDs for all team members
@@ -238,6 +248,7 @@ module.exports = {
   TAGS,
   MESSAGE_DELAYS,
   CALENDARS,
+  IN_PERSON_CONSULTATION_CALENDARS,
   TRANSLATOR_CALENDARS,
   TRANSLATOR_USER_IDS,
   CONSULTATION_CALENDARS,

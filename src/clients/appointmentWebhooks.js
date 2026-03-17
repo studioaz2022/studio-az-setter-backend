@@ -15,7 +15,13 @@ const {
 } = require('../config/constants');
 const { updateContact } = require('./ghlClient');
 
-// All consultation-related calendar IDs (artist + translator calendars)
+// Online consultation calendar IDs — these get Google Meet + Fireflies
+const ONLINE_CONSULT_CALENDAR_IDS = new Set([
+  ...Object.values(CALENDARS).filter(Boolean),
+  ...Object.values(TRANSLATOR_CALENDARS).filter(Boolean),
+]);
+
+// All consultation calendar IDs (online + in-person) — for general consultation detection
 const ALL_CONSULT_CALENDAR_IDS = new Set([
   ...Object.values(CALENDARS).filter(Boolean),
   ...Object.values(CONSULTATION_CALENDARS).filter(Boolean),
@@ -73,8 +79,8 @@ async function ensureGoogleMeetForConsultation(rawAppt) {
   const existingAddress = rawAppt.address || '';
   const assignedUserId = rawAppt.assignedUserId;
 
-  // Only process consultation calendars (skip tattoo session, barbershop, etc.)
-  if (!ALL_CONSULT_CALENDAR_IDS.has(calendarId)) {
+  // Only process online consultation calendars (skip in-person, tattoo session, barbershop, etc.)
+  if (!ONLINE_CONSULT_CALENDAR_IDS.has(calendarId)) {
     return;
   }
 
