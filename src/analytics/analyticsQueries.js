@@ -1133,6 +1133,17 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     "haircut_fnf", "haircut_beard_fnf",
   ]);
 
+  // H+B calendars: 45-min service on 30-min slots. The 15-min bleed past the
+  // slot boundary is real service time that should expand capacity when it
+  // bleeds past the schedule envelope or into breaks.
+  const HB_CALENDAR_TYPES = new Set(["haircut_beard", "haircut_beard_fnf"]);
+  const hbCalIds = new Set();
+  if (barberConfig?.calendars) {
+    for (const [type, calId] of Object.entries(barberConfig.calendars)) {
+      if (HB_CALENDAR_TYPES.has(type)) hbCalIds.add(calId);
+    }
+  }
+
   // ── 1. Fetch schedule rules — union of HC-type calendars defines envelope ──
   // A barber may have two haircut calendars (non-F&F opens earlier, F&F closes
   // later). The actual capacity window is the union of all HC-type calendar
@@ -1645,8 +1656,35 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
     }
 
-    // ── Day capacity = raw schedule - break cost - dead space ──
-    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes - deadSpaceMinutes);
+    // ── H+B bleed expansion: 15-min overflow is real service time ──
+    // H+B appointments are 45 min on a 30-min slot. When the extra 15 min
+    // bleeds past the schedule envelope end or into a break, expand capacity
+    // by that amount so it's attributed correctly (not counted as >100%).
+    let hbBleedMinutes = 0;
+    for (const ev of clientEvents) {
+      if (!hbCalIds.has(ev.calendarId)) continue;
+      const slotInt = calendarSlotConfig[ev.calendarId]?.slotInterval || defaultSlotInterval;
+      if (ev.durationMin <= slotInt) continue; // no overflow
+      const bleed = ev.durationMin - slotInt; // typically 15 min
+
+      // Check bleed past schedule envelope end
+      if (ev.endMin > schedEnd) {
+        const pastEnd = Math.min(bleed, ev.endMin - schedEnd);
+        hbBleedMinutes += pastEnd;
+      }
+
+      // Check bleed into break periods
+      for (const brk of mergedBreaks) {
+        if (ev.endMin > brk.startMin && ev.startMin < brk.startMin) {
+          // Appointment started before break and bleeds into it
+          const intoBreak = Math.min(bleed, ev.endMin - brk.startMin);
+          hbBleedMinutes += intoBreak;
+        }
+      }
+    }
+
+    // ── Day capacity = raw schedule - break cost - dead space + H+B bleed ──
+    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes - deadSpaceMinutes + hbBleedMinutes);
 
     // Track discretionary blocked minutes for this day (clamped to schedule)
     const dayDiscretionaryBlocks = discretionaryBlockedByDate[dateStr] || [];
