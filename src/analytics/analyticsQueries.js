@@ -987,16 +987,15 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     );
     const schedules = schedResp.data?.schedules || [];
 
-    // Collect intervals per day from Work Hours + haircut calendar schedules only.
-    // H+B schedules have fragmented windows (slots between breaks) that would
-    // inflate the envelope. Haircut calendars have continuous windows that
-    // represent the actual bookable chair time.
-    // Only primary service calendars (haircut, haircut_beard, hot_towel_shave)
-    // define the capacity envelope. Beard trims are minor add-ons.
+    // Only HC-type calendars define the capacity envelope. H+B calendars have
+    // extra padding (e.g., 15 min past HC end) to accommodate longer service
+    // durations — that padding shouldn't expand capacity. H+B overflow past HC
+    // slot boundaries is what creates >100% utilization as a reward.
+    const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
     const envelopeCalIds = new Set();
     if (barberConfig?.calendars) {
       for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-        if (PRIMARY_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
+        if (ENVELOPE_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
       }
     }
 
