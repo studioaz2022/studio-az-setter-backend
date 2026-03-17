@@ -706,7 +706,7 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate
  *            appointmentCount, periodDays, mode,
  *            bookedHours, availableHours, byDayOfWeek, scheduleSource }
  */
-async function getChairUtilization(barberGhlId, locationId, periodDays = 30, asOfDate = null) {
+async function getChairUtilization(barberGhlId, locationId, periodDays = 60, asOfDate = null) {
   const { BARBER_DATA } = require("../config/kioskConfig");
 
   let ghlBarber;
@@ -966,157 +966,285 @@ async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds,
  */
 async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
   const httpClient = ghlBarber.getHttpClient();
-
-  // 1. Use the primary HC (haircut) calendar from kioskConfig for the capacity grid.
-  //    This is the canonical base — all calendars share the same chair/working hours.
   const { BARBER_DATA } = require("../config/kioskConfig");
   const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
-  const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
 
-  let gridConfig = null;
-  try {
-    const calResp = await ghlBarber.calendars.getCalendar({ calendarId: gridCalId });
-    const cal = calResp?.calendar || calResp;
-    const rawOpenHours = cal?.openHours;
-    const openHours = Array.isArray(rawOpenHours) && rawOpenHours.length > 0 ? rawOpenHours : null;
-    gridConfig = {
-      openHours,
-      slotDuration: cal?.slotDuration || 30,
-      slotInterval: cal?.slotInterval || 30,
-    };
-  } catch (err) {
-    console.warn(`[ChairUtil Historical] Grid calendar config failed for ${gridCalId}: ${err.message}`);
-  }
-
-  // 1b. Fetch schedule rules to get accurate working hours.
-  //     ALWAYS prefer the "Work Hours" schedule (calendarIds: []) — it represents actual
-  //     working hours and is narrower than individual calendar schedules which may have
-  //     wider booking windows. Fall back to a calendar-linked schedule only if no
-  //     Work Hours schedule exists.
+  // ── 1. Fetch schedule rules to determine working hours per day ──
+  // Use the "Work Hours" schedule (calendarIds: []) as the capacity envelope.
+  // Fall back to a calendar-linked schedule if Work Hours doesn't exist.
+  let scheduleRules = null; // { dayName → [{ from: "HH:mm", to: "HH:mm" }] }
   try {
     const schedResp = await httpClient.get(
       `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
     );
     const schedules = schedResp.data?.schedules || [];
 
-    // Prefer "Work Hours" schedule (not linked to any calendar, represents actual chair time)
     let gridSchedule = schedules.find(s =>
       (s.calendarIds || []).length === 0 && (s.rules || []).some(r => r.type === "wday" && r.intervals?.length > 0)
     );
-
-    // Fall back to schedule linked to the grid calendar
     if (!gridSchedule) {
+      const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
       gridSchedule = schedules.find(s => (s.calendarIds || []).includes(gridCalId));
     }
 
     if (gridSchedule) {
-      const dayNameToNum = { sunday: 0, monday: 1, tuesday: 2, wednesday: 3, thursday: 4, friday: 5, saturday: 6 };
-      const openHours = [];
+      scheduleRules = {};
       for (const rule of (gridSchedule.rules || [])) {
         if (rule.type !== "wday") continue;
-        const dayNum = dayNameToNum[rule.day];
-        if (dayNum == null) continue;
         const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
         if (intervals.length === 0) continue;
-        const hours = intervals.map(iv => {
-          const [fh, fm] = iv.from.split(":").map(Number);
-          const [th, tm] = iv.to.split(":").map(Number);
-          return { openHour: fh, openMinute: fm, closeHour: th, closeMinute: tm };
-        });
-        openHours.push({ daysOfTheWeek: [dayNum], hours });
+        scheduleRules[rule.day] = intervals; // [{ from: "11:00", to: "16:30" }, ...]
       }
-      if (openHours.length > 0) {
-        gridConfig.openHours = openHours;
-        console.log(`[ChairUtil Historical] Using schedule "${gridSchedule.name || 'unnamed'}" for capacity grid (${openHours.length} days)`);
-      }
+      console.log(`[ChairUtil Historical] Using schedule "${gridSchedule.name || 'unnamed'}" — ${Object.keys(scheduleRules).length} working days`);
     }
   } catch (err) {
     console.warn(`[ChairUtil Historical] Schedule rules fetch failed: ${err.message}`);
   }
 
-  // 2. Fetch appointments from Supabase (authoritative for past data, avoids
-  //    Calendar Events API double-counting issues with future/unsynced events)
-  const { data: appointments, error: apptError } = await supabase
-    .from("appointments")
-    .select("start_time, end_time, status")
-    .eq("assigned_user_id", barberGhlId)
-    .eq("location_id", locationId)
-    .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
-    .lte("start_time", new Date(endDateStr + "T23:59:59Z").toISOString())
-    .order("start_time", { ascending: true });
-
-  if (apptError) {
-    console.warn(`[ChairUtil Historical] Appointment query failed: ${apptError.message}`);
+  if (!scheduleRules || Object.keys(scheduleRules).length === 0) {
+    console.warn(`[ChairUtil Historical] No schedule found for ${barberGhlId}`);
+    return { ..._emptyUtilization(periodDays), mode: "historical", scheduleSource: "none" };
   }
 
-  // 3. Calculate appointment minutes from Supabase data
-  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processSupabaseAppointments(appointments || []);
+  // ── 2. Get slot duration from the haircut calendar ──
+  let slotDuration = 30;
+  try {
+    const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
+    const calResp = await ghlBarber.calendars.getCalendar({ calendarId: gridCalId });
+    const cal = calResp?.calendar || calResp;
+    slotDuration = cal?.slotDuration || 30;
+  } catch (err) {
+    console.warn(`[ChairUtil Historical] Could not get slot duration, defaulting to 30: ${err.message}`);
+  }
 
-  // 4. Generate slot grid from the single HC calendar for each day in the period
-  let totalGridMinutes = 0;
+  // ── 3. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
+  const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
+  const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+  const dayDisplayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-  if (gridConfig?.openHours) {
-    const current = new Date(startDate + "T12:00:00Z");
-    const end = new Date(endDateStr + "T12:00:00Z");
-    const slotDuration = gridConfig.slotDuration || 30;
-    const slotInterval = gridConfig.slotInterval || 30;
+  let totalCapacityMinutes = 0;
+  let totalUtilizedMinutes = 0;
+  let totalAppointmentCount = 0;
+  const byDay = {}; // dayDisplayName → { bookedMinutes, workedDates: Set }
 
-    while (current <= end) {
-      const dayNum = current.getUTCDay(); // 0=Sun, 1=Mon, ...
+  const current = new Date(startDate + "T12:00:00Z");
+  const end = new Date(endDateStr + "T12:00:00Z");
 
-      const matchingRule = gridConfig.openHours.find(oh =>
-        (oh.daysOfTheWeek || []).includes(dayNum)
-      );
+  while (current <= end) {
+    const dateStr = current.toISOString().split("T")[0];
+    const dayNum = current.getUTCDay();
+    const dayName = dayNames[dayNum];
+    const dayDisplay = dayDisplayNames[dayNum];
 
-      if (matchingRule) {
-        let daySlots = 0;
-        for (const h of matchingRule.hours || []) {
-          const fromMin = (h.openHour || 0) * 60 + (h.openMinute || 0);
-          const toMin = (h.closeHour || 0) * 60 + (h.closeMinute || 0);
-          for (let m = fromMin; m + slotDuration <= toMin; m += slotInterval) {
-            daySlots++;
-          }
+    const schedIntervals = scheduleRules[dayName];
+    if (!schedIntervals) {
+      // Not a working day — skip entirely
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
+
+    // Raw schedule capacity for this day (before break deductions)
+    let rawCapacityMinutes = 0;
+    for (const iv of schedIntervals) {
+      const [fh, fm] = iv.from.split(":").map(Number);
+      const [th, tm] = iv.to.split(":").map(Number);
+      rawCapacityMinutes += (th * 60 + tm) - (fh * 60 + fm);
+    }
+
+    // Fetch calendar events for this day from GHL
+    const getCentralOffset = (ds) => {
+      const d = new Date(ds + "T12:00:00Z");
+      const utcStr = d.toLocaleString("en-US", { timeZone: "UTC" });
+      const centralStr = d.toLocaleString("en-US", { timeZone: "America/Chicago" });
+      const offMin = (new Date(utcStr) - new Date(centralStr)) / 60000;
+      const hrs = Math.floor(Math.abs(offMin) / 60);
+      const mins = Math.abs(offMin) % 60;
+      return `${offMin >= 0 ? "-" : "+"}${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
+    };
+    const offset = getCentralOffset(dateStr);
+    const dayStartMs = new Date(`${dateStr}T00:00:00${offset}`).getTime();
+    const dayEndMs = new Date(`${dateStr}T23:59:59${offset}`).getTime();
+
+    let events;
+    try {
+      events = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, dayStartMs, dayEndMs);
+    } catch (err) {
+      console.warn(`[ChairUtil Historical] Event fetch failed for ${dateStr}: ${err.message}`);
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
+    }
+
+    // Categorize events: breaks vs client appointments
+    // Sort by start time for adjacency analysis
+    const sortedEvents = events
+      .map(ev => {
+        const s = new Date(ev.startTime);
+        const e = new Date(ev.endTime);
+        const title = (ev.title || "").toLowerCase();
+        const isBreak = breakKeywords.some(kw => title.includes(kw));
+        const isCancelled = (ev.appointmentStatus || "").toLowerCase() === "cancelled";
+        return {
+          startMs: s.getTime(),
+          endMs: e.getTime(),
+          startMin: s.getHours() * 60 + s.getMinutes(), // local Central time approx
+          endMin: e.getHours() * 60 + e.getMinutes(),
+          durationMin: (e - s) / 60000,
+          isBreak,
+          isCancelled,
+          title: ev.title || "",
+          calendarId: ev.calendarId,
+          contactId: ev.contactId,
+          raw: ev,
+        };
+      })
+      .sort((a, b) => a.startMs - b.startMs);
+
+    // Convert start/end to Central time minutes-since-midnight for slot math
+    // (re-parse using timezone-aware formatting)
+    for (const ev of sortedEvents) {
+      const startCentral = new Date(ev.raw.startTime);
+      const endCentral = new Date(ev.raw.endTime);
+      // Use Intl to get hours/minutes in Central time
+      const sf = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
+      const startParts = sf.formatToParts(startCentral);
+      const endParts = sf.formatToParts(endCentral);
+      const getMin = (parts) => {
+        const h = parseInt(parts.find(p => p.type === "hour").value);
+        const m = parseInt(parts.find(p => p.type === "minute").value);
+        return h * 60 + m;
+      };
+      ev.startMin = getMin(startParts);
+      ev.endMin = getMin(endParts);
+    }
+
+    // ── Compute slot-aligned break cost with H+B reclaim ──
+    // For each break event, determine how much capacity it actually costs:
+    //   - A break sits in one or more slot-aligned windows
+    //   - The cost is the number of full slots the break occupies (rounded up to slot boundaries)
+    //   - BUT if an adjacent H+B appointment (longer than slotDuration) extends into the break's
+    //     slot window, the H+B "reclaims" that padding and the break costs 0 (or less)
+    let breakCostMinutes = 0;
+
+    for (let i = 0; i < sortedEvents.length; i++) {
+      const ev = sortedEvents[i];
+      if (!ev.isBreak) continue;
+
+      const breakStart = ev.startMin;
+      const breakEnd = ev.endMin;
+      const breakDuration = breakEnd - breakStart;
+
+      // Find the slot-aligned window this break falls in.
+      // Slots are aligned to the schedule intervals on slotDuration boundaries.
+      // The break's slot cost = ceil(breakDuration / slotDuration) * slotDuration
+      // But we need to check if the break is *padding* after an H+B.
+
+      // Check the immediately preceding event
+      let prevEvent = null;
+      for (let j = i - 1; j >= 0; j--) {
+        if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
+          prevEvent = sortedEvents[j];
+          break;
         }
-        totalGridMinutes += daySlots * slotDuration;
       }
 
-      current.setUTCDate(current.getUTCDate() + 1);
+      // H+B reclaim: if the previous appointment ends exactly at break start,
+      // AND the previous appointment duration > slotDuration (i.e., it's an H+B or longer service),
+      // the "overflow" from that appointment into this slot window may absorb the break.
+      let reclaimedByPrev = 0;
+      if (prevEvent && prevEvent.endMin === breakStart && prevEvent.durationMin > slotDuration) {
+        // The H+B overflow = duration mod slotDuration (the part that bleeds past slot boundaries)
+        const overflow = prevEvent.durationMin % slotDuration;
+        if (overflow > 0) {
+          // This overflow already consumed part of the slot the break sits in
+          reclaimedByPrev = overflow;
+        }
+      }
+
+      // Also check the immediately following event — if it starts right when break ends
+      // and is an H+B, its "pre-fill" can absorb trailing break padding
+      let nextEvent = null;
+      for (let j = i + 1; j < sortedEvents.length; j++) {
+        if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
+          nextEvent = sortedEvents[j];
+          break;
+        }
+      }
+
+      let reclaimedByNext = 0;
+      if (nextEvent && nextEvent.startMin === breakEnd && nextEvent.durationMin > slotDuration) {
+        const overflow = nextEvent.durationMin % slotDuration;
+        if (overflow > 0) {
+          reclaimedByNext = overflow;
+        }
+      }
+
+      // Net break cost: round break up to slot boundary, then subtract reclaimed
+      const slotAlignedCost = Math.ceil(breakDuration / slotDuration) * slotDuration;
+      const netCost = Math.max(0, slotAlignedCost - reclaimedByPrev - reclaimedByNext);
+      breakCostMinutes += netCost;
     }
+
+    // ── Compute utilized minutes (client appointments only) ──
+    let dayUtilized = 0;
+    let dayApptCount = 0;
+    for (const ev of sortedEvents) {
+      if (ev.isBreak || ev.isCancelled) continue;
+      // Must have a contactId or a non-block title to count
+      const title = ev.title.toLowerCase();
+      if (!ev.contactId && (title === "" || breakKeywords.some(kw => title.includes(kw)))) continue;
+      if (ev.durationMin > 0 && ev.durationMin < 480) {
+        dayUtilized += ev.durationMin;
+        dayApptCount++;
+      }
+    }
+
+    // ── Day capacity = raw schedule - break cost ──
+    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes);
+
+    totalCapacityMinutes += dayCapacity;
+    totalUtilizedMinutes += dayUtilized;
+    totalAppointmentCount += dayApptCount;
+
+    // Track by day-of-week
+    if (dayApptCount > 0) {
+      if (!byDay[dayDisplay]) byDay[dayDisplay] = { bookedMinutes: 0, workedDates: new Set() };
+      byDay[dayDisplay].bookedMinutes += dayUtilized;
+      byDay[dayDisplay].workedDates.add(dateStr);
+    }
+
+    // Rate limit: 150ms delay between days to avoid GHL API throttling
+    await new Promise(resolve => setTimeout(resolve, 150));
+
+    current.setUTCDate(current.getUTCDate() + 1);
   }
 
-  // 5. Capacity = grid - displaced + appointments
-  //    But more simply: capacity = freeSlotMinutes + appointmentMinutes
-  //    where freeSlotMinutes = totalGridMinutes - appointmentMinutes (appointments displace grid slots)
-  //    So: capacity = totalGridMinutes (the grid is the total capacity envelope)
-  //    Actually: the grid represents TOTAL theoretical capacity.
-  //    Displaced slots = grid slots overlapped by appointments.
-  //    free = grid - displaced appointments
-  //    capacity = free + actual appointment minutes = grid - displaced + appointment minutes
-  //    For simplicity and accuracy: capacity = totalGridMinutes when grid slots match appointment duration.
-  //    When H+B displaces more grid slots than its actual duration, capacity is slightly less.
-  //    For historical mode, use: capacity = totalGridMinutes, utilized = appointmentMinutes.
-  //    This is slightly less precise than live mode but good enough for 8-week trend context.
-  const capacityMinutes = totalGridMinutes;
-  const utilizedMinutes = appointmentMinutes;
-  const freeSlotMinutes = Math.max(0, capacityMinutes - utilizedMinutes);
-  const utilization = capacityMinutes > 0
-    ? round((utilizedMinutes / capacityMinutes) * 100, 1)
+  // ── 4. Build byDayOfWeek summary ──
+  const byDayOfWeek = {};
+  for (const [dayDisplay, data] of Object.entries(byDay)) {
+    const dayCount = data.workedDates.size;
+    byDayOfWeek[dayDisplay] = {
+      avgBookedHours: dayCount > 0 ? round(data.bookedMinutes / dayCount / 60, 1) : 0,
+      daysWorked: dayCount,
+    };
+  }
+
+  // ── 5. Final utilization ──
+  const utilization = totalCapacityMinutes > 0
+    ? round((totalUtilizedMinutes / totalCapacityMinutes) * 100, 1)
     : null;
 
   return {
     utilization,
-    capacityMinutes,
-    utilizedMinutes,
-    freeSlotMinutes,
-    appointmentCount,
+    capacityMinutes: totalCapacityMinutes,
+    utilizedMinutes: totalUtilizedMinutes,
+    freeSlotMinutes: Math.max(0, totalCapacityMinutes - totalUtilizedMinutes),
+    appointmentCount: totalAppointmentCount,
     periodDays,
     mode: "historical",
-    // Legacy fields
-    bookedHours: round(utilizedMinutes / 60, 1),
-    availableHours: round(capacityMinutes / 60, 1),
+    bookedHours: round(totalUtilizedMinutes / 60, 1),
+    availableHours: round(totalCapacityMinutes / 60, 1),
     byDayOfWeek,
-    scheduleSource: "open_hours",
+    scheduleSource: "calendar_events_api",
   };
 }
 
