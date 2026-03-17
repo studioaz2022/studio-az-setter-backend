@@ -1049,13 +1049,24 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   if (barberConfig?.calendars) {
     for (const calId of Object.values(barberConfig.calendars)) allCalIds.add(calId);
   }
+  // Helper: GHL returns slotDuration/slotInterval as raw numbers with separate
+  // unit fields (e.g., slotDuration=1 + slotDurationUnit="hours" = 60 minutes).
+  // The SDK doesn't normalize this — we must convert to minutes ourselves.
+  const toMinutes = (value, unit) => {
+    if (!value) return 0;
+    if (unit === "hours") return value * 60;
+    return value; // "mins" or missing = already minutes
+  };
+
   for (const calId of allCalIds) {
     try {
       const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
       const cal = calResp?.calendar || calResp;
+      const durMin = toMinutes(cal?.slotDuration, cal?.slotDurationUnit) || 30;
+      const intMin = toMinutes(cal?.slotInterval, cal?.slotIntervalUnit) || durMin;
       calendarSlotConfig[calId] = {
-        slotDuration: cal?.slotDuration || 30,
-        slotInterval: cal?.slotInterval || cal?.slotDuration || 30,
+        slotDuration: durMin,
+        slotInterval: intMin,
       };
     } catch (err) {
       console.warn(`[ChairUtil Historical] Could not get slot config for ${calId}: ${err.message}`);
