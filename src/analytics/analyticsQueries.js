@@ -1006,16 +1006,23 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     return { ..._emptyUtilization(periodDays), mode: "historical", scheduleSource: "none" };
   }
 
-  // ── 2. Get slot duration from the haircut calendar ──
+  // ── 2. Get slot interval from the haircut calendar ──
+  // slotInterval is the booking grid size — the minimum time block each appointment
+  // consumes. A 45-min haircut on a 60-min interval grid consumes 60 min of capacity
+  // (the 15-min padding is dead space, not bookable). slotDuration is the actual
+  // service length; slotInterval is the grid spacing.
+  let slotInterval = 30;
   let slotDuration = 30;
   try {
     const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
     const calResp = await ghlBarber.calendars.getCalendar({ calendarId: gridCalId });
     const cal = calResp?.calendar || calResp;
     slotDuration = cal?.slotDuration || 30;
+    slotInterval = cal?.slotInterval || cal?.slotDuration || 30;
   } catch (err) {
-    console.warn(`[ChairUtil Historical] Could not get slot duration, defaulting to 30: ${err.message}`);
+    console.warn(`[ChairUtil Historical] Could not get slot config, defaulting to 30: ${err.message}`);
   }
+  console.log(`[ChairUtil Historical] Slot config: duration=${slotDuration}min, interval=${slotInterval}min`);
 
   // ── 3. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
   const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
@@ -1117,28 +1124,23 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       ev.endMin = getMin(endParts);
     }
 
-    // ── Compute slot-aligned break cost with H+B reclaim ──
-    // For each break event, determine how much capacity it actually costs:
-    //   - A break sits in one or more slot-aligned windows
-    //   - The cost is the number of full slots the break occupies (rounded up to slot boundaries)
-    //   - BUT if an adjacent H+B appointment (longer than slotDuration) extends into the break's
-    //     slot window, the H+B "reclaims" that padding and the break costs 0 (or less)
+    // ── Compute slot-aligned break cost with appointment reclaim ──
+    // Break cost is rounded up to the slot interval grid. If an adjacent appointment
+    // (any service longer than the break's remaining slot padding) extends into the
+    // break's slot window, it reclaims that padding and reduces the break cost.
+    //
+    // slotInterval is the booking grid spacing (e.g., 60 min for Drew, 30 min for Lionel).
+    // This is what defines "one slot" of capacity.
     let breakCostMinutes = 0;
 
     for (let i = 0; i < sortedEvents.length; i++) {
       const ev = sortedEvents[i];
       if (!ev.isBreak) continue;
 
-      const breakStart = ev.startMin;
-      const breakEnd = ev.endMin;
-      const breakDuration = breakEnd - breakStart;
+      const breakDuration = ev.endMin - ev.startMin;
+      if (breakDuration <= 0) continue;
 
-      // Find the slot-aligned window this break falls in.
-      // Slots are aligned to the schedule intervals on slotDuration boundaries.
-      // The break's slot cost = ceil(breakDuration / slotDuration) * slotDuration
-      // But we need to check if the break is *padding* after an H+B.
-
-      // Check the immediately preceding event
+      // Check the immediately preceding non-break/non-cancelled event
       let prevEvent = null;
       for (let j = i - 1; j >= 0; j--) {
         if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
@@ -1147,21 +1149,17 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         }
       }
 
-      // H+B reclaim: if the previous appointment ends exactly at break start,
-      // AND the previous appointment duration > slotDuration (i.e., it's an H+B or longer service),
-      // the "overflow" from that appointment into this slot window may absorb the break.
+      // Reclaim: if the previous appointment ends exactly at break start and its
+      // duration overflows past a slot boundary, that overflow absorbs break padding.
+      // E.g., Lionel's 45-min H+B in a 30-min grid: overflow = 45 % 30 = 15 min reclaimed.
+      // E.g., Drew's 60-min H+B in a 60-min grid: overflow = 0, no reclaim (it fills the slot exactly).
       let reclaimedByPrev = 0;
-      if (prevEvent && prevEvent.endMin === breakStart && prevEvent.durationMin > slotDuration) {
-        // The H+B overflow = duration mod slotDuration (the part that bleeds past slot boundaries)
-        const overflow = prevEvent.durationMin % slotDuration;
-        if (overflow > 0) {
-          // This overflow already consumed part of the slot the break sits in
-          reclaimedByPrev = overflow;
-        }
+      if (prevEvent && prevEvent.endMin === ev.startMin && prevEvent.durationMin > slotInterval) {
+        const overflow = prevEvent.durationMin % slotInterval;
+        if (overflow > 0) reclaimedByPrev = overflow;
       }
 
-      // Also check the immediately following event — if it starts right when break ends
-      // and is an H+B, its "pre-fill" can absorb trailing break padding
+      // Same check for the immediately following event
       let nextEvent = null;
       for (let j = i + 1; j < sortedEvents.length; j++) {
         if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
@@ -1171,20 +1169,21 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
 
       let reclaimedByNext = 0;
-      if (nextEvent && nextEvent.startMin === breakEnd && nextEvent.durationMin > slotDuration) {
-        const overflow = nextEvent.durationMin % slotDuration;
-        if (overflow > 0) {
-          reclaimedByNext = overflow;
-        }
+      if (nextEvent && nextEvent.startMin === ev.endMin && nextEvent.durationMin > slotInterval) {
+        const overflow = nextEvent.durationMin % slotInterval;
+        if (overflow > 0) reclaimedByNext = overflow;
       }
 
-      // Net break cost: round break up to slot boundary, then subtract reclaimed
-      const slotAlignedCost = Math.ceil(breakDuration / slotDuration) * slotDuration;
+      // Net break cost: round break up to slot interval boundary, then subtract reclaimed
+      const slotAlignedCost = Math.ceil(breakDuration / slotInterval) * slotInterval;
       const netCost = Math.max(0, slotAlignedCost - reclaimedByPrev - reclaimedByNext);
       breakCostMinutes += netCost;
     }
 
     // ── Compute utilized minutes (client appointments only) ──
+    // Each appointment consumes at least one full slot interval of capacity,
+    // even if the service is shorter (e.g., 45-min haircut in 60-min grid = 60 min consumed).
+    // Longer services snap up to the next slot boundary (e.g., 45-min H+B in 30-min grid = 60 min).
     let dayUtilized = 0;
     let dayApptCount = 0;
     for (const ev of sortedEvents) {
@@ -1193,7 +1192,9 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       const title = ev.title.toLowerCase();
       if (!ev.contactId && (title === "" || breakKeywords.some(kw => title.includes(kw)))) continue;
       if (ev.durationMin > 0 && ev.durationMin < 480) {
-        dayUtilized += ev.durationMin;
+        // Snap up to slot interval grid: each appointment consumes ceil(duration / slotInterval) slots
+        const slotConsumed = Math.ceil(ev.durationMin / slotInterval) * slotInterval;
+        dayUtilized += slotConsumed;
         dayApptCount++;
       }
     }
