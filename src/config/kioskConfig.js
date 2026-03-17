@@ -15,6 +15,8 @@ const BARBER_DATA = [
     calendars: {
       haircut: 'Bsv9ngkRgsbLzgtN3Vpq',
       haircut_beard: 'pGNsYjGyEYW9LCD1GcQN',
+      haircut_fnf: '9a66xeZi2pEJWQpxiMjy',
+      haircut_beard_fnf: '0qOmPMcP7L4qz58fxmu4',
     },
   },
   {

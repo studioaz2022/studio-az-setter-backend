@@ -971,7 +971,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
 
   // Primary service types that define the capacity grid. Beard trims are minor
   // add-ons — their short durations/intervals distort dead space and break cost.
-  const PRIMARY_CALENDAR_TYPES = new Set(["haircut", "haircut_beard", "hot_towel_shave"]);
+  const PRIMARY_CALENDAR_TYPES = new Set([
+    "haircut", "haircut_beard", "hot_towel_shave",
+    "haircut_fnf", "haircut_beard_fnf",
+  ]);
 
   // ── 1. Fetch ALL schedule rules and compute union envelope per day ──
   // Each barber has multiple calendars (HC, H+B, BT, F&F) with potentially
