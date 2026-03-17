@@ -1006,23 +1006,35 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     return { ..._emptyUtilization(periodDays), mode: "historical", scheduleSource: "none" };
   }
 
-  // ── 2. Get slot interval from the haircut calendar ──
-  // slotInterval is the booking grid size — the minimum time block each appointment
-  // consumes. A 45-min haircut on a 60-min interval grid consumes 60 min of capacity
-  // (the 15-min padding is dead space, not bookable). slotDuration is the actual
-  // service length; slotInterval is the grid spacing.
-  let slotInterval = 30;
-  let slotDuration = 30;
-  try {
-    const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
-    const calResp = await ghlBarber.calendars.getCalendar({ calendarId: gridCalId });
-    const cal = calResp?.calendar || calResp;
-    slotDuration = cal?.slotDuration || 30;
-    slotInterval = cal?.slotInterval || cal?.slotDuration || 30;
-  } catch (err) {
-    console.warn(`[ChairUtil Historical] Could not get slot config, defaulting to 30: ${err.message}`);
+  // ── 2. Fetch slot config for ALL of this barber's calendars ──
+  // Each calendar can have a different slotDuration and slotInterval.
+  // We need per-calendar configs so each appointment's capacity consumption
+  // is calculated based on the calendar it was booked on.
+  // calendarSlotConfig: { calendarId → { slotDuration, slotInterval } }
+  const calendarSlotConfig = {};
+  const allCalIds = new Set(calendarIds);
+  if (barberConfig?.calendars) {
+    for (const calId of Object.values(barberConfig.calendars)) allCalIds.add(calId);
   }
-  console.log(`[ChairUtil Historical] Slot config: duration=${slotDuration}min, interval=${slotInterval}min`);
+  for (const calId of allCalIds) {
+    try {
+      const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
+      const cal = calResp?.calendar || calResp;
+      calendarSlotConfig[calId] = {
+        slotDuration: cal?.slotDuration || 30,
+        slotInterval: cal?.slotInterval || cal?.slotDuration || 30,
+      };
+    } catch (err) {
+      console.warn(`[ChairUtil Historical] Could not get slot config for ${calId}: ${err.message}`);
+      calendarSlotConfig[calId] = { slotDuration: 30, slotInterval: 30 };
+    }
+  }
+  // Default slot interval for break cost alignment (use haircut calendar as baseline)
+  const gridCalId = barberConfig?.calendars?.haircut || calendarIds[0];
+  const defaultSlotInterval = calendarSlotConfig[gridCalId]?.slotInterval || 30;
+  console.log(`[ChairUtil Historical] Calendar slot configs:`, Object.entries(calendarSlotConfig).map(
+    ([id, c]) => `${id.substring(0, 8)}…: dur=${c.slotDuration}, int=${c.slotInterval}`
+  ).join(", "));
 
   // ── 3. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
   const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
@@ -1125,12 +1137,9 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     }
 
     // ── Compute slot-aligned break cost with appointment reclaim ──
-    // Break cost is rounded up to the slot interval grid. If an adjacent appointment
-    // (any service longer than the break's remaining slot padding) extends into the
-    // break's slot window, it reclaims that padding and reduces the break cost.
-    //
-    // slotInterval is the booking grid spacing (e.g., 60 min for Drew, 30 min for Lionel).
-    // This is what defines "one slot" of capacity.
+    // Break cost is rounded up to the default slot interval grid (from the haircut
+    // calendar). If an adjacent appointment overflows past its own calendar's slot
+    // boundary, that overflow absorbs break padding and reduces the break cost.
     let breakCostMinutes = 0;
 
     for (let i = 0; i < sortedEvents.length; i++) {
@@ -1150,13 +1159,15 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
 
       // Reclaim: if the previous appointment ends exactly at break start and its
-      // duration overflows past a slot boundary, that overflow absorbs break padding.
-      // E.g., Lionel's 45-min H+B in a 30-min grid: overflow = 45 % 30 = 15 min reclaimed.
-      // E.g., Drew's 60-min H+B in a 60-min grid: overflow = 0, no reclaim (it fills the slot exactly).
+      // duration overflows past that calendar's slot interval, the overflow absorbs
+      // break padding. Uses the PREVIOUS appointment's calendar slot interval.
       let reclaimedByPrev = 0;
-      if (prevEvent && prevEvent.endMin === ev.startMin && prevEvent.durationMin > slotInterval) {
-        const overflow = prevEvent.durationMin % slotInterval;
-        if (overflow > 0) reclaimedByPrev = overflow;
+      if (prevEvent && prevEvent.endMin === ev.startMin) {
+        const prevSlotInt = calendarSlotConfig[prevEvent.calendarId]?.slotInterval || defaultSlotInterval;
+        if (prevEvent.durationMin > prevSlotInt) {
+          const overflow = prevEvent.durationMin % prevSlotInt;
+          if (overflow > 0) reclaimedByPrev = overflow;
+        }
       }
 
       // Same check for the immediately following event
@@ -1169,21 +1180,25 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
 
       let reclaimedByNext = 0;
-      if (nextEvent && nextEvent.startMin === ev.endMin && nextEvent.durationMin > slotInterval) {
-        const overflow = nextEvent.durationMin % slotInterval;
-        if (overflow > 0) reclaimedByNext = overflow;
+      if (nextEvent && nextEvent.startMin === ev.endMin) {
+        const nextSlotInt = calendarSlotConfig[nextEvent.calendarId]?.slotInterval || defaultSlotInterval;
+        if (nextEvent.durationMin > nextSlotInt) {
+          const overflow = nextEvent.durationMin % nextSlotInt;
+          if (overflow > 0) reclaimedByNext = overflow;
+        }
       }
 
-      // Net break cost: round break up to slot interval boundary, then subtract reclaimed
-      const slotAlignedCost = Math.ceil(breakDuration / slotInterval) * slotInterval;
+      // Net break cost: round break up to default slot interval boundary, then subtract reclaimed
+      const slotAlignedCost = Math.ceil(breakDuration / defaultSlotInterval) * defaultSlotInterval;
       const netCost = Math.max(0, slotAlignedCost - reclaimedByPrev - reclaimedByNext);
       breakCostMinutes += netCost;
     }
 
     // ── Compute utilized minutes (client appointments only) ──
-    // Each appointment consumes at least one full slot interval of capacity,
-    // even if the service is shorter (e.g., 45-min haircut in 60-min grid = 60 min consumed).
-    // Longer services snap up to the next slot boundary (e.g., 45-min H+B in 30-min grid = 60 min).
+    // Each appointment consumes capacity based on ITS OWN calendar's slot interval.
+    // A 45-min haircut on Drew's 60-min interval calendar = 60 min consumed.
+    // A 45-min H+B on Lionel's 30-min interval calendar = 60 min consumed (2 slots).
+    // A 35-min haircut on Albe's 15-min interval calendar = 45 min consumed (3 slots).
     let dayUtilized = 0;
     let dayApptCount = 0;
     for (const ev of sortedEvents) {
@@ -1192,8 +1207,10 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       const title = ev.title.toLowerCase();
       if (!ev.contactId && (title === "" || breakKeywords.some(kw => title.includes(kw)))) continue;
       if (ev.durationMin > 0 && ev.durationMin < 480) {
-        // Snap up to slot interval grid: each appointment consumes ceil(duration / slotInterval) slots
-        const slotConsumed = Math.ceil(ev.durationMin / slotInterval) * slotInterval;
+        // Look up this appointment's calendar slot interval
+        const evSlotInterval = calendarSlotConfig[ev.calendarId]?.slotInterval || defaultSlotInterval;
+        // Snap up: each appointment consumes ceil(duration / its slotInterval) slots
+        const slotConsumed = Math.ceil(ev.durationMin / evSlotInterval) * evSlotInterval;
         dayUtilized += slotConsumed;
         dayApptCount++;
       }
