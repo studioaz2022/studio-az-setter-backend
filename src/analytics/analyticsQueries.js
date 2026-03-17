@@ -1172,16 +1172,38 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       if (bs.deleted) continue;
       const s = new Date(bs.startTime);
       const e = new Date(bs.endTime);
-      // Format date as YYYY-MM-DD in Central time
-      const dateParts = bsDateFmt.formatToParts(s);
-      const month = dateParts.find(p => p.type === "month").value;
-      const day = dateParts.find(p => p.type === "day").value;
-      const year = dateParts.find(p => p.type === "year").value;
-      const dateKey = `${year}-${month}-${day}`;
-      const startMin = bsGetMin(bsTimeFmt.formatToParts(s));
-      const endMin = bsGetMin(bsTimeFmt.formatToParts(e));
-      if (!blockedSlotsByDate[dateKey]) blockedSlotsByDate[dateKey] = [];
-      blockedSlotsByDate[dateKey].push({ startMin, endMin });
+
+      // Split multi-day blocks into per-day segments.
+      // A block from Mar 5 10am → Mar 11 6pm needs entries for each day.
+      const cursor = new Date(s);
+      while (cursor < e) {
+        const dateParts = bsDateFmt.formatToParts(cursor);
+        const month = dateParts.find(p => p.type === "month").value;
+        const day = dateParts.find(p => p.type === "day").value;
+        const year = dateParts.find(p => p.type === "year").value;
+        const dateKey = `${year}-${month}-${day}`;
+
+        // Start-of-day for this segment
+        const segStart = bsGetMin(bsTimeFmt.formatToParts(cursor));
+
+        // End-of-day or block end, whichever comes first
+        const dayMidnight = new Date(cursor);
+        dayMidnight.setDate(dayMidnight.getDate() + 1);
+        dayMidnight.setHours(0, 0, 0, 0);
+        // Convert midnight to Central time to find the day boundary
+        const segEndTime = e < dayMidnight ? e : dayMidnight;
+        const segEnd = e < dayMidnight
+          ? bsGetMin(bsTimeFmt.formatToParts(e))
+          : 24 * 60; // midnight = 1440
+
+        if (segEnd > segStart) {
+          if (!blockedSlotsByDate[dateKey]) blockedSlotsByDate[dateKey] = [];
+          blockedSlotsByDate[dateKey].push({ startMin: segStart, endMin: segEnd });
+        }
+
+        // Advance to next day at midnight
+        cursor.setTime(dayMidnight.getTime());
+      }
     }
     const totalBlocked = Object.values(blockedSlotsByDate).reduce((s, arr) => s + arr.reduce((a, b) => a + (b.endMin - b.startMin), 0), 0);
     if (totalBlocked > 0) {
