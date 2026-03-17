@@ -984,20 +984,21 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     // H+B schedules have fragmented windows (slots between breaks) that would
     // inflate the envelope. Haircut calendars have continuous windows that
     // represent the actual bookable chair time.
-    const hcCalIds = new Set();
+    // Only primary service calendars (haircut, haircut_beard, hot_towel_shave)
+    // define the capacity envelope. Beard trims are minor add-ons.
+    const envelopeCalIds = new Set();
     if (barberConfig?.calendars) {
-      // Include haircut and beard_trim calendars (continuous schedules), not H+B
       for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-        if (type !== "haircut_beard") hcCalIds.add(calId);
+        if (PRIMARY_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
       }
     }
 
     const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
     for (const sched of schedules) {
-      // Include Work Hours (no calendarIds) and haircut/beard_trim calendar schedules
+      // Include Work Hours (no calendarIds) and primary service calendar schedules
       const isWorkHours = (sched.calendarIds || []).length === 0;
-      const isHcSchedule = (sched.calendarIds || []).some(id => hcCalIds.has(id));
-      if (!isWorkHours && !isHcSchedule) continue;
+      const isPrimarySchedule = (sched.calendarIds || []).some(id => envelopeCalIds.has(id));
+      if (!isWorkHours && !isPrimarySchedule) continue;
 
       for (const rule of (sched.rules || [])) {
         if (rule.type !== "wday") continue;
@@ -1039,16 +1040,27 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     return { ..._emptyUtilization(periodDays), mode: "historical", scheduleSource: "none" };
   }
 
-  // ── 2. Fetch slot config for ALL of this barber's calendars ──
-  // Each calendar can have a different slotDuration and slotInterval.
-  // We need per-calendar configs so each appointment's capacity consumption
-  // is calculated based on the calendar it was booked on.
-  // calendarSlotConfig: { calendarId → { slotDuration, slotInterval } }
-  const calendarSlotConfig = {};
+  // ── 2. Fetch slot config for this barber's calendars ──
+  // Only primary services (haircut, haircut_beard, hot_towel_shave) define the
+  // capacity grid. Beard trims are minor add-ons — their short durations/intervals
+  // would artificially shrink minBookable and distort dead space detection.
+  // We still fetch ALL calendar configs for per-appointment break reclaim math.
+  const PRIMARY_CALENDAR_TYPES = new Set(["haircut", "haircut_beard", "hot_towel_shave"]);
+  const calendarSlotConfig = {};  // ALL calendars (for break reclaim)
+  const primaryCalIds = new Set(); // only primary services (for capacity grid)
+
   const allCalIds = new Set(calendarIds);
   if (barberConfig?.calendars) {
-    for (const calId of Object.values(barberConfig.calendars)) allCalIds.add(calId);
+    for (const [type, calId] of Object.entries(barberConfig.calendars)) {
+      allCalIds.add(calId);
+      if (PRIMARY_CALENDAR_TYPES.has(type)) primaryCalIds.add(calId);
+    }
   }
+  // If no calendar types are mapped in kioskConfig, treat all as primary
+  if (primaryCalIds.size === 0) {
+    for (const calId of allCalIds) primaryCalIds.add(calId);
+  }
+
   // Helper: GHL returns slotDuration/slotInterval as raw numbers with separate
   // unit fields (e.g., slotDuration=1 + slotDurationUnit="hours" = 60 minutes).
   // The SDK doesn't normalize this — we must convert to minutes ourselves.
@@ -1073,12 +1085,11 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       calendarSlotConfig[calId] = { slotDuration: 30, slotInterval: 30 };
     }
   }
-  // Default slot interval for break cost alignment — use the SMALLEST interval
-  // across all of this barber's calendars. Using the haircut calendar alone
-  // over-penalizes barbers like Drew whose HC interval is 60 min (a 15-min break
-  // would round up to 60 instead of 30). The smallest interval represents the
-  // finest booking grid, giving the most accurate break cost.
-  const allIntervals = Object.values(calendarSlotConfig).map(c => c.slotInterval).filter(v => v > 0);
+  // Default slot interval and minBookable from PRIMARY calendars only.
+  // This ensures beard trim's 20-min interval doesn't shrink the break cost grid
+  // or make 30-min gaps appear "bookable" when they're dead space on the HC grid.
+  const primaryConfigs = [...primaryCalIds].map(id => calendarSlotConfig[id]).filter(Boolean);
+  const allIntervals = primaryConfigs.map(c => c.slotInterval).filter(v => v > 0);
   const defaultSlotInterval = allIntervals.length > 0 ? Math.min(...allIntervals) : 30;
   console.log(`[ChairUtil Historical] Calendar slot configs:`, Object.entries(calendarSlotConfig).map(
     ([id, c]) => `${id.substring(0, 8)}…: dur=${c.slotDuration}, int=${c.slotInterval}`
@@ -1276,7 +1287,7 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     // Dead space only applies to gaps between client appointments (or between the
     // last appointment and the schedule end) where no break is involved.
     // E.g., Lionel's H+B ends at 2:15, next appt at 2:30 — 15 min unbookable gap.
-    const minBookable = Math.min(...Object.values(calendarSlotConfig).map(c => c.slotDuration));
+    const minBookable = Math.min(...primaryConfigs.map(c => c.slotDuration));
     const allNonCancelledEvents = sortedEvents.filter(ev => !ev.isCancelled);
     let deadSpaceMinutes = 0;
 
