@@ -1090,9 +1090,14 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         slotDuration: durMin,
         slotInterval: intMin,
       };
-      // Collect openHours from primary calendars as schedule fallback.
-      // Schedule rules sometimes miss days that openHours includes (e.g., Saturday).
-      if (primaryCalIds.has(calId) && cal?.openHours) {
+      // Collect openHours from non-H+B primary calendars as schedule fallback.
+      // H+B calendars have wide booking windows (e.g., 8am-6:30pm) that would
+      // inflate the envelope. HC/HTS calendars reflect actual working hours.
+      const calType = barberConfig?.calendars
+        ? Object.entries(barberConfig.calendars).find(([, id]) => id === calId)?.[0]
+        : null;
+      const isHbType = calType && (calType.includes("haircut_beard") || calType.includes("_beard_fnf"));
+      if (primaryCalIds.has(calId) && !isHbType && Array.isArray(cal?.openHours)) {
         for (const oh of cal.openHours) {
           for (const dow of (oh.daysOfTheWeek || [])) {
             const dayName = ghDayToName[dow];
