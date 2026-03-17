@@ -1136,33 +1136,44 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       ev.endMin = getMin(endParts);
     }
 
+    // ── Merge consecutive break events into single break blocks ──
+    // GHL sometimes splits a single break into multiple adjacent events
+    // (e.g., 1:00-2:45 + 2:45-3:00 for a 2-hour lunch). Merge them so
+    // slot-alignment is computed on the full block, not per-fragment.
+    const mergedBreaks = [];
+    for (const ev of sortedEvents) {
+      if (!ev.isBreak) continue;
+      const last = mergedBreaks[mergedBreaks.length - 1];
+      if (last && ev.startMin <= last.endMin) {
+        // Overlapping or adjacent — extend the merged block
+        last.endMin = Math.max(last.endMin, ev.endMin);
+      } else {
+        mergedBreaks.push({ startMin: ev.startMin, endMin: ev.endMin });
+      }
+    }
+
     // ── Compute slot-aligned break cost with appointment reclaim ──
-    // Break cost is rounded up to the default slot interval grid (from the haircut
-    // calendar). If an adjacent appointment overflows past its own calendar's slot
-    // boundary, that overflow absorbs break padding and reduces the break cost.
+    // Break cost is rounded up to the default slot interval grid. If an adjacent
+    // appointment overflows past its own calendar's slot boundary, that overflow
+    // absorbs break padding and reduces the break cost.
     let breakCostMinutes = 0;
 
-    for (let i = 0; i < sortedEvents.length; i++) {
-      const ev = sortedEvents[i];
-      if (!ev.isBreak) continue;
-
-      const breakDuration = ev.endMin - ev.startMin;
+    for (const brk of mergedBreaks) {
+      const breakDuration = brk.endMin - brk.startMin;
       if (breakDuration <= 0) continue;
 
-      // Check the immediately preceding non-break/non-cancelled event
+      // Find the client appointment immediately before the merged break block
       let prevEvent = null;
-      for (let j = i - 1; j >= 0; j--) {
-        if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
-          prevEvent = sortedEvents[j];
-          break;
-        }
+      for (const ev of sortedEvents) {
+        if (ev.isBreak || ev.isCancelled) continue;
+        if (ev.endMin <= brk.startMin) prevEvent = ev;
       }
 
       // Reclaim: if the previous appointment ends exactly at break start and its
       // duration overflows past that calendar's slot interval, the overflow absorbs
-      // break padding. Uses the PREVIOUS appointment's calendar slot interval.
+      // break padding.
       let reclaimedByPrev = 0;
-      if (prevEvent && prevEvent.endMin === ev.startMin) {
+      if (prevEvent && prevEvent.endMin === brk.startMin) {
         const prevSlotInt = calendarSlotConfig[prevEvent.calendarId]?.slotInterval || defaultSlotInterval;
         if (prevEvent.durationMin > prevSlotInt) {
           const overflow = prevEvent.durationMin % prevSlotInt;
@@ -1170,17 +1181,15 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         }
       }
 
-      // Same check for the immediately following event
+      // Find the client appointment immediately after the merged break block
       let nextEvent = null;
-      for (let j = i + 1; j < sortedEvents.length; j++) {
-        if (!sortedEvents[j].isBreak && !sortedEvents[j].isCancelled) {
-          nextEvent = sortedEvents[j];
-          break;
-        }
+      for (const ev of sortedEvents) {
+        if (ev.isBreak || ev.isCancelled) continue;
+        if (ev.startMin >= brk.endMin) { nextEvent = ev; break; }
       }
 
       let reclaimedByNext = 0;
-      if (nextEvent && nextEvent.startMin === ev.endMin) {
+      if (nextEvent && nextEvent.startMin === brk.endMin) {
         const nextSlotInt = calendarSlotConfig[nextEvent.calendarId]?.slotInterval || defaultSlotInterval;
         if (nextEvent.durationMin > nextSlotInt) {
           const overflow = nextEvent.durationMin % nextSlotInt;
@@ -1188,36 +1197,82 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
         }
       }
 
-      // Net break cost: round break up to default slot interval boundary, then subtract reclaimed
+      // Net break cost: round up to slot boundary, subtract reclaimed
       const slotAlignedCost = Math.ceil(breakDuration / defaultSlotInterval) * defaultSlotInterval;
       const netCost = Math.max(0, slotAlignedCost - reclaimedByPrev - reclaimedByNext);
       breakCostMinutes += netCost;
     }
 
     // ── Compute utilized minutes (client appointments only) ──
-    // Each appointment consumes capacity based on ITS OWN calendar's slot interval.
-    // A 45-min haircut on Drew's 60-min interval calendar = 60 min consumed.
-    // A 45-min H+B on Lionel's 30-min interval calendar = 60 min consumed (2 slots).
-    // A 35-min haircut on Albe's 15-min interval calendar = 45 min consumed (3 slots).
+    // Utilized = actual service duration, NOT snapped to slot intervals.
+    // Dead space (e.g., 15 min after a 45-min HC in a 60-min grid) is subtracted
+    // from capacity instead, because it's unbookable time — not utilized time.
     let dayUtilized = 0;
     let dayApptCount = 0;
+    const clientEvents = []; // track for dead space calculation
     for (const ev of sortedEvents) {
       if (ev.isBreak || ev.isCancelled) continue;
-      // Must have a contactId or a non-block title to count
       const title = ev.title.toLowerCase();
       if (!ev.contactId && (title === "" || breakKeywords.some(kw => title.includes(kw)))) continue;
       if (ev.durationMin > 0 && ev.durationMin < 480) {
-        // Look up this appointment's calendar slot interval
-        const evSlotInterval = calendarSlotConfig[ev.calendarId]?.slotInterval || defaultSlotInterval;
-        // Snap up: each appointment consumes ceil(duration / its slotInterval) slots
-        const slotConsumed = Math.ceil(ev.durationMin / evSlotInterval) * evSlotInterval;
-        dayUtilized += slotConsumed;
+        dayUtilized += ev.durationMin;
         dayApptCount++;
+        clientEvents.push(ev);
       }
     }
 
-    // ── Day capacity = raw schedule - break cost ──
-    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes);
+    // ── Compute dead space: unbookable gaps NOT adjacent to breaks ──
+    // Gaps adjacent to breaks are already covered by the break's slot-aligned cost
+    // (e.g., a 15-min break that costs 30 min already accounts for the 15-min gap).
+    // Dead space only applies to gaps between client appointments (or between the
+    // last appointment and the schedule end) where no break is involved.
+    // E.g., Lionel's H+B ends at 2:15, next appt at 2:30 — 15 min unbookable gap.
+    const minBookable = Math.min(...Object.values(calendarSlotConfig).map(c => c.slotDuration));
+    const allNonCancelledEvents = sortedEvents.filter(ev => !ev.isCancelled);
+    let deadSpaceMinutes = 0;
+
+    // Build the schedule window boundaries for this day (in minutes since midnight)
+    const schedWindows = schedIntervals.map(iv => {
+      const [fh, fm] = iv.from.split(":").map(Number);
+      const [th, tm] = iv.to.split(":").map(Number);
+      return { from: fh * 60 + fm, to: th * 60 + tm };
+    });
+
+    // Use merged break ranges for adjacency checks
+    const breakRanges = mergedBreaks.map(br => ({ start: br.startMin, end: br.endMin }));
+
+    const isAdjacentToBreak = (gapStart, gapEnd) => {
+      return breakRanges.some(br => br.start === gapEnd || br.end === gapStart ||
+        (gapStart >= br.start && gapEnd <= br.end));
+    };
+
+    for (let i = 0; i < allNonCancelledEvents.length; i++) {
+      const ev = allNonCancelledEvents[i];
+      if (ev.isBreak) continue; // skip break events themselves
+      const nextEv = allNonCancelledEvents[i + 1];
+
+      const gapEnd = nextEv ? nextEv.startMin : null;
+      if (gapEnd !== null) {
+        const gap = gapEnd - ev.endMin;
+        if (gap > 0 && gap < minBookable && !isAdjacentToBreak(ev.endMin, gapEnd)) {
+          const inSchedule = schedWindows.some(w => ev.endMin >= w.from && gapEnd <= w.to);
+          if (inSchedule) deadSpaceMinutes += gap;
+        }
+      } else {
+        // Last event of the day: check gap to schedule window end
+        for (const w of schedWindows) {
+          if (ev.endMin > w.from && ev.endMin < w.to) {
+            const gap = w.to - ev.endMin;
+            if (gap > 0 && gap < minBookable && !isAdjacentToBreak(ev.endMin, w.to)) {
+              deadSpaceMinutes += gap;
+            }
+          }
+        }
+      }
+    }
+
+    // ── Day capacity = raw schedule - break cost - dead space ──
+    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes - deadSpaceMinutes);
 
     totalCapacityMinutes += dayCapacity;
     totalUtilizedMinutes += dayUtilized;
