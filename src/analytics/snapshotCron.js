@@ -57,6 +57,7 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     attrition,
     newClientTrend,
     chairUtil,
+    dailyUtil,
   ] = await Promise.all([
     getRebookingRate(barberGhlId, locationId, asOfDate),
     getActiveClientCount(barberGhlId, locationId, asOfDate),
@@ -68,6 +69,7 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     getAttritionRate(barberGhlId, locationId, asOfDate),
     getNewClientTrend(barberGhlId, locationId, 1, asOfDate),
     getChairUtilization(barberGhlId, locationId, SNAPSHOT_PERIOD_DAYS, asOfDate),
+    getChairUtilization(barberGhlId, locationId, 1, asOfDate), // 1-day utilization for daily snapshot fields
   ]);
 
   return {
@@ -92,6 +94,13 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     attrition_rate_forgiving: attrition.forgiving,
     new_clients_count: newClientTrend.total,
     chair_utilization: chairUtil.utilization,
+
+    // Daily utilization breakdown (1-day window for this snapshot date)
+    // Null out fields when barber wasn't scheduled (capacityMinutes=0 or utilization=null)
+    capacity_minutes: dailyUtil.capacityMinutes || null,
+    utilized_minutes: dailyUtil.capacityMinutes ? dailyUtil.utilizedMinutes : null,
+    free_slot_minutes: dailyUtil.capacityMinutes ? dailyUtil.freeSlotMinutes : null,
+    utilization: dailyUtil.utilization != null ? dailyUtil.utilization / 100 : null, // Convert 0-100 → 0.0000-1.0000
 
     computed_at: new Date().toISOString(),
   };
