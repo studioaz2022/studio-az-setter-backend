@@ -416,6 +416,18 @@ async function requestCoaching(barberGhlId, locationId, focusMetric, scorecardCo
       if (parts.length > 0) {
         focusAddendum += `Their scorecard shows: ${parts.join(", ")}.\n`;
       }
+
+      // Availability context — schedule consistency
+      if (sc.blockedPercent != null && sc.blockedPercent > 0) {
+        focusAddendum += `\nThis barber blocked ${Number(sc.blockedPercent).toFixed(0)}% of their regular schedule as discretionary time off (non-recurring).`;
+        if (sc.availabilityIndex != null) focusAddendum += ` Their Availability Index is ${Number(sc.availabilityIndex).toFixed(0)}% (percentage of scheduled hours actually open for booking).`;
+        if (sc.shopImpact != null) focusAddendum += ` Shop Impact is ${Number(sc.shopImpact).toFixed(0)}% (effective contribution to shop capacity).`;
+        if (sc.atRisk) {
+          focusAddendum += ` This barber is at risk (≥25% blocked) — address schedule consistency as a growth blocker. Reference Bossio's Calendar Authority benchmark: "Your calendar is your business plan. Block it off too much and clients learn they can't rely on you."\n`;
+        } else {
+          focusAddendum += `\n`;
+        }
+      }
     }
     focusAddendum += `Prioritize coaching around their focus area while still addressing any critical issues. Reference their specific scorecard numbers (money on the floor, rebook rate vs goal, attempt rate) in your advice.`;
     userPrompt += focusAddendum;
