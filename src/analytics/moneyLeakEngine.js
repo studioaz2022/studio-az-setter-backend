@@ -19,16 +19,56 @@ const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 const COMPLETED_STATUSES = ["showed", "confirmed"];
 
 /**
- * Dynamic goal rebook rate based on chair utilization.
- * Continuous piecewise function: more empty chairs → higher goal.
+ * Capacity zones — the job of the scorecard changes based on utilization.
+ *
+ *   BUILD  (< 70%):    "Fill your chair." Aggressive rebook goals.
+ *   OPTIMIZE (70-89%): "Tighten rebooking." Moderate sliding goals.
+ *   CAP (≥ 90%):       "You're full." Stop nagging about volume;
+ *                       goal = their own trailing rate or a low floor.
  */
-function getGoalRebookRate(utilizationPct) {
-  if (utilizationPct == null) return 55; // default mid-range
-  if (utilizationPct <= 50) return 65;
-  if (utilizationPct <= 70) return 65 - (utilizationPct - 50) * 0.5;   // 65 → 55
-  if (utilizationPct <= 80) return 55 - (utilizationPct - 70) * 1.0;   // 55 → 45
-  if (utilizationPct <= 90) return 45 - (utilizationPct - 80) * 1.5;   // 45 → 30
-  return Math.max(15, 30 - (utilizationPct - 90) * 1.5);               // 30 → 15
+const CAPACITY_ZONES = {
+  BUILD:    { name: "build",    threshold: 70,  relevance: 1.0, message: "You're leaving serious money on the floor. Fill your chair." },
+  OPTIMIZE: { name: "optimize", threshold: 90,  relevance: 0.6, message: "Tighten rebooking on the right clients. You're building a strong book." },
+  CAP:      { name: "cap",      threshold: 100, relevance: 0.0, message: "You're in the Full Book Zone. Focus on pricing & client mix." },
+};
+
+/**
+ * Determine which capacity zone a barber falls into.
+ */
+function getCapacityZone(utilizationPct) {
+  if (utilizationPct == null) return CAPACITY_ZONES.OPTIMIZE; // safe default
+  if (utilizationPct < 70) return CAPACITY_ZONES.BUILD;
+  if (utilizationPct < 90) return CAPACITY_ZONES.OPTIMIZE;
+  return CAPACITY_ZONES.CAP;
+}
+
+/**
+ * Dynamic goal rebook rate based on capacity zone.
+ *
+ *   BUILD  (< 70%):  60% flat — aggressive, fill the chair.
+ *   OPTIMIZE (70-89%): sliding 45% → 15%.
+ *   CAP (≥ 90%):     use the barber's own trailing rate (or 10% floor).
+ *                     This makes conversionGap = 0 for anyone already
+ *                     meeting the low bar, so moneyOnTheFloor = $0.
+ */
+function getGoalRebookRate(utilizationPct, currentRebookRate) {
+  if (utilizationPct == null) return 45; // safe default
+
+  // BUILD zone: aggressive flat goal
+  if (utilizationPct < 70) return 60;
+
+  // OPTIMIZE zone: sliding scale 45% → 15%
+  if (utilizationPct < 90) {
+    // 70% util → 45% goal, 90% util → 15% goal (linear)
+    return 45 - (utilizationPct - 70) * 1.5; // 45 → 15
+  }
+
+  // CAP zone: goal = their own trailing rate or 10% floor, whichever is lower.
+  // If they're already at or above 10%, gap = 0, money on floor = $0.
+  if (currentRebookRate != null) {
+    return Math.min(currentRebookRate, 10);
+  }
+  return 10;
 }
 
 /**
@@ -174,7 +214,8 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
   const recentNewClients = activeClients.newClients || 0;
   const currentRebookRate = rebooking.strict; // strict = default (includes pending)
   const chairUtilization = chairUtil.utilization;
-  const goalRebookRate = getGoalRebookRate(chairUtilization);
+  const zone = getCapacityZone(chairUtilization);
+  const goalRebookRate = getGoalRebookRate(chairUtilization, currentRebookRate);
   const avgRevenuePerVisit = avgRevenue.avgRevenue;
   const avgFrequencyDays = frequency.avgFrequency;
 
@@ -193,6 +234,9 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
       avgFrequencyDays,
       visitsPerYear: null,
       chairUtilization,
+      capacityZone: zone.name,
+      zoneMessage: zone.message,
+      zoneRelevance: zone.relevance,
       insufficientData: true,
     };
   }
@@ -216,6 +260,9 @@ async function computeMoneyOnTheFloor(barberGhlId, locationId) {
     avgFrequencyDays,
     visitsPerYear,
     chairUtilization,
+    capacityZone: zone.name,
+    zoneMessage: zone.message,
+    zoneRelevance: zone.relevance,
     insufficientData: false,
   };
 }
@@ -450,6 +497,12 @@ async function computeFullScorecard(barberGhlId, locationId) {
       chairUtilization: moneyOnTheFloor.chairUtilization,
     },
 
+    capacityZone: {
+      zone: moneyOnTheFloor.capacityZone,
+      message: moneyOnTheFloor.zoneMessage,
+      relevance: moneyOnTheFloor.zoneRelevance,
+    },
+
     rebookAttemptRate: {
       rate: rebookAttempt.attemptRate,
       totalCompleted: rebookAttempt.totalCompleted,
@@ -479,6 +532,8 @@ async function computeFullScorecard(barberGhlId, locationId) {
 }
 
 module.exports = {
+  CAPACITY_ZONES,
+  getCapacityZone,
   getGoalRebookRate,
   computeRebookAttemptRate,
   computeMoneyOnTheFloor,
