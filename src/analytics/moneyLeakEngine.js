@@ -462,26 +462,10 @@ async function computeAvgRevenuePerHour(barberGhlId, locationId) {
   startDate.setDate(startDate.getDate() - 90);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  // Total revenue from transactions
-  const { data: transactions, error: txErr } = await fetchAllRows(supabase
-    .from("transactions")
-    .select("gross_amount")
-    .eq("artist_ghl_id", barberGhlId)
-    .eq("location_id", locationId)
-    .in("transaction_type", ["session_payment"])
-    .gte("session_date", startDateStr)
-    .lte("session_date", endDate));
-
-  if (txErr) throw new Error(`Cap zone revenue query failed: ${txErr.message}`);
-
-  const totalRevenue = (transactions || []).reduce(
-    (sum, t) => sum + parseFloat(t.gross_amount || 0), 0
-  );
-
-  // Total utilized hours from daily snapshots
+  // Get snapshots with utilized_minutes first — these define the valid date range
   const { data: snapshots, error: snapErr } = await fetchAllRows(supabase
     .from("barber_analytics_snapshots")
-    .select("utilized_minutes")
+    .select("snapshot_date, utilized_minutes")
     .eq("barber_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .gte("snapshot_date", startDateStr)
@@ -489,12 +473,33 @@ async function computeAvgRevenuePerHour(barberGhlId, locationId) {
     .not("utilized_minutes", "is", null));
 
   if (snapErr) throw new Error(`Cap zone snapshot query failed: ${snapErr.message}`);
+  if (!snapshots || snapshots.length === 0) return null;
 
-  const totalUtilizedMinutes = (snapshots || []).reduce(
+  const totalUtilizedMinutes = snapshots.reduce(
     (sum, s) => sum + (s.utilized_minutes || 0), 0
   );
+  if (totalUtilizedMinutes === 0) return null;
 
-  if (totalUtilizedMinutes === 0 || totalRevenue === 0) return null;
+  // Constrain revenue query to only dates where we have snapshot data
+  const snapshotDates = snapshots.map(s => s.snapshot_date).sort();
+  const earliestSnapshot = snapshotDates[0];
+  const latestSnapshot = snapshotDates[snapshotDates.length - 1];
+
+  const { data: transactions, error: txErr } = await fetchAllRows(supabase
+    .from("transactions")
+    .select("gross_amount")
+    .eq("artist_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("transaction_type", ["session_payment"])
+    .gte("session_date", earliestSnapshot)
+    .lte("session_date", latestSnapshot));
+
+  if (txErr) throw new Error(`Cap zone revenue query failed: ${txErr.message}`);
+
+  const totalRevenue = (transactions || []).reduce(
+    (sum, t) => sum + parseFloat(t.gross_amount || 0), 0
+  );
+  if (totalRevenue === 0) return null;
 
   const totalUtilizedHours = totalUtilizedMinutes / 60;
   return Math.round((totalRevenue / totalUtilizedHours) * 100) / 100;
@@ -528,6 +533,7 @@ async function computeOverflowDemand(barberGhlId, locationId) {
   if (snapErr) throw new Error(`Overflow demand snapshot query failed: ${snapErr.message}`);
 
   // utilization is stored as 0.0000-1.0000 in the snapshot table
+  const totalDaysWithData = (snapshots || []).length;
   const fullyBookedDays = (snapshots || []).filter(s => s.utilization >= 1.0).length;
 
   // 2. Average wait days for new clients (90-day window for more data)
@@ -568,7 +574,7 @@ async function computeOverflowDemand(barberGhlId, locationId) {
     ? Math.round((waitDays.reduce((a, b) => a + b, 0) / waitDays.length) * 10) / 10
     : null;
 
-  return { fullyBookedDays, avgWaitDays };
+  return { fullyBookedDays, totalDaysWithData, avgWaitDays };
 }
 
 /**
