@@ -1133,11 +1133,11 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     "haircut_fnf", "haircut_beard_fnf",
   ]);
 
-  // ── 1. Fetch schedule rules — Work Hours is authoritative ──
-  // Work Hours schedule (calendarIds=[]) defines the barber's actual working
-  // hours. Per-calendar schedules have wider windows to accommodate booking
-  // buffer and should NOT expand the capacity envelope.
-  // Fallback: if Work Hours doesn't exist, use HC-type calendar schedules.
+  // ── 1. Fetch schedule rules — union of HC-type calendars defines envelope ──
+  // A barber may have two haircut calendars (non-F&F opens earlier, F&F closes
+  // later). The actual capacity window is the union of all HC-type calendar
+  // schedules — earliest start to latest end. H+B calendars have booking padding
+  // and are excluded. Work Hours is the fallback if no HC calendars are found.
   let scheduleRules = null; // { dayName → [{ from: "HH:mm", to: "HH:mm" }] }
   try {
     const schedResp = await httpClient.get(
@@ -1145,10 +1145,7 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     );
     const schedules = schedResp.data?.schedules || [];
 
-    // Separate Work Hours from per-calendar schedules
-    const workHoursSchedule = schedules.find(s => (s.calendarIds || []).length === 0);
-
-    // HC-type calendars as fallback if Work Hours doesn't exist
+    // HC-type calendars define the capacity envelope
     const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
     const envelopeCalIds = new Set();
     if (barberConfig?.calendars) {
@@ -1157,11 +1154,17 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
     }
 
-    // Pick the authoritative schedule source
-    const sourceSchedules = workHoursSchedule
-      ? [workHoursSchedule]
-      : schedules.filter(s => (s.calendarIds || []).some(id => envelopeCalIds.has(id)));
-    const sourceLabel = workHoursSchedule ? "Work Hours" : "HC calendar fallback";
+    // Primary: union of HC-type calendar schedules. Fallback: Work Hours.
+    const envelopeSchedules = schedules.filter(s =>
+      (s.calendarIds || []).some(id => envelopeCalIds.has(id))
+    );
+    const workHoursSchedule = schedules.find(s => (s.calendarIds || []).length === 0);
+    const sourceSchedules = envelopeSchedules.length > 0
+      ? envelopeSchedules
+      : (workHoursSchedule ? [workHoursSchedule] : []);
+    const sourceLabel = envelopeSchedules.length > 0
+      ? `HC calendar union (${envelopeSchedules.length} schedules)`
+      : "Work Hours fallback";
 
     const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
     for (const sched of sourceSchedules) {
