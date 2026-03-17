@@ -840,8 +840,8 @@ function _mergeUtilization(historical, live, periodDays) {
   const availabilityIndex = rawScheduleMinutes > 0
     ? round(((rawScheduleMinutes - discretionaryBlockedMinutes) / rawScheduleMinutes) * 100, 1)
     : null;
-  const shopImpact = rawScheduleMinutes > 0
-    ? round((utilizedMinutes / rawScheduleMinutes) * 100, 1)
+  const shopImpact = (utilization !== null && availabilityIndex !== null)
+    ? round((utilization * availabilityIndex) / 100, 1)
     : null;
   const blockedPercent = rawScheduleMinutes > 0
     ? round((discretionaryBlockedMinutes / rawScheduleMinutes) * 100, 1)
@@ -1544,10 +1544,11 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     ? round(((totalRawScheduleMinutes - totalDiscretionaryBlockedMinutes) / totalRawScheduleMinutes) * 100, 1)
     : null;
 
-  // Shop Impact: what % of the barber's full schedule is actually monetized.
-  // ShopImpact = Utilization × AvailabilityIndex (= utilized / rawSchedule)
-  const shopImpact = totalRawScheduleMinutes > 0
-    ? round((totalUtilizedMinutes / totalRawScheduleMinutes) * 100, 1)
+  // Shop Impact = Utilization × Availability Index.
+  // When availability is 100%, shop impact equals utilization.
+  // When a barber blocks time off, shop impact drops proportionally.
+  const shopImpact = (utilization !== null && availabilityIndex !== null)
+    ? round((utilization * availabilityIndex) / 100, 1)
     : null;
 
   // Blocked percentage for "at risk" indicator (discretionary blocks only).
