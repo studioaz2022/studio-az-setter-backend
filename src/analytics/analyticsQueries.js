@@ -753,7 +753,8 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 60, asO
   // Determine date range (Central time)
   const centralNow = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(new Date());
   const endDateStr = asOfDate || centralNow;
-  const startDate = getStartDate(periodDays, asOfDate);
+  // For 1-day snapshots, start == end (don't subtract 1 day and include the previous day)
+  const startDate = periodDays === 1 && asOfDate ? asOfDate : getStartDate(periodDays, asOfDate);
 
   // Decide mode based on whether the range includes today
   const rangeIncludesToday = !asOfDate || asOfDate >= centralNow;
@@ -1436,9 +1437,14 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       continue;
     }
 
+    // Filter to kiosk-configured calendars only. The Calendar Events API returns
+    // events from ALL calendars (including personal ones). Events from unknown
+    // calendars with "break" in the title would inflate break cost.
+    const knownEvents = events.filter(ev => !ev.calendarId || allCalIds.has(ev.calendarId));
+
     // Categorize events: breaks vs client appointments
     // Sort by start time for adjacency analysis
-    const sortedEvents = events
+    const sortedEvents = knownEvents
       .map(ev => {
         const s = new Date(ev.startTime);
         const e = new Date(ev.endTime);
