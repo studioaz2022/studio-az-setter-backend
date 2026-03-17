@@ -78,8 +78,6 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     // Tier 1
     rebooking_rate_strict: rebooking.strict,
     rebooking_rate_forgiving: rebooking.forgiving,
-    first_visit_rebooking_strict: null,
-    first_visit_rebooking_forgiving: null,
     active_client_count: activeClients.total,
     active_new_count: activeClients.newClients,
     active_returning_count: activeClients.returningClients,
@@ -183,7 +181,7 @@ async function checkAndBackfill() {
  * Compute shop averages for the 6 peer-benchmarking metrics from today's snapshots.
  * Only includes averages when 3+ barbers have data for a metric.
  *
- * Returns: { rebookingForgiving, firstVisitRebooking, noShowRate, cancellationRate, avgTipPercentage, chairUtilization }
+ * Returns: { rebookingForgiving, noShowRate, cancellationRate, avgTipPercentage, chairUtilization }
  */
 async function computeShopAverages(locationId, snapshotDate) {
   const { data: snapshots, error } = await supabase

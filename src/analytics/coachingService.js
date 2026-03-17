@@ -288,8 +288,6 @@ function buildUserPrompt(barberName, snapshot, trendHistory) {
   const currentMetrics = {
     rebooking_rate_strict: snapshot.rebooking_rate_strict,
     rebooking_rate_forgiving: snapshot.rebooking_rate_forgiving,
-    first_visit_rebooking_strict: snapshot.first_visit_rebooking_strict,
-    first_visit_rebooking_forgiving: snapshot.first_visit_rebooking_forgiving,
     active_clients: snapshot.active_client_count,
     active_new: snapshot.active_new_count,
     active_returning: snapshot.active_returning_count,
@@ -307,7 +305,6 @@ function buildUserPrompt(barberName, snapshot, trendHistory) {
   const monthlyHistory = trendHistory.map((t) => ({
     month: t.month,
     rebooking_rate_forgiving: t.rebooking_rate_forgiving,
-    first_visit_rebooking_forgiving: t.first_visit_rebooking_forgiving,
     active_clients: t.active_client_count,
     regulars: t.regulars_count,
     avg_revenue_per_visit: t.avg_revenue_per_visit,
@@ -475,7 +472,6 @@ async function requestCoaching(barberGhlId, locationId, focusMetric, scorecardCo
   const metricsSnapshot = {
     snapshot_date: snapshot.snapshot_date,
     rebooking_rate_forgiving: snapshot.rebooking_rate_forgiving,
-    first_visit_rebooking_forgiving: snapshot.first_visit_rebooking_forgiving,
     active_clients: snapshot.active_client_count,
     regulars: snapshot.regulars_count,
     avg_revenue_per_visit: snapshot.avg_revenue_per_visit,
