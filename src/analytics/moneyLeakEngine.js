@@ -453,8 +453,9 @@ async function computeCurrentPace(barberGhlId, locationId) {
 }
 
 /**
- * Cap Zone metric: Average revenue per utilized hour (90-day window).
- * Shows whether a fully-booked barber is maximizing chair time.
+ * Cap Zone metric: Average revenue per net capacity hour.
+ * Revenue divided by total hours the barber was actually in the shop
+ * (schedule hours minus breaks/blocks). Shows earnings per hour of shop time.
  */
 async function computeAvgRevenuePerHour(barberGhlId, locationId) {
   const endDate = new Date().toISOString().split("T")[0];
@@ -462,23 +463,23 @@ async function computeAvgRevenuePerHour(barberGhlId, locationId) {
   startDate.setDate(startDate.getDate() - 90);
   const startDateStr = startDate.toISOString().split("T")[0];
 
-  // Get snapshots with utilized_minutes first — these define the valid date range
+  // Get snapshots with capacity_minutes — these define the valid date range
   const { data: snapshots, error: snapErr } = await fetchAllRows(supabase
     .from("barber_analytics_snapshots")
-    .select("snapshot_date, utilized_minutes")
+    .select("snapshot_date, capacity_minutes")
     .eq("barber_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .gte("snapshot_date", startDateStr)
     .lte("snapshot_date", endDate)
-    .not("utilized_minutes", "is", null));
+    .not("capacity_minutes", "is", null));
 
   if (snapErr) throw new Error(`Cap zone snapshot query failed: ${snapErr.message}`);
   if (!snapshots || snapshots.length === 0) return null;
 
-  const totalUtilizedMinutes = snapshots.reduce(
-    (sum, s) => sum + (s.utilized_minutes || 0), 0
+  const totalCapacityMinutes = snapshots.reduce(
+    (sum, s) => sum + (s.capacity_minutes || 0), 0
   );
-  if (totalUtilizedMinutes === 0) return null;
+  if (totalCapacityMinutes === 0) return null;
 
   // Constrain revenue query to only dates where we have snapshot data
   const snapshotDates = snapshots.map(s => s.snapshot_date).sort();
@@ -501,15 +502,17 @@ async function computeAvgRevenuePerHour(barberGhlId, locationId) {
   );
   if (totalRevenue === 0) return null;
 
-  const totalUtilizedHours = totalUtilizedMinutes / 60;
-  return Math.round((totalRevenue / totalUtilizedHours) * 100) / 100;
+  const totalCapacityHours = totalCapacityMinutes / 60;
+  return Math.round((totalRevenue / totalCapacityHours) * 100) / 100;
 }
 
 /**
  * Cap Zone metric: Overflow demand — signals that a barber is turning away business.
  *
  * Two proxies:
- *   1. fullyBookedDays: days in the last 30 where daily utilization = 100%
+ *   1. fullyBookedDays: days where free_slot_minutes = 0 (no slots left to book).
+ *      This is more accurate than utilization >= 100% because a day with a 15-min
+ *      dead gap from an H+B booking has 0 free slots but <100% utilization.
  *   2. avgWaitDays: average gap between appointment creation and start time
  *      for new clients (first visit with this barber) — longer waits = overflow
  */
@@ -520,21 +523,22 @@ async function computeOverflowDemand(barberGhlId, locationId) {
   const startStr = thirtyDaysAgo.toISOString().split("T")[0];
   const endStr = now.toISOString().split("T")[0];
 
-  // 1. Fully booked days (utilization >= 100%)
+  // 1. Fully booked days: free_slot_minutes = 0 means no bookable slots remained
   const { data: snapshots, error: snapErr } = await fetchAllRows(supabase
     .from("barber_analytics_snapshots")
-    .select("utilization")
+    .select("free_slot_minutes, capacity_minutes")
     .eq("barber_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .gte("snapshot_date", startStr)
     .lte("snapshot_date", endStr)
-    .not("utilization", "is", null));
+    .not("capacity_minutes", "is", null));
 
   if (snapErr) throw new Error(`Overflow demand snapshot query failed: ${snapErr.message}`);
 
-  // utilization is stored as 0.0000-1.0000 in the snapshot table
-  const totalDaysWithData = (snapshots || []).length;
-  const fullyBookedDays = (snapshots || []).filter(s => s.utilization >= 1.0).length;
+  // Only count days where barber was scheduled (capacity > 0)
+  const scheduledDays = (snapshots || []).filter(s => s.capacity_minutes > 0);
+  const totalDaysWithData = scheduledDays.length;
+  const fullyBookedDays = scheduledDays.filter(s => (s.free_slot_minutes || 0) === 0).length;
 
   // 2. Average wait days for new clients (90-day window for more data)
   const ninetyDaysAgo = new Date(now);
