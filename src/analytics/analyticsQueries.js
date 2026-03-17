@@ -1440,14 +1440,19 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       continue;
     }
 
-    // Filter to kiosk-configured calendars only. The Calendar Events API returns
-    // events from ALL calendars (including personal ones). Events from unknown
-    // calendars with "break" in the title would inflate break cost.
-    const knownEvents = events.filter(ev => !ev.calendarId || allCalIds.has(ev.calendarId));
+    // Filter events: keep kiosk-calendar events (clients + breaks) AND break
+    // events from ANY calendar. Breaks are often placed on a separate personal
+    // calendar — they still reduce capacity. Non-break events from unknown
+    // calendars (e.g., personal appointments like "yur") are excluded.
+    const filteredEvents = events.filter(ev => {
+      if (!ev.calendarId || allCalIds.has(ev.calendarId)) return true;
+      const title = (ev.title || "").toLowerCase();
+      return breakKeywords.some(kw => title.includes(kw));
+    });
 
     // Categorize events: breaks vs client appointments
     // Sort by start time for adjacency analysis
-    const sortedEvents = knownEvents
+    const sortedEvents = filteredEvents
       .map(ev => {
         const s = new Date(ev.startTime);
         const e = new Date(ev.endTime);
