@@ -1451,11 +1451,20 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       continue;
     }
 
+    // Filter out events that don't actually belong to this day.
+    // GHL Calendar Events API sometimes returns recurring events from adjacent
+    // days (e.g., a Thursday block appearing in a Wednesday query). Only keep
+    // events whose startTime falls within this day's boundaries.
+    const dayOnlyEvents = events.filter(ev => {
+      const evStartMs = new Date(ev.startTime).getTime();
+      return evStartMs >= dayStartMs && evStartMs < dayEndMs;
+    });
+
     // Filter events: keep kiosk-calendar events (clients + breaks) AND break
     // events from ANY calendar. Breaks are often placed on a separate personal
     // calendar — they still reduce capacity. Non-break events from unknown
     // calendars (e.g., personal appointments like "yur") are excluded.
-    const filteredEvents = events.filter(ev => {
+    const filteredEvents = dayOnlyEvents.filter(ev => {
       if (!ev.calendarId || allCalIds.has(ev.calendarId)) return true;
       const title = (ev.title || "").toLowerCase();
       return breakKeywords.some(kw => title.includes(kw));
