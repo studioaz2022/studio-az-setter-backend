@@ -109,13 +109,25 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     free_slot_minutes: dailyUtil.capacityMinutes ? dailyUtil.freeSlotMinutes : null,
     utilization: dailyUtil.utilization != null ? dailyUtil.utilization / 100 : null, // Convert 0-100 → 0.0000-1.0000
 
-    // Availability-adjusted scoring (from break-aware capacity engine)
+    // Availability-adjusted scoring
     raw_schedule_minutes: dailyUtil.rawScheduleMinutes || null,
     discretionary_blocked_minutes: dailyUtil.discretionaryBlockedMinutes || null,
     availability_index: dailyUtil.availabilityIndex != null ? dailyUtil.availabilityIndex : null,
     shop_impact: dailyUtil.shopImpact != null ? dailyUtil.shopImpact : null,
     blocked_percent: dailyUtil.blockedPercent != null ? dailyUtil.blockedPercent : null,
     at_risk: dailyUtil.atRisk || false,
+
+    // Grid-walk slot counts
+    scheduled_slots: dailyUtil.scheduledSlots || null,
+    occupied_slots: dailyUtil.occupiedSlots || null,
+    overtime_slots: dailyUtil.overtimeSlots || null,
+    break_blocked_slots: dailyUtil.breakBlockedSlots || null,
+    manually_blocked_slots: dailyUtil.manuallyBlockedSlots || null,
+    unfilled_cancelled_slots: dailyUtil.unfilledCancelledSlots || null,
+    unfilled_noshow_slots: dailyUtil.unfilledNoshowSlots || null,
+    dead_space_minutes: dailyUtil.deadSpaceMinutes || null,
+    hc_dead_space_minutes: dailyUtil.hcDeadSpaceMinutes || null,
+    slot_interval_minutes: dailyUtil.slotIntervalMinutes || null,
 
     computed_at: new Date().toISOString(),
   };

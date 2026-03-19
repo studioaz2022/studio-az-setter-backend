@@ -805,6 +805,11 @@ function _emptyUtilization(periodDays) {
     // Availability & Shop Impact metrics
     rawScheduleMinutes: 0, discretionaryBlockedMinutes: 0,
     availabilityIndex: null, shopImpact: null, blockedPercent: 0, atRisk: false,
+    // Grid-walk fields
+    scheduledSlots: 0, occupiedSlots: 0, overtimeSlots: 0,
+    breakBlockedSlots: 0, manuallyBlockedSlots: 0,
+    unfilledCancelledSlots: 0, unfilledNoshowSlots: 0,
+    deadSpaceMinutes: 0, hcDeadSpaceMinutes: 0, slotIntervalMinutes: null,
   };
 }
 
@@ -835,21 +840,39 @@ function _mergeUtilization(historical, live, periodDays) {
     }
   }
 
-  // Merge availability metrics
-  const rawScheduleMinutes = (historical.rawScheduleMinutes || 0) + (live.rawScheduleMinutes || 0);
-  const discretionaryBlockedMinutes = (historical.discretionaryBlockedMinutes || 0) + (live.discretionaryBlockedMinutes || 0);
-  const availabilityIndex = rawScheduleMinutes > 0
-    ? round(((rawScheduleMinutes - discretionaryBlockedMinutes) / rawScheduleMinutes) * 100, 1)
+  // Merge grid-walk slot counts
+  const scheduledSlots = (historical.scheduledSlots || 0) + (live.scheduledSlots || 0);
+  const occupiedSlots = (historical.occupiedSlots || 0) + (live.occupiedSlots || 0);
+  const overtimeSlots = (historical.overtimeSlots || 0) + (live.overtimeSlots || 0);
+  const breakBlockedSlots = (historical.breakBlockedSlots || 0) + (live.breakBlockedSlots || 0);
+  const manuallyBlockedSlots = (historical.manuallyBlockedSlots || 0) + (live.manuallyBlockedSlots || 0);
+  const unfilledCancelledSlots = (historical.unfilledCancelledSlots || 0) + (live.unfilledCancelledSlots || 0);
+  const unfilledNoshowSlots = (historical.unfilledNoshowSlots || 0) + (live.unfilledNoshowSlots || 0);
+  const deadSpaceMinutes = (historical.deadSpaceMinutes || 0) + (live.deadSpaceMinutes || 0);
+  const hcDeadSpaceMinutes = (historical.hcDeadSpaceMinutes || 0) + (live.hcDeadSpaceMinutes || 0);
+
+  // Pooled metrics from slot counts
+  const pooledUtilization = scheduledSlots > 0
+    ? round(((occupiedSlots + overtimeSlots) / scheduledSlots) * 100, 1)
     : null;
-  const shopImpact = (utilization !== null && availabilityIndex !== null)
-    ? round((utilization * availabilityIndex) / 100, 1)
+  const totalPotential = scheduledSlots + manuallyBlockedSlots;
+  const availabilityIndex = totalPotential > 0
+    ? round((scheduledSlots / totalPotential) * 100, 1)
     : null;
-  const blockedPercent = rawScheduleMinutes > 0
-    ? round((discretionaryBlockedMinutes / rawScheduleMinutes) * 100, 1)
+  const shopImpact = (pooledUtilization !== null && availabilityIndex !== null)
+    ? round((pooledUtilization * availabilityIndex) / 100, 1)
+    : null;
+  const blockedPercent = totalPotential > 0
+    ? round((manuallyBlockedSlots / totalPotential) * 100, 1)
     : 0;
 
+  // Legacy: rawScheduleMinutes / discretionaryBlockedMinutes for backwards compat
+  const slotInterval = historical.slotIntervalMinutes || live.slotIntervalMinutes || 30;
+  const rawScheduleMinutes = (scheduledSlots + manuallyBlockedSlots) * slotInterval;
+  const discretionaryBlockedMinutes = manuallyBlockedSlots * slotInterval;
+
   return {
-    utilization,
+    utilization: pooledUtilization,
     capacityMinutes,
     utilizedMinutes,
     freeSlotMinutes,
@@ -863,544 +886,573 @@ function _mergeUtilization(historical, live, periodDays) {
     rawScheduleMinutes, discretionaryBlockedMinutes,
     availabilityIndex, shopImpact, blockedPercent,
     atRisk: blockedPercent >= 25,
+    // Grid-walk fields
+    scheduledSlots, occupiedSlots, overtimeSlots,
+    breakBlockedSlots, manuallyBlockedSlots,
+    unfilledCancelledSlots, unfilledNoshowSlots,
+    deadSpaceMinutes, hcDeadSpaceMinutes,
+    slotIntervalMinutes: slotInterval,
   };
 }
 
-/**
- * MODE 1 — Live: Free Slots API + Calendar Events.
- * Free Slots API returns actual bookable slots (already accounts for cross-calendar
- * conflicts, breaks, blocks, and existing bookings).
- *
- * capacity = free_slot_minutes + appointment_minutes
- * utilized = appointment_minutes
- */
-async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
-  const httpClient = ghlBarber.getHttpClient();
+// ──────────────────────────────────────
+// Grid-Walk Algorithm Core
+// ──────────────────────────────────────
 
-  // Build epoch ms for API calls.
-  // Use Intl to get the correct UTC offset for Central time (CST=-06:00, CDT=-05:00).
-  // Hardcoding -06:00 causes a 1-hour shift during CDT (Mar-Nov), bleeding queries
-  // into adjacent days and inflating/misattributing capacity.
-  const getCentralOffset = (dateStr) => {
-    const d = new Date(dateStr + "T12:00:00Z");
-    const utcStr = d.toLocaleString("en-US", { timeZone: "UTC" });
-    const centralStr = d.toLocaleString("en-US", { timeZone: "America/Chicago" });
-    return (new Date(utcStr) - new Date(centralStr)) / 60000; // offset in minutes
+const BREAK_KEYWORDS = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
+const BLOCK_KEYWORDS = ["blocked", "block", "off", "unavailable", "vacation", "pto", "lunch", "break", "time off", "day off", "personal", "sick"];
+const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+const DAY_DISPLAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+
+/** Classify a blocked slot as synced appointment, informal appointment, or manual block. */
+function _classifyBlockedSlot(block) {
+  const title = (block.title || "").trim();
+  const notes = (block.notes || "");
+  // Rule 1: Structured notes from external booking platform
+  if (notes.includes("Reservada por") || notes.includes("Reserved by")) {
+    return "synced_appointment";
+  }
+  // Rule 2: Service title pattern — "SERVICE_NAME (Client Name)"
+  // Parenthetical must contain at least one letter (names do; scores like "0-3" don't)
+  const parenMatch = title.match(/^.+\s*\((.+)\)$/);
+  if (parenMatch && /[a-zA-Z]/.test(parenMatch[1])) {
+    return "synced_appointment";
+  }
+  // Rule 3: Informal name block — 1-3 short words, not a known block keyword
+  if (title.length > 0) {
+    const words = title.split(/\s+/);
+    const wordsNoPhone = words.filter(w => !/^\d{7,}$/.test(w));
+    const hasPhone = words.some(w => /^\d{7,}$/.test(w));
+    if (wordsNoPhone.length >= 1 && wordsNoPhone.length <= 3) {
+      const isBlockKeyword = wordsNoPhone.some(w => BLOCK_KEYWORDS.includes(w.toLowerCase()));
+      if (!isBlockKeyword) {
+        return hasPhone ? "synced_appointment" : "informal_appointment";
+      }
+    }
+  }
+  // Rules 4 & 5: true manual block
+  return "manually_blocked";
+}
+
+/** Convert GHL slotDuration/slotInterval values (with unit) to minutes. */
+function _toMinutes(value, unit) {
+  if (!value) return 0;
+  return unit === "hours" ? value * 60 : value;
+}
+
+/** Check if two time ranges overlap: [aStart, aEnd) vs [bStart, bEnd) */
+function _overlaps(aStart, aEnd, bStart, bEnd) {
+  return bStart < aEnd && bEnd > aStart;
+}
+
+/** Check if an event is a break based on its title. */
+function _isBreakEvent(ev) {
+  const title = (ev.title || "").toLowerCase();
+  return BREAK_KEYWORDS.some(kw => title.includes(kw));
+}
+
+/** Convert an event's start/end to Central time minutes-since-midnight. */
+function _eventToCentralMinutes(ev) {
+  const sf = new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", hour: "2-digit", minute: "2-digit", hour12: false,
+  });
+  const toMin = (dateStr) => {
+    const parts = sf.formatToParts(new Date(dateStr));
+    const h = parseInt(parts.find(p => p.type === "hour").value);
+    const m = parseInt(parts.find(p => p.type === "minute").value);
+    return h * 60 + m;
   };
-  const offsetMin = getCentralOffset(startDate);
+  return { startMin: toMin(ev.startTime), endMin: toMin(ev.endTime) };
+}
+
+/** Parse "HH:mm" to minutes-since-midnight. */
+function _parseHHMM(str) {
+  const [h, m] = str.split(":").map(Number);
+  return h * 60 + m;
+}
+
+/**
+ * Get Central time day boundaries as epoch ms for a date string.
+ */
+function _getCentralDayBounds(dateStr) {
+  const d = new Date(dateStr + "T12:00:00Z");
+  const utcStr = d.toLocaleString("en-US", { timeZone: "UTC" });
+  const centralStr = d.toLocaleString("en-US", { timeZone: "America/Chicago" });
+  const offsetMin = (new Date(utcStr) - new Date(centralStr)) / 60000;
   const offsetHrs = Math.floor(Math.abs(offsetMin) / 60);
   const offsetMins = Math.abs(offsetMin) % 60;
   const offsetStr = `${offsetMin >= 0 ? "-" : "+"}${String(offsetHrs).padStart(2, "0")}:${String(offsetMins).padStart(2, "0")}`;
-  const startMs = new Date(`${startDate}T00:00:00${offsetStr}`).getTime();
-  const endMs = new Date(`${endDateStr}T23:59:59${offsetStr}`).getTime();
+  const startMs = new Date(`${dateStr}T00:00:00${offsetStr}`).getTime();
+  const endMs = new Date(`${dateStr}T23:59:59${offsetStr}`).getTime();
+  return { startMs, endMs };
+}
 
-  // 1. Fetch free slots for each calendar, union by start time
-  const allFreeSlots = new Map(); // startTimeStr → durationMinutes (deduplicate overlaps)
+/**
+ * Get schedule intervals for a specific calendar on a specific day.
+ * Returns array of { startMin, endMin } or empty array (day off).
+ */
+function _getScheduleForDay(schedules, calId, dayName, dateStr) {
+  for (const sched of schedules) {
+    const calIds = sched.calendarIds || [];
+    if (!calIds.includes(calId)) continue;
+    const rules = sched.rules || sched.schedule || [];
+    // Date-specific override first
+    const dateOverride = rules.find(r => r.type === "date" && r.date === dateStr);
+    if (dateOverride) {
+      if (dateOverride.intervals && dateOverride.intervals.length > 0) {
+        return dateOverride.intervals.map(iv => ({
+          startMin: _parseHHMM(iv.from), endMin: _parseHHMM(iv.to),
+        }));
+      }
+      return []; // date override with empty intervals = day off
+    }
+    // Weekly day rule
+    const dayRule = rules.find(r => r.type === "wday" && r.day === dayName);
+    if (dayRule && dayRule.intervals && dayRule.intervals.length > 0) {
+      return dayRule.intervals.map(iv => ({
+        startMin: _parseHHMM(iv.from), endMin: _parseHHMM(iv.to),
+      }));
+    }
+    return [];
+  }
+  return [];
+}
 
-  for (const calId of calendarIds) {
-    try {
-      const resp = await ghlBarber.calendars.getSlots({
-        calendarId: calId,
-        startDate: startMs.toString(),
-        endDate: endMs.toString(),
-        timezone: "America/Chicago",
+/**
+ * Grid-walk for a single day. Returns null for day-off.
+ * Accepts calendarEvents from either GHL Calendar Events API or Supabase rows.
+ *
+ * @param {string} dateStr - YYYY-MM-DD
+ * @param {Object} calendarSlotConfigs - calId → { type, slotDuration, slotInterval }
+ * @param {Array} schedules - GHL schedule objects
+ * @param {Object} barberConfig - from BARBER_DATA
+ * @param {Array} calendarEvents - GHL calendar events for this day
+ * @param {Array} blockedSlotsForDay - blocked slot objects for this day
+ * @returns {Object|null} - grid-walk metrics or null (day off)
+ */
+function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, calendarEvents, blockedSlotsForDay) {
+  const dayDate = new Date(dateStr + "T12:00:00Z");
+  const dayName = DAY_NAMES[dayDate.getUTCDay()];
+
+  // ── Step 1: Generate per-calendar grids ──
+  const calendarGrids = {}; // calId → [slotStartMin, ...]
+  for (const [type, calId] of Object.entries(barberConfig.calendars || {})) {
+    const config = calendarSlotConfigs[calId];
+    if (!config) continue;
+    const windows = _getScheduleForDay(schedules, calId, dayName, dateStr);
+    if (windows.length === 0) continue;
+    const slots = [];
+    for (const win of windows) {
+      let t = win.startMin;
+      while (t + config.slotInterval <= win.endMin) {
+        slots.push(t);
+        t += config.slotInterval;
+      }
+    }
+    if (slots.length > 0) calendarGrids[calId] = slots;
+  }
+
+  if (Object.keys(calendarGrids).length === 0) return null; // day off
+
+  // ── Step 2: Compute work window ──
+  let workStart = Infinity, workEnd = -Infinity;
+  for (const [calId, slots] of Object.entries(calendarGrids)) {
+    const config = calendarSlotConfigs[calId];
+    workStart = Math.min(workStart, slots[0]);
+    workEnd = Math.max(workEnd, slots[slots.length - 1] + config.slotInterval);
+  }
+
+  // ── Step 3: Collect blocking events ──
+  const knownCalIds = new Set(Object.values(barberConfig.calendars || {}));
+  const appointments = []; // { startMin, endMin, status, title, calendarId }
+  const breaks = [];       // { startMin, endMin }
+  const manualBlocks = [];  // { startMin, endMin, title }
+
+  for (const ev of calendarEvents) {
+    const { startMin, endMin } = _eventToCentralMinutes(ev);
+    const status = (ev.appointmentStatus || "").toLowerCase();
+    if (_isBreakEvent(ev)) {
+      breaks.push({ startMin, endMin });
+    } else if (status === "invalid") {
+      // Skip
+    } else {
+      // Only include events on known service calendars or with a contactId (real appointments).
+      // Personal calendar events (sports, reminders) from synced calendars should be excluded.
+      const isKnownCalendar = ev.calendarId && knownCalIds.has(ev.calendarId);
+      const hasContact = !!ev.contactId;
+      if (isKnownCalendar || hasContact) {
+        appointments.push({
+          startMin, endMin, status,
+          title: (ev.title || "").trim(),
+          calendarId: ev.calendarId,
+        });
+      }
+    }
+  }
+
+  // Classify blocked slots
+  const syncedAppointments = [];
+  for (const block of blockedSlotsForDay) {
+    const { startMin, endMin } = _eventToCentralMinutes(block);
+    const classification = _classifyBlockedSlot(block);
+    if (classification === "synced_appointment" || classification === "informal_appointment") {
+      syncedAppointments.push({
+        startMin, endMin, status: "confirmed", calendarId: null,
+        title: (block.title || "").trim(),
       });
+    } else {
+      manualBlocks.push({ startMin, endMin, title: block.title || "Blocked" });
+    }
+  }
 
-      // Response: { {date}: { slots: [{ slot: "2025-03-10T09:00:00-05:00" }, ...] } }
-      const slotData = resp || {};
-      for (const [dateKey, dayData] of Object.entries(slotData)) {
-        if (dateKey.startsWith("_") || !dayData?.slots) continue;
-        for (const s of dayData.slots) {
-          const slotTime = s.slot;
-          if (!slotTime) continue;
-          // Deduplicate: same start time across calendars = one slot
-          if (!allFreeSlots.has(slotTime)) {
-            allFreeSlots.set(slotTime, calId);
-          }
+  // Merge overlapping breaks
+  breaks.sort((a, b) => a.startMin - b.startMin);
+  const mergedBreaks = [];
+  for (const brk of breaks) {
+    const last = mergedBreaks[mergedBreaks.length - 1];
+    if (last && brk.startMin <= last.endMin) {
+      last.endMin = Math.max(last.endMin, brk.endMin);
+    } else {
+      mergedBreaks.push({ ...brk });
+    }
+  }
+
+  // Active appointments
+  const ghlActiveAppts = appointments.filter(
+    a => a.status !== "cancelled" && a.status !== "no_showed"
+  );
+  const activeAppts = [...ghlActiveAppts, ...syncedAppointments];
+  const cancelledAppts = appointments.filter(a => a.status === "cancelled");
+  const noshowAppts = appointments.filter(a => a.status === "no_showed");
+
+  // ── Step 4 & 5: Classify slots per calendar, HC-based denominator ──
+  const primaryCalId = barberConfig.calendars?.haircut;
+  const primaryConfig = calendarSlotConfigs[primaryCalId];
+  const primaryInterval = primaryConfig ? primaryConfig.slotInterval : null;
+  const primaryDuration = primaryConfig ? primaryConfig.slotDuration : null;
+
+  // All-calendar deduplication for free-slot detection
+  const timePointStatus = new Map(); // slotMin → { status, calId }
+
+  for (const [calId, slots] of Object.entries(calendarGrids)) {
+    const config = calendarSlotConfigs[calId];
+    const duration = config.slotDuration;
+    for (const slotStart of slots) {
+      const slotEnd = slotStart + duration;
+      const isBreakBlocked = mergedBreaks.some(brk => _overlaps(slotStart, slotEnd, brk.startMin, brk.endMin));
+      const isManuallyBlocked = manualBlocks.some(blk => _overlaps(slotStart, slotEnd, blk.startMin, blk.endMin));
+      const isOccupied = activeAppts.some(appt => _overlaps(slotStart, slotEnd, appt.startMin, appt.endMin));
+
+      let slotStatus;
+      if (isBreakBlocked) slotStatus = "break-blocked";
+      else if (isManuallyBlocked) slotStatus = "manually-blocked";
+      else if (isOccupied) slotStatus = "occupied";
+      else slotStatus = "free";
+
+      const existing = timePointStatus.get(slotStart);
+      if (!existing) {
+        timePointStatus.set(slotStart, { status: slotStatus, calId });
+      } else {
+        // Priority: free > occupied > manually-blocked > break-blocked
+        if (slotStatus === "free" && existing.status !== "free") {
+          timePointStatus.set(slotStart, { status: "free", calId });
+        } else if (slotStatus === "occupied" && (existing.status === "break-blocked" || existing.status === "manually-blocked")) {
+          timePointStatus.set(slotStart, { status: "occupied", calId });
+        } else if (slotStatus === "manually-blocked" && existing.status === "break-blocked") {
+          timePointStatus.set(slotStart, { status: "manually-blocked", calId });
         }
       }
-    } catch (err) {
-      console.warn(`[ChairUtil Live] Free slots failed for calendar ${calId}: ${err.message}`);
     }
   }
 
-  // 2. Fetch calendar configs to get slot durations per calendar
-  const calSlotDurations = {};
-  for (const calId of calendarIds) {
-    try {
-      const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
-      const cal = calResp?.calendar || calResp;
-      calSlotDurations[calId] = cal?.slotDuration || 30;
-    } catch (err) {
-      calSlotDurations[calId] = 30; // default
+  // HC-based primary denominator
+  const primaryGrid = calendarGrids[primaryCalId] || [];
+  const primarySlotStatus = new Map();
+  if (primaryGrid.length > 0 && primaryConfig) {
+    for (const slotStart of primaryGrid) {
+      const slotEnd = slotStart + primaryDuration;
+      const isBreakBlocked = mergedBreaks.some(brk => _overlaps(slotStart, slotEnd, brk.startMin, brk.endMin));
+      const isManuallyBlocked = manualBlocks.some(blk => _overlaps(slotStart, slotEnd, blk.startMin, blk.endMin));
+      const isOccupied = activeAppts.some(appt => _overlaps(slotStart, slotEnd, appt.startMin, appt.endMin));
+
+      if (isBreakBlocked) primarySlotStatus.set(slotStart, "break-blocked");
+      else if (isManuallyBlocked) primarySlotStatus.set(slotStart, "manually-blocked");
+      else if (isOccupied) primarySlotStatus.set(slotStart, "occupied");
+      else primarySlotStatus.set(slotStart, "free");
     }
   }
 
-  // Compute free slot minutes: for each slot, use the min slot duration across calendars
-  // Since we deduplicated by time, use a fixed slot duration. Free slots are bookable time chunks.
-  // Use a default of 30 min per slot — GHL free slots represent one bookable slot each.
-  // To be more precise, look up the calendar that generated each slot.
-  let freeSlotMinutes = 0;
-  for (const [slotTime, calId] of allFreeSlots.entries()) {
-    freeSlotMinutes += calSlotDurations[calId] || 30;
+  // ── Overtime detection ──
+  let overtimeSlots = 0;
+  const allGridSlotTimes = new Set();
+  for (const slots of Object.values(calendarGrids)) {
+    for (const s of slots) allGridSlotTimes.add(s);
+  }
+  const activeIntervals = Object.keys(calendarGrids)
+    .map(calId => calendarSlotConfigs[calId]?.slotInterval)
+    .filter(v => v > 0);
+  const smallestInterval = activeIntervals.length > 0
+    ? Math.min(...activeIntervals)
+    : (primaryInterval || 30);
+
+  for (const appt of activeAppts) {
+    if (appt.startMin >= workEnd && !allGridSlotTimes.has(appt.startMin)) {
+      const apptDuration = appt.endMin - appt.startMin;
+      const slots = Math.ceil(apptDuration / (primaryInterval || smallestInterval));
+      overtimeSlots += slots;
+    }
   }
 
-  // 3. Fetch calendar events (appointments, breaks, blocks)
-  const events = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, startMs, endMs);
+  // ── Step 6: Compute metrics from HC-based denominator ──
+  let occupied = 0, free = 0, breakBlocked = 0, manuallyBlockedCount = 0;
+  for (const [, status] of primarySlotStatus) {
+    switch (status) {
+      case "occupied": occupied++; break;
+      case "free": free++; break;
+      case "break-blocked": breakBlocked++; break;
+      case "manually-blocked": manuallyBlockedCount++; break;
+    }
+  }
 
-  // 4. Calculate appointment minutes (exclude cancelled, exclude breaks/blocks)
-  const { appointmentMinutes, appointmentCount, byDayOfWeek } = _processEvents(events, calendarIds);
-
-  // 5. Compute basic utilization
-  const capacityMinutes = freeSlotMinutes + appointmentMinutes;
-  const utilizedMinutes = appointmentMinutes;
-  const utilization = capacityMinutes > 0
-    ? round((utilizedMinutes / capacityMinutes) * 100, 1)
+  const scheduledSlots = occupied + free;
+  const utilization = scheduledSlots > 0
+    ? ((occupied + overtimeSlots) / scheduledSlots) * 100
     : null;
 
-  // 6. Fetch blocked slots + schedule rules for availability metrics
-  // The Free Slots API handles breaks/blocks for capacity, but we need
-  // to separately track discretionary blocked time for availability scoring.
-  const { BARBER_DATA } = require("../config/kioskConfig");
-  const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
-
-  let rawScheduleMinutes = 0;
-  let discretionaryBlockedMinutes = 0;
-  let availabilityIndex = null;
-  let shopImpact = null;
-  let blockedPercent = 0;
-
-  try {
-    // 6a. Fetch schedule rules to compute raw schedule minutes
-    const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
-    const envelopeCalIds = new Set();
-    if (barberConfig?.calendars) {
-      for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-        if (ENVELOPE_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
+  // Cancellation impact: cancelled appts whose slots are now FREE
+  let cancelledUnfilled = 0;
+  const smallestDuration = Math.min(...Object.values(calendarSlotConfigs).map(c => c.slotDuration));
+  for (const cxl of cancelledAppts) {
+    for (const [slotMin, info] of timePointStatus) {
+      if (info.status === "free" && _overlaps(slotMin, slotMin + smallestDuration, cxl.startMin, cxl.endMin)) {
+        cancelledUnfilled++;
+        break;
       }
     }
+  }
 
-    const schedResp = await httpClient.get(
-      `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
-    );
-    const schedules = schedResp.data?.schedules || [];
+  // No-show impact
+  let noshowUnfilled = 0;
+  for (const ns of noshowAppts) {
+    for (const [slotMin, info] of timePointStatus) {
+      if (info.status === "free" && _overlaps(slotMin, slotMin + smallestDuration, ns.startMin, ns.endMin)) {
+        noshowUnfilled++;
+        break;
+      }
+    }
+  }
 
-    const allDayIntervals = {};
-    for (const sched of schedules) {
-      const isWorkHours = (sched.calendarIds || []).length === 0;
-      const isPrimarySchedule = (sched.calendarIds || []).some(id => envelopeCalIds.has(id));
-      if (!isWorkHours && !isPrimarySchedule) continue;
+  // Shop impact
+  const totalPotential = scheduledSlots + manuallyBlockedCount;
+  const availabilityIndex = totalPotential > 0 ? (scheduledSlots / totalPotential) * 100 : 100;
+  const shopImpact = utilization !== null ? (utilization * availabilityIndex) / 100 : null;
+  const blockedPercent = totalPotential > 0 ? (manuallyBlockedCount / totalPotential) * 100 : 0;
 
-      for (const rule of (sched.rules || [])) {
-        if (rule.type !== "wday") continue;
-        const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
-        if (intervals.length === 0) continue;
-        if (!allDayIntervals[rule.day]) allDayIntervals[rule.day] = [];
-        for (const iv of intervals) {
-          const [fh, fm] = iv.from.split(":").map(Number);
-          const [th, tm] = iv.to.split(":").map(Number);
-          allDayIntervals[rule.day].push({ fromMin: fh * 60 + fm, toMin: th * 60 + tm });
+  // Actual break minutes (for revenue/hr)
+  let actualBreakMinutes = 0;
+  for (const brk of mergedBreaks) {
+    const brkStart = Math.max(brk.startMin, workStart);
+    const brkEnd = Math.min(brk.endMin, workEnd);
+    if (brkEnd > brkStart) actualBreakMinutes += brkEnd - brkStart;
+  }
+
+  // ── Service Mix Efficiency ──
+  let totalDeadSpaceMinutes = 0;
+  let hcDeadSpaceMinutes = 0;
+  const smallestServiceDuration = smallestDuration;
+  const hcDuration = primaryDuration || 30;
+
+  if (primaryInterval && activeAppts.length > 0) {
+    const sortedAppts = [...activeAppts].sort((a, b) => a.startMin - b.startMin);
+
+    // 1. Short-service dead space
+    for (const appt of sortedAppts) {
+      const apptDuration = appt.endMin - appt.startMin;
+      const apptCalConfig = appt.calendarId ? calendarSlotConfigs[appt.calendarId] : null;
+      const isPrimary = appt.calendarId === primaryCalId;
+      const calType = apptCalConfig ? apptCalConfig.type : null;
+      const isHaircutService = isPrimary || calType === "haircut" || calType === "haircut_fnf";
+
+      if (!isHaircutService && apptDuration < primaryInterval) {
+        const gap = primaryInterval - apptDuration;
+        if (gap > 0 && gap < smallestServiceDuration) {
+          totalDeadSpaceMinutes += gap;
+        }
+        if (gap > 0 && gap < hcDuration) {
+          hcDeadSpaceMinutes += gap;
         }
       }
     }
 
-    // Compute raw schedule minutes for the period
-    const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-    const cursor = new Date(startDate + "T12:00:00Z");
-    const endD = new Date(endDateStr + "T12:00:00Z");
-    while (cursor <= endD) {
-      const dayName = dayNames[cursor.getUTCDay()];
-      const intervals = allDayIntervals[dayName];
-      if (intervals) {
-        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
-        const latest = Math.max(...intervals.map(iv => iv.toMin));
-        rawScheduleMinutes += (latest - earliest);
-      }
-      cursor.setUTCDate(cursor.getUTCDate() + 1);
-    }
+    // 2. Scheduling gap dead space
+    for (let i = 0; i < sortedAppts.length - 1; i++) {
+      const current = sortedAppts[i];
+      const next = sortedAppts[i + 1];
+      const gapStart = current.endMin;
+      const gapEnd = next.startMin;
+      const gap = gapEnd - gapStart;
 
-    // 6b. Fetch blocked slots and separate discretionary from recurring
-    const bsStartMs = startMs;
-    const bsEndMs = endMs;
-    const bsResp = await httpClient.get(
-      `/calendars/blocked-slots?locationId=${locationId}&userId=${barberGhlId}&startTime=${bsStartMs}&endTime=${bsEndMs}`,
-      { headers: { Version: "2021-04-15" } }
-    );
-    const blockedEvents = bsResp.data?.events || [];
-    const bsDateFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
-    const bsTimeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
-    const bsGetMin = (parts) => {
-      const h = parseInt(parts.find(p => p.type === "hour").value);
-      const m = parseInt(parts.find(p => p.type === "minute").value);
-      return h * 60 + m;
-    };
-
-    for (const bs of blockedEvents) {
-      if (bs.deleted || bs.isRecurring) continue; // only discretionary (non-recurring)
-      const s = new Date(bs.startTime);
-      const e = new Date(bs.endTime);
-
-      // Split multi-day blocks into per-day segments
-      const bsCursor = new Date(s);
-      while (bsCursor < e) {
-        const dateParts = bsDateFmt.formatToParts(bsCursor);
-        const dateKey = `${dateParts.find(p => p.type === "year").value}-${dateParts.find(p => p.type === "month").value}-${dateParts.find(p => p.type === "day").value}`;
-
-        // Check if this day is within our query range
-        const bsDayName = dayNames[bsCursor.getUTCDay()];
-        const dayIntervals = allDayIntervals[bsDayName];
-
-        if (dayIntervals) {
-          const segStart = bsGetMin(bsTimeFmt.formatToParts(bsCursor));
-          const dayMidnight = new Date(bsCursor);
-          dayMidnight.setDate(dayMidnight.getDate() + 1);
-          dayMidnight.setHours(0, 0, 0, 0);
-          const segEnd = e < dayMidnight ? bsGetMin(bsTimeFmt.formatToParts(e)) : 24 * 60;
-
-          if (segEnd > segStart) {
-            // Clamp to schedule window
-            const schedStart = Math.min(...dayIntervals.map(iv => iv.fromMin));
-            const schedEnd = Math.max(...dayIntervals.map(iv => iv.toMin));
-            const clampedStart = Math.max(segStart, schedStart);
-            const clampedEnd = Math.min(segEnd, schedEnd);
-            if (clampedEnd > clampedStart) {
-              discretionaryBlockedMinutes += (clampedEnd - clampedStart);
-            }
+      if (gap > 0 && gapStart >= workStart && gapEnd <= workEnd) {
+        const isInBreak = mergedBreaks.some(brk => _overlaps(gapStart, gapEnd, brk.startMin, brk.endMin));
+        const isInBlock = manualBlocks.some(blk => _overlaps(gapStart, gapEnd, blk.startMin, blk.endMin));
+        if (!isInBreak && !isInBlock) {
+          if (gap < smallestServiceDuration) {
+            totalDeadSpaceMinutes += gap;
+          }
+          if (gap < hcDuration) {
+            hcDeadSpaceMinutes += gap;
           }
         }
-
-        const dayMidnight = new Date(bsCursor);
-        dayMidnight.setDate(dayMidnight.getDate() + 1);
-        dayMidnight.setHours(0, 0, 0, 0);
-        bsCursor.setTime(dayMidnight.getTime());
       }
     }
+  }
 
-    // Compute availability metrics
-    if (rawScheduleMinutes > 0) {
-      availabilityIndex = round(((rawScheduleMinutes - discretionaryBlockedMinutes) / rawScheduleMinutes) * 100, 1);
-      blockedPercent = round((discretionaryBlockedMinutes / rawScheduleMinutes) * 100, 1);
-      if (utilization !== null) {
-        shopImpact = round((utilization * availabilityIndex) / 100, 1);
-      }
+  // Free slot minutes (from all-calendar deduplication)
+  let allFree = 0;
+  for (const [, info] of timePointStatus) {
+    if (info.status === "free") allFree++;
+  }
+  const freeSlotMinutes = allFree * (primaryInterval || 30);
+
+  // Appointment count + utilized minutes (for byDayOfWeek)
+  let dayUtilizedMinutes = 0;
+  let dayApptCount = 0;
+  for (const appt of activeAppts) {
+    const dur = appt.endMin - appt.startMin;
+    if (dur > 0 && dur < 480) {
+      dayUtilizedMinutes += dur;
+      dayApptCount++;
     }
-  } catch (err) {
-    console.warn(`[ChairUtil Live] Availability metrics failed: ${err.message}`);
   }
 
   return {
-    utilization,
-    capacityMinutes,
-    utilizedMinutes,
-    freeSlotMinutes,
-    appointmentCount,
-    periodDays,
-    mode: "live",
-    // Legacy fields
-    bookedHours: round(utilizedMinutes / 60, 1),
-    availableHours: round(capacityMinutes / 60, 1),
-    byDayOfWeek,
-    scheduleSource: "free_slots",
-    // Availability & Shop Impact metrics
-    rawScheduleMinutes,
-    discretionaryBlockedMinutes,
-    availabilityIndex,
-    shopImpact,
-    blockedPercent,
+    dayName,
+    workStart, workEnd,
+    scheduledSlots,
+    occupiedSlots: occupied,
+    freeSlots: free,
+    overtimeSlots,
+    breakBlockedSlots: breakBlocked,
+    manuallyBlockedSlots: manuallyBlockedCount,
+    utilization: utilization !== null ? round(utilization, 1) : null,
+    availabilityIndex: round(availabilityIndex, 1),
+    shopImpact: shopImpact !== null ? round(shopImpact, 1) : null,
+    blockedPercent: round(blockedPercent, 1),
     atRisk: blockedPercent >= 25,
+    cancelledUnfilled,
+    noshowUnfilled,
+    freeSlotMinutes,
+    actualBreakMinutes,
+    deadSpaceMinutes: totalDeadSpaceMinutes,
+    hcDeadSpaceMinutes,
+    primaryInterval: primaryInterval || 30,
+    // For byDayOfWeek and appointment count
+    utilizedMinutes: dayUtilizedMinutes,
+    appointmentCount: dayApptCount,
+    // Capacity minutes (for backwards compat)
+    capacityMinutes: scheduledSlots * (primaryInterval || 30),
   };
 }
 
 /**
- * MODE 2 — Historical: Supabase appointments + calendar openHours/schedule rules.
- * Reconstructs capacity from calendar configuration for past periods
- * where Free Slots API is unavailable.
- *
- * Uses a SINGLE HC (shortest-slot) calendar for the capacity grid to avoid
- * double-counting when multiple calendars (public + F&F) cover the same hours.
- * Multiple calendars represent different service types on the same chair, not
- * additional capacity.
+ * Fetch calendar slot configs (duration, interval, type) for a barber's calendars.
  */
-async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
+async function _fetchCalendarSlotConfigs(ghlBarber, barberConfig) {
+  const configs = {};
+  for (const [type, calId] of Object.entries(barberConfig.calendars || {})) {
+    try {
+      const resp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
+      const cal = resp.data?.calendar || resp.calendar || resp.data || resp;
+      const dur = _toMinutes(cal.slotDuration, cal.slotDurationUnit) || 30;
+      const int = _toMinutes(cal.slotInterval, cal.slotIntervalUnit) || dur;
+      configs[calId] = { type, slotDuration: dur, slotInterval: int };
+    } catch (err) {
+      console.warn(`[GridWalk] Could not fetch calendar ${calId} (${type}): ${err.message}`);
+      configs[calId] = { type, slotDuration: 30, slotInterval: 30 };
+    }
+  }
+  return configs;
+}
+
+/**
+ * Fetch GHL schedules for a barber.
+ */
+async function _fetchSchedules(httpClient, locationId, userId) {
+  const resp = await httpClient.get(
+    `/calendars/schedules/search?locationId=${locationId}&userId=${userId}`,
+    { headers: { Version: "2021-04-15" } }
+  );
+  return resp.data?.schedules || [];
+}
+
+/**
+ * Fetch blocked slots for a date range.
+ */
+async function _fetchBlockedSlots(httpClient, locationId, userId, startMs, endMs) {
+  const resp = await httpClient.get(
+    `/calendars/blocked-slots?locationId=${locationId}&userId=${userId}&startTime=${startMs}&endTime=${endMs}`,
+    { headers: { Version: "2021-04-15" } }
+  );
+  return resp.data?.events || resp.data?.blockedSlots || resp.data || [];
+}
+
+/**
+ * Shared grid-walk utilization engine. Used for both historical and live modes.
+ * The only difference: historical mode gets events from Calendar Events API;
+ * both modes use the same grid-walk algorithm per day.
+ */
+async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDate, endDateStr, periodDays, mode) {
   const httpClient = ghlBarber.getHttpClient();
   const { BARBER_DATA } = require("../config/kioskConfig");
   const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
 
-  // Primary service types that define the capacity grid. Beard trims are minor
-  // add-ons — their short durations/intervals distort dead space and break cost.
-  const PRIMARY_CALENDAR_TYPES = new Set([
-    "haircut", "haircut_beard", "hot_towel_shave",
-    "haircut_fnf", "haircut_beard_fnf",
-  ]);
-
-  // H+B calendars: 45-min service on 30-min slots. The 15-min bleed past the
-  // slot boundary is real service time that should expand capacity when it
-  // bleeds past the schedule envelope or into breaks.
-  const HB_CALENDAR_TYPES = new Set(["haircut_beard", "haircut_beard_fnf"]);
-  const hbCalIds = new Set();
-  if (barberConfig?.calendars) {
-    for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-      if (HB_CALENDAR_TYPES.has(type)) hbCalIds.add(calId);
-    }
+  if (!barberConfig?.calendars) {
+    console.warn(`[GridWalk] No calendar config for barber ${barberGhlId}`);
+    return { ..._emptyUtilization(periodDays), mode };
   }
 
-  // ── 1. Fetch schedule rules — union of HC-type calendars defines envelope ──
-  // A barber may have two haircut calendars (non-F&F opens earlier, F&F closes
-  // later). The actual capacity window is the union of all HC-type calendar
-  // schedules — earliest start to latest end. H+B calendars have booking padding
-  // and are excluded. Work Hours is the fallback if no HC calendars are found.
-  let scheduleRules = null; // { dayName → [{ from: "HH:mm", to: "HH:mm" }] }
+  // ── 1. Fetch calendar slot configs ──
+  const calendarSlotConfigs = await _fetchCalendarSlotConfigs(ghlBarber, barberConfig);
+
+  // ── 2. Fetch schedules ──
+  let schedules;
   try {
-    const schedResp = await httpClient.get(
-      `/calendars/schedules/search?locationId=${locationId}&userId=${barberGhlId}`
-    );
-    const schedules = schedResp.data?.schedules || [];
-
-    // HC-type calendars define the capacity envelope
-    const ENVELOPE_CALENDAR_TYPES = new Set(["haircut", "haircut_fnf", "hot_towel_shave"]);
-    const envelopeCalIds = new Set();
-    if (barberConfig?.calendars) {
-      for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-        if (ENVELOPE_CALENDAR_TYPES.has(type)) envelopeCalIds.add(calId);
-      }
-    }
-
-    // Primary: union of HC-type calendar schedules. Fallback: Work Hours.
-    const envelopeSchedules = schedules.filter(s =>
-      (s.calendarIds || []).some(id => envelopeCalIds.has(id))
-    );
-    const workHoursSchedule = schedules.find(s => (s.calendarIds || []).length === 0);
-    const sourceSchedules = envelopeSchedules.length > 0
-      ? envelopeSchedules
-      : (workHoursSchedule ? [workHoursSchedule] : []);
-    const sourceLabel = envelopeSchedules.length > 0
-      ? `HC calendar union (${envelopeSchedules.length} schedules)`
-      : "Work Hours fallback";
-
-    const allDayIntervals = {}; // dayName → [{ fromMin, toMin }]
-    for (const sched of sourceSchedules) {
-      for (const rule of (sched.rules || [])) {
-        if (rule.type !== "wday") continue;
-        const intervals = (rule.intervals || []).filter(iv => iv.from && iv.to);
-        if (intervals.length === 0) continue;
-        if (!allDayIntervals[rule.day]) allDayIntervals[rule.day] = [];
-        for (const iv of intervals) {
-          const [fh, fm] = iv.from.split(":").map(Number);
-          const [th, tm] = iv.to.split(":").map(Number);
-          allDayIntervals[rule.day].push({ fromMin: fh * 60 + fm, toMin: th * 60 + tm });
-        }
-      }
-    }
-
-    // For each day, compute envelope from the authoritative source
-    if (Object.keys(allDayIntervals).length > 0) {
-      scheduleRules = {};
-      for (const [day, intervals] of Object.entries(allDayIntervals)) {
-        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
-        const latest = Math.max(...intervals.map(iv => iv.toMin));
-        const eh = Math.floor(earliest / 60);
-        const em = earliest % 60;
-        const lh = Math.floor(latest / 60);
-        const lm = latest % 60;
-        scheduleRules[day] = [{
-          from: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
-          to: `${String(lh).padStart(2, "0")}:${String(lm).padStart(2, "0")}`,
-        }];
-      }
-      console.log(`[ChairUtil Historical] Schedule envelope (${sourceLabel}) — ${Object.keys(scheduleRules).length} working days:`,
-        Object.entries(scheduleRules).map(([d, ivs]) => `${d}: ${ivs[0].from}-${ivs[0].to}`).join(", "));
-    }
+    schedules = await _fetchSchedules(httpClient, locationId, barberGhlId);
   } catch (err) {
-    console.warn(`[ChairUtil Historical] Schedule rules fetch failed: ${err.message}`);
+    console.warn(`[GridWalk] Schedule fetch failed: ${err.message}`);
+    return { ..._emptyUtilization(periodDays), mode };
   }
 
-  if (!scheduleRules || Object.keys(scheduleRules).length === 0) {
-    console.warn(`[ChairUtil Historical] No schedule found for ${barberGhlId}`);
-    return { ..._emptyUtilization(periodDays), mode: "historical", scheduleSource: "none" };
+  if (!schedules || schedules.length === 0) {
+    console.warn(`[GridWalk] No schedules found for ${barberGhlId}`);
+    return { ..._emptyUtilization(periodDays), mode };
   }
 
-  // ── 2. Fetch slot config for this barber's calendars ──
-  // Only primary services (haircut, haircut_beard, hot_towel_shave) define the
-  // capacity grid. Beard trims are minor add-ons — their short durations/intervals
-  // would artificially shrink minBookable and distort dead space detection.
-  // We still fetch ALL calendar configs for per-appointment break reclaim math.
-  const calendarSlotConfig = {};  // ALL calendars (for break reclaim)
-  const primaryCalIds = new Set(); // only primary services (for capacity grid)
-
-  const allCalIds = new Set(calendarIds);
-  if (barberConfig?.calendars) {
-    for (const [type, calId] of Object.entries(barberConfig.calendars)) {
-      allCalIds.add(calId);
-      if (PRIMARY_CALENDAR_TYPES.has(type)) primaryCalIds.add(calId);
-    }
-  }
-  // If no calendar types are mapped in kioskConfig, treat all as primary
-  if (primaryCalIds.size === 0) {
-    for (const calId of allCalIds) primaryCalIds.add(calId);
-  }
-
-  // Helper: GHL returns slotDuration/slotInterval as raw numbers with separate
-  // unit fields (e.g., slotDuration=1 + slotDurationUnit="hours" = 60 minutes).
-  // The SDK doesn't normalize this — we must convert to minutes ourselves.
-  const toMinutes = (value, unit) => {
-    if (!value) return 0;
-    if (unit === "hours") return value * 60;
-    return value; // "mins" or missing = already minutes
-  };
-
-  // GHL daysOfTheWeek: 0=Sun, 1=Mon, 2=Tue, ... 6=Sat
-  const ghDayToName = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const openHoursIntervals = {}; // dayName → [{ fromMin, toMin }] from calendar openHours
-
-  for (const calId of allCalIds) {
-    try {
-      const calResp = await ghlBarber.calendars.getCalendar({ calendarId: calId });
-      const cal = calResp?.calendar || calResp;
-      const durMin = toMinutes(cal?.slotDuration, cal?.slotDurationUnit) || 30;
-      const intMin = toMinutes(cal?.slotInterval, cal?.slotIntervalUnit) || durMin;
-      calendarSlotConfig[calId] = {
-        slotDuration: durMin,
-        slotInterval: intMin,
-      };
-      // Collect openHours from non-H+B primary calendars as schedule fallback.
-      // H+B calendars have wide booking windows (e.g., 8am-6:30pm) that would
-      // inflate the envelope. HC/HTS calendars reflect actual working hours.
-      const calType = barberConfig?.calendars
-        ? Object.entries(barberConfig.calendars).find(([, id]) => id === calId)?.[0]
-        : null;
-      const isHbType = calType && (calType.includes("haircut_beard") || calType.includes("_beard_fnf"));
-      if (primaryCalIds.has(calId) && !isHbType && Array.isArray(cal?.openHours)) {
-        for (const oh of cal.openHours) {
-          for (const dow of (oh.daysOfTheWeek || [])) {
-            const dayName = ghDayToName[dow];
-            if (!dayName) continue;
-            for (const hr of (oh.hours || [])) {
-              const fromMin = (hr.openHour || 0) * 60 + (hr.openMinute || 0);
-              const toMin = (hr.closeHour || 0) * 60 + (hr.closeMinute || 0);
-              if (toMin > fromMin) {
-                if (!openHoursIntervals[dayName]) openHoursIntervals[dayName] = [];
-                openHoursIntervals[dayName].push({ fromMin, toMin });
-              }
-            }
-          }
-        }
-      }
-    } catch (err) {
-      console.warn(`[ChairUtil Historical] Could not get slot config for ${calId}: ${err.message}`);
-      calendarSlotConfig[calId] = { slotDuration: 30, slotInterval: 30 };
-    }
-  }
-
-  // Merge openHours into schedule envelope for days not covered by schedule rules.
-  // Schedule rules are the primary source, but openHours fills gaps (e.g., Saturday).
-  if (scheduleRules && Object.keys(openHoursIntervals).length > 0) {
-    for (const [day, intervals] of Object.entries(openHoursIntervals)) {
-      if (!scheduleRules[day]) {
-        const earliest = Math.min(...intervals.map(iv => iv.fromMin));
-        const latest = Math.max(...intervals.map(iv => iv.toMin));
-        const eh = Math.floor(earliest / 60);
-        const em = earliest % 60;
-        const lh = Math.floor(latest / 60);
-        const lm = latest % 60;
-        scheduleRules[day] = [{
-          from: `${String(eh).padStart(2, "0")}:${String(em).padStart(2, "0")}`,
-          to: `${String(lh).padStart(2, "0")}:${String(lm).padStart(2, "0")}`,
-        }];
-        console.log(`[ChairUtil Historical] Added ${day} from openHours: ${scheduleRules[day][0].from}-${scheduleRules[day][0].to}`);
-      }
-    }
-  }
-
-  // Default slot interval and minBookable from PRIMARY calendars only.
-  // This ensures beard trim's 20-min interval doesn't shrink the break cost grid
-  // or make 30-min gaps appear "bookable" when they're dead space on the HC grid.
-  const primaryConfigs = [...primaryCalIds].map(id => calendarSlotConfig[id]).filter(Boolean);
-  const allIntervals = primaryConfigs.map(c => c.slotInterval).filter(v => v > 0);
-  const defaultSlotInterval = allIntervals.length > 0 ? Math.min(...allIntervals) : 30;
-  console.log(`[ChairUtil Historical] Calendar slot configs:`, Object.entries(calendarSlotConfig).map(
-    ([id, c]) => `${id.substring(0, 8)}…: dur=${c.slotDuration}, int=${c.slotInterval}`
-  ).join(", "));
-
-  // ── 3. Fetch blocked slots for the full period ──
-  // Blocked slots are manually blocked time on the calendar (e.g., barber blocks
-  // off hours for personal time). These reduce capacity but aren't returned by
-  // the Calendar Events API — they come from a separate endpoint.
-  // blockedSlotsByDate: all blocked slots (reduce capacity)
-  // discretionaryBlockedByDate: only non-recurring blocks (for availability/shop impact)
-  // Recurring blocks (isRecurring=true) are operational breaks (daily lunch) —
-  // they reduce capacity but don't count against availability index.
-  const blockedSlotsByDate = {}; // "YYYY-MM-DD" → [{ startMin, endMin }]
-  const discretionaryBlockedByDate = {}; // same shape, only isRecurring=false
+  // ── 3. Fetch blocked slots for full period ──
+  const { startMs: periodStartMs } = _getCentralDayBounds(startDate);
+  const { endMs: periodEndMs } = _getCentralDayBounds(endDateStr);
+  let allBlockedSlots = [];
   try {
-    const bsStartMs = new Date(startDate + "T00:00:00-06:00").getTime();
-    const bsEndMs = new Date(endDateStr + "T23:59:59-06:00").getTime();
-    const bsResp = await httpClient.get(
-      `/calendars/blocked-slots?locationId=${locationId}&userId=${barberGhlId}&startTime=${bsStartMs}&endTime=${bsEndMs}`,
-      { headers: { Version: "2021-04-15" } }
-    );
-    const blockedEvents = bsResp.data?.events || [];
-    const bsDateFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit" });
-    const bsTimeFmt = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
-    const bsGetMin = (parts) => {
-      const h = parseInt(parts.find(p => p.type === "hour").value);
-      const m = parseInt(parts.find(p => p.type === "minute").value);
-      return h * 60 + m;
-    };
-    for (const bs of blockedEvents) {
-      if (bs.deleted) continue;
-      const s = new Date(bs.startTime);
-      const e = new Date(bs.endTime);
-      const isDiscretionary = !bs.isRecurring;
-
-      // Split multi-day blocks into per-day segments.
-      const cursor = new Date(s);
-      while (cursor < e) {
-        const dateParts = bsDateFmt.formatToParts(cursor);
-        const month = dateParts.find(p => p.type === "month").value;
-        const day = dateParts.find(p => p.type === "day").value;
-        const year = dateParts.find(p => p.type === "year").value;
-        const dateKey = `${year}-${month}-${day}`;
-
-        const segStart = bsGetMin(bsTimeFmt.formatToParts(cursor));
-
-        const dayMidnight = new Date(cursor);
-        dayMidnight.setDate(dayMidnight.getDate() + 1);
-        dayMidnight.setHours(0, 0, 0, 0);
-        const segEnd = e < dayMidnight
-          ? bsGetMin(bsTimeFmt.formatToParts(e))
-          : 24 * 60;
-
-        if (segEnd > segStart) {
-          if (!blockedSlotsByDate[dateKey]) blockedSlotsByDate[dateKey] = [];
-          blockedSlotsByDate[dateKey].push({ startMin: segStart, endMin: segEnd });
-
-          if (isDiscretionary) {
-            if (!discretionaryBlockedByDate[dateKey]) discretionaryBlockedByDate[dateKey] = [];
-            discretionaryBlockedByDate[dateKey].push({ startMin: segStart, endMin: segEnd });
-          }
-        }
-
-        cursor.setTime(dayMidnight.getTime());
-      }
-    }
-    const totalBlocked = Object.values(blockedSlotsByDate).reduce((s, arr) => s + arr.reduce((a, b) => a + (b.endMin - b.startMin), 0), 0);
-    if (totalBlocked > 0) {
-      console.log(`[ChairUtil Historical] Blocked slots: ${Object.keys(blockedSlotsByDate).length} days, ${(totalBlocked / 60).toFixed(1)} hrs total`);
-    }
+    allBlockedSlots = await _fetchBlockedSlots(httpClient, locationId, barberGhlId, periodStartMs, periodEndMs);
   } catch (err) {
-    console.warn(`[ChairUtil Historical] Blocked slots fetch failed: ${err.message}`);
+    console.warn(`[GridWalk] Blocked slots fetch failed: ${err.message}`);
   }
 
-  // ── 4. Day-by-day: fetch Calendar Events API, compute capacity & utilized ──
-  const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
-  const dayNames = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
-  const dayDisplayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
+  // ── 4. Day-by-day grid-walk ──
+  let totalScheduledSlots = 0;
+  let totalOccupiedSlots = 0;
+  let totalOvertimeSlots = 0;
+  let totalBreakBlockedSlots = 0;
+  let totalManuallyBlockedSlots = 0;
+  let totalUnfilledCancelled = 0;
+  let totalUnfilledNoshow = 0;
+  let totalDeadSpaceMinutes = 0;
+  let totalHcDeadSpaceMinutes = 0;
   let totalCapacityMinutes = 0;
   let totalUtilizedMinutes = 0;
+  let totalFreeSlotMinutes = 0;
   let totalAppointmentCount = 0;
-  let totalRawScheduleMinutes = 0;       // schedule hours before any deductions
-  let totalDiscretionaryBlockedMinutes = 0; // non-recurring blocks (PTO, personal)
+  let primarySlotInterval = null;
   const byDay = {}; // dayDisplayName → { bookedMinutes, workedDates: Set }
 
   const current = new Date(startDate + "T12:00:00Z");
@@ -1409,346 +1461,68 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
   while (current <= end) {
     const dateStr = current.toISOString().split("T")[0];
     const dayNum = current.getUTCDay();
-    const dayName = dayNames[dayNum];
-    const dayDisplay = dayDisplayNames[dayNum];
+    const dayDisplay = DAY_DISPLAY_NAMES[dayNum];
 
-    const schedIntervals = scheduleRules[dayName];
-    if (!schedIntervals) {
-      // Not a working day — skip entirely
-      current.setUTCDate(current.getUTCDate() + 1);
-      continue;
-    }
-
-    // Raw schedule capacity for this day (before break deductions)
-    let rawCapacityMinutes = 0;
-    const schedWindows = schedIntervals.map(iv => {
-      const [fh, fm] = iv.from.split(":").map(Number);
-      const [th, tm] = iv.to.split(":").map(Number);
-      rawCapacityMinutes += (th * 60 + tm) - (fh * 60 + fm);
-      return { from: fh * 60 + fm, to: th * 60 + tm };
-    });
-
-    // Fetch calendar events for this day from GHL
-    const getCentralOffset = (ds) => {
-      const d = new Date(ds + "T12:00:00Z");
-      const utcStr = d.toLocaleString("en-US", { timeZone: "UTC" });
-      const centralStr = d.toLocaleString("en-US", { timeZone: "America/Chicago" });
-      const offMin = (new Date(utcStr) - new Date(centralStr)) / 60000;
-      const hrs = Math.floor(Math.abs(offMin) / 60);
-      const mins = Math.abs(offMin) % 60;
-      return `${offMin >= 0 ? "-" : "+"}${String(hrs).padStart(2, "0")}:${String(mins).padStart(2, "0")}`;
-    };
-    const offset = getCentralOffset(dateStr);
-    const dayStartMs = new Date(`${dateStr}T00:00:00${offset}`).getTime();
-    const dayEndMs = new Date(`${dateStr}T23:59:59${offset}`).getTime();
-
-    let events;
+    // Fetch calendar events for this day
+    const { startMs: dayStartMs, endMs: dayEndMs } = _getCentralDayBounds(dateStr);
+    let calendarEvents;
     try {
-      events = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, dayStartMs, dayEndMs);
+      calendarEvents = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, dayStartMs, dayEndMs);
+      // Filter to events starting on this day
+      calendarEvents = calendarEvents.filter(ev => {
+        const evStart = new Date(ev.startTime).getTime();
+        return evStart >= dayStartMs && evStart < dayEndMs;
+      });
     } catch (err) {
-      console.warn(`[ChairUtil Historical] Event fetch failed for ${dateStr}: ${err.message}`);
+      console.warn(`[GridWalk] Event fetch failed for ${dateStr}: ${err.message}`);
       current.setUTCDate(current.getUTCDate() + 1);
       continue;
     }
 
-    // Filter out events that don't actually belong to this day.
-    // GHL Calendar Events API sometimes returns recurring events from adjacent
-    // days (e.g., a Thursday block appearing in a Wednesday query). Only keep
-    // events whose startTime falls within this day's boundaries.
-    const dayOnlyEvents = events.filter(ev => {
-      const evStartMs = new Date(ev.startTime).getTime();
-      return evStartMs >= dayStartMs && evStartMs < dayEndMs;
+    // Filter blocked slots for this day
+    const dayBlocks = allBlockedSlots.filter(b => {
+      const bStart = new Date(b.startTime).getTime();
+      return bStart >= dayStartMs && bStart < dayEndMs;
     });
 
-    // Filter events: keep kiosk-calendar events (clients + breaks) AND break
-    // events from ANY calendar. Breaks are often placed on a separate personal
-    // calendar — they still reduce capacity. Non-break events from unknown
-    // calendars (e.g., personal appointments like "yur") are excluded.
-    const filteredEvents = dayOnlyEvents.filter(ev => {
-      if (!ev.calendarId || allCalIds.has(ev.calendarId)) return true;
-      const title = (ev.title || "").toLowerCase();
-      return breakKeywords.some(kw => title.includes(kw));
-    });
+    // Run grid-walk
+    const gw = _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, calendarEvents, dayBlocks);
 
-    // Categorize events: breaks vs client appointments
-    // Sort by start time for adjacency analysis
-    const sortedEvents = filteredEvents
-      .map(ev => {
-        const s = new Date(ev.startTime);
-        const e = new Date(ev.endTime);
-        const title = (ev.title || "").toLowerCase();
-        const isBreak = breakKeywords.some(kw => title.includes(kw));
-        const isCancelled = (ev.appointmentStatus || "").toLowerCase() === "cancelled";
-        return {
-          startMs: s.getTime(),
-          endMs: e.getTime(),
-          startMin: s.getHours() * 60 + s.getMinutes(), // local Central time approx
-          endMin: e.getHours() * 60 + e.getMinutes(),
-          durationMin: (e - s) / 60000,
-          isBreak,
-          isCancelled,
-          title: ev.title || "",
-          calendarId: ev.calendarId,
-          contactId: ev.contactId,
-          raw: ev,
-        };
-      })
-      .sort((a, b) => a.startMs - b.startMs);
-
-    // Inject blocked slots as break events — they reduce capacity like breaks.
-    // Clamp to schedule window so blocks extending past schedule end don't over-count.
-    const dayBlockedSlots = blockedSlotsByDate[dateStr] || [];
-    const schedStart = Math.min(...schedWindows.map(w => w.from));
-    const schedEnd = Math.max(...schedWindows.map(w => w.to));
-    for (const bs of dayBlockedSlots) {
-      const clampedStart = Math.max(bs.startMin, schedStart);
-      const clampedEnd = Math.min(bs.endMin, schedEnd);
-      if (clampedEnd <= clampedStart) continue; // entirely outside schedule
-      sortedEvents.push({
-        startMs: 0, endMs: 0,
-        startMin: clampedStart, endMin: clampedEnd,
-        durationMin: clampedEnd - clampedStart,
-        isBreak: true, isBlocked: true, isCancelled: false,
-        title: "Blocked Slot", calendarId: null, contactId: null, raw: null,
-      });
-    }
-    // Re-sort after adding blocked slots
-    if (dayBlockedSlots.length > 0) {
-      sortedEvents.sort((a, b) => a.startMin - b.startMin);
+    if (!gw) {
+      // Day off — skip
+      current.setUTCDate(current.getUTCDate() + 1);
+      continue;
     }
 
-    // Convert start/end to Central time minutes-since-midnight for slot math
-    // (re-parse using timezone-aware formatting)
-    // Skip blocked slots — their startMin/endMin are already in Central time.
-    for (const ev of sortedEvents) {
-      if (ev.isBlocked) continue;
-      const startCentral = new Date(ev.raw.startTime);
-      const endCentral = new Date(ev.raw.endTime);
-      // Use Intl to get hours/minutes in Central time
-      const sf = new Intl.DateTimeFormat("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "numeric", hour12: false });
-      const startParts = sf.formatToParts(startCentral);
-      const endParts = sf.formatToParts(endCentral);
-      const getMin = (parts) => {
-        const h = parseInt(parts.find(p => p.type === "hour").value);
-        const m = parseInt(parts.find(p => p.type === "minute").value);
-        return h * 60 + m;
-      };
-      ev.startMin = getMin(startParts);
-      ev.endMin = getMin(endParts);
-    }
-
-    // ── Merge consecutive break events into single break blocks ──
-    // GHL sometimes splits a single break into multiple adjacent events
-    // (e.g., 1:00-2:45 + 2:45-3:00 for a 2-hour lunch). Merge them so
-    // slot-alignment is computed on the full block, not per-fragment.
-    const mergedBreaks = [];
-    for (const ev of sortedEvents) {
-      if (!ev.isBreak) continue;
-      const last = mergedBreaks[mergedBreaks.length - 1];
-      if (last && ev.startMin <= last.endMin) {
-        // Overlapping or adjacent — extend the merged block
-        last.endMin = Math.max(last.endMin, ev.endMin);
-      } else {
-        mergedBreaks.push({ startMin: ev.startMin, endMin: ev.endMin });
-      }
-    }
-
-    // ── Compute slot-aligned break cost with appointment reclaim ──
-    // Break cost is rounded up to the default slot interval grid. If an adjacent
-    // appointment overflows past its own calendar's slot boundary, that overflow
-    // absorbs break padding and reduces the break cost.
-    let breakCostMinutes = 0;
-
-    for (const brk of mergedBreaks) {
-      const breakDuration = brk.endMin - brk.startMin;
-      if (breakDuration <= 0) continue;
-
-      // Find the client appointment immediately before the merged break block
-      let prevEvent = null;
-      for (const ev of sortedEvents) {
-        if (ev.isBreak || ev.isCancelled) continue;
-        if (ev.endMin <= brk.startMin) prevEvent = ev;
-      }
-
-      // Reclaim: if the previous appointment ends exactly at break start and its
-      // duration overflows past that calendar's slot interval, the overflow absorbs
-      // break padding.
-      let reclaimedByPrev = 0;
-      if (prevEvent && prevEvent.endMin === brk.startMin) {
-        const prevSlotInt = calendarSlotConfig[prevEvent.calendarId]?.slotInterval || defaultSlotInterval;
-        if (prevEvent.durationMin > prevSlotInt) {
-          const overflow = prevEvent.durationMin % prevSlotInt;
-          if (overflow > 0) reclaimedByPrev = overflow;
-        }
-      }
-
-      // Find the client appointment immediately after the merged break block
-      let nextEvent = null;
-      for (const ev of sortedEvents) {
-        if (ev.isBreak || ev.isCancelled) continue;
-        if (ev.startMin >= brk.endMin) { nextEvent = ev; break; }
-      }
-
-      let reclaimedByNext = 0;
-      if (nextEvent && nextEvent.startMin === brk.endMin) {
-        const nextSlotInt = calendarSlotConfig[nextEvent.calendarId]?.slotInterval || defaultSlotInterval;
-        if (nextEvent.durationMin > nextSlotInt) {
-          const overflow = nextEvent.durationMin % nextSlotInt;
-          if (overflow > 0) reclaimedByNext = overflow;
-        }
-      }
-
-      // Net break cost: round up to slot boundary, subtract reclaimed
-      const slotAlignedCost = Math.ceil(breakDuration / defaultSlotInterval) * defaultSlotInterval;
-      const netCost = Math.max(0, slotAlignedCost - reclaimedByPrev - reclaimedByNext);
-      breakCostMinutes += netCost;
-    }
-
-    // ── Compute utilized minutes (client appointments only) ──
-    // Utilized = actual service duration, NOT snapped to slot intervals.
-    // Dead space (e.g., 15 min after a 45-min HC in a 60-min grid) is subtracted
-    // from capacity instead, because it's unbookable time — not utilized time.
-    let dayUtilized = 0;
-    let dayApptCount = 0;
-    const clientEvents = []; // track for dead space calculation
-    for (const ev of sortedEvents) {
-      if (ev.isBreak || ev.isCancelled) continue;
-      const title = ev.title.toLowerCase();
-      if (!ev.contactId && (title === "" || breakKeywords.some(kw => title.includes(kw)))) continue;
-      if (ev.durationMin > 0 && ev.durationMin < 480) {
-        dayUtilized += ev.durationMin;
-        dayApptCount++;
-        clientEvents.push(ev);
-      }
-    }
-
-    // ── Compute dead space: unbookable gaps between client appointments ──
-    // Dead space = off-grid time created by H+B appointments (45 min on 30-min grid)
-    // that leaves gaps shorter than minBookable (the smallest HC slot duration).
-    //
-    // Two scenarios:
-    // 1. Simple gap: H+B ends at :45, next appt at :00 → 15 min dead space
-    // 2. Gap with break in between: H+B ends at :45, break at :15-:30, next appt
-    //    at :30 → total gap is 45 min but break's slot-aligned cost covers 30 min,
-    //    leaving 15 min of off-grid dead space (the :45 to :00 portion).
-    //
-    // For gaps adjacent to breaks, we subtract the break's slot-aligned cost from
-    // the total gap to find the remaining dead space. If the remainder is > 0 but
-    // < minBookable, it's unbookable dead space.
-    const minBookable = Math.min(...primaryConfigs.map(c => c.slotDuration));
-    const allNonCancelledEvents = sortedEvents.filter(ev => !ev.isCancelled);
-    let deadSpaceMinutes = 0;
-
-    // Build a sorted list of client-only events for gap analysis
-    const clientOnlyEvents = allNonCancelledEvents.filter(ev => !ev.isBreak);
-
-    // Helper: find merged breaks that fall within a gap range
-    const breaksInRange = (gapStart, gapEnd) => {
-      return mergedBreaks.filter(br => br.startMin >= gapStart && br.endMin <= gapEnd);
-    };
-
-    // Helper: compute total slot-aligned break cost within a gap
-    const breakCostInRange = (gapStart, gapEnd) => {
-      const breaks = breaksInRange(gapStart, gapEnd);
-      let cost = 0;
-      for (const brk of breaks) {
-        const breakDur = brk.endMin - brk.startMin;
-        cost += Math.ceil(breakDur / defaultSlotInterval) * defaultSlotInterval;
-      }
-      return cost;
-    };
-
-    for (let i = 0; i < clientOnlyEvents.length; i++) {
-      const ev = clientOnlyEvents[i];
-      const nextClientEv = clientOnlyEvents[i + 1];
-
-      if (nextClientEv) {
-        const totalGap = nextClientEv.startMin - ev.endMin;
-        if (totalGap <= 0) continue;
-
-        // Subtract any break cost within the gap to find remaining free time
-        const brkCost = breakCostInRange(ev.endMin, nextClientEv.startMin);
-        const remainingGap = totalGap - brkCost;
-
-        if (remainingGap > 0 && remainingGap < minBookable) {
-          const inSchedule = schedWindows.some(w => ev.endMin >= w.from && nextClientEv.startMin <= w.to);
-          if (inSchedule) deadSpaceMinutes += remainingGap;
-        }
-      } else {
-        // Last client event of the day: check gap to schedule window end
-        for (const w of schedWindows) {
-          if (ev.endMin > w.from && ev.endMin < w.to) {
-            const totalGap = w.to - ev.endMin;
-            const brkCost = breakCostInRange(ev.endMin, w.to);
-            const remainingGap = totalGap - brkCost;
-
-            if (remainingGap > 0 && remainingGap < minBookable) {
-              deadSpaceMinutes += remainingGap;
-            }
-          }
-        }
-      }
-    }
-
-    // ── H+B bleed expansion: 15-min overflow is real service time ──
-    // H+B appointments are 45 min on a 30-min slot. When the extra 15 min
-    // bleeds past the schedule envelope end or into a break, expand capacity
-    // by that amount so it's attributed correctly (not counted as >100%).
-    let hbBleedMinutes = 0;
-    for (const ev of clientEvents) {
-      if (!hbCalIds.has(ev.calendarId)) continue;
-      const slotInt = calendarSlotConfig[ev.calendarId]?.slotInterval || defaultSlotInterval;
-      if (ev.durationMin <= slotInt) continue; // no overflow
-      const bleed = ev.durationMin - slotInt; // typically 15 min
-
-      // Check bleed past schedule envelope end
-      if (ev.endMin > schedEnd) {
-        const pastEnd = Math.min(bleed, ev.endMin - schedEnd);
-        hbBleedMinutes += pastEnd;
-      }
-
-      // Check bleed into break periods
-      for (const brk of mergedBreaks) {
-        if (ev.endMin > brk.startMin && ev.startMin < brk.startMin) {
-          // Appointment started before break and bleeds into it
-          const intoBreak = Math.min(bleed, ev.endMin - brk.startMin);
-          hbBleedMinutes += intoBreak;
-        }
-      }
-    }
-
-    // ── Day capacity = raw schedule - break cost - dead space + H+B bleed ──
-    const dayCapacity = Math.max(0, rawCapacityMinutes - breakCostMinutes - deadSpaceMinutes + hbBleedMinutes);
-
-    // Track discretionary blocked minutes for this day (clamped to schedule)
-    const dayDiscretionaryBlocks = discretionaryBlockedByDate[dateStr] || [];
-    let dayDiscretionaryBlockedMinutes = 0;
-    for (const db of dayDiscretionaryBlocks) {
-      const clampedStart = Math.max(db.startMin, schedStart);
-      const clampedEnd = Math.min(db.endMin, schedEnd);
-      if (clampedEnd > clampedStart) dayDiscretionaryBlockedMinutes += (clampedEnd - clampedStart);
-    }
-
-    totalCapacityMinutes += dayCapacity;
-    totalUtilizedMinutes += dayUtilized;
-    totalAppointmentCount += dayApptCount;
-    totalRawScheduleMinutes += rawCapacityMinutes;
-    totalDiscretionaryBlockedMinutes += dayDiscretionaryBlockedMinutes;
+    // Accumulate totals
+    totalScheduledSlots += gw.scheduledSlots;
+    totalOccupiedSlots += gw.occupiedSlots;
+    totalOvertimeSlots += gw.overtimeSlots;
+    totalBreakBlockedSlots += gw.breakBlockedSlots;
+    totalManuallyBlockedSlots += gw.manuallyBlockedSlots;
+    totalUnfilledCancelled += gw.cancelledUnfilled;
+    totalUnfilledNoshow += gw.noshowUnfilled;
+    totalDeadSpaceMinutes += gw.deadSpaceMinutes;
+    totalHcDeadSpaceMinutes += gw.hcDeadSpaceMinutes;
+    totalCapacityMinutes += gw.capacityMinutes;
+    totalUtilizedMinutes += gw.utilizedMinutes;
+    totalFreeSlotMinutes += gw.freeSlotMinutes;
+    totalAppointmentCount += gw.appointmentCount;
+    if (!primarySlotInterval) primarySlotInterval = gw.primaryInterval;
 
     // Track by day-of-week
-    if (dayApptCount > 0) {
+    if (gw.appointmentCount > 0) {
       if (!byDay[dayDisplay]) byDay[dayDisplay] = { bookedMinutes: 0, workedDates: new Set() };
-      byDay[dayDisplay].bookedMinutes += dayUtilized;
+      byDay[dayDisplay].bookedMinutes += gw.utilizedMinutes;
       byDay[dayDisplay].workedDates.add(dateStr);
     }
 
     // Rate limit: 150ms delay between days to avoid GHL API throttling
     await new Promise(resolve => setTimeout(resolve, 150));
-
     current.setUTCDate(current.getUTCDate() + 1);
   }
 
-  // ── 4. Build byDayOfWeek summary ──
+  // ── 5. Build byDayOfWeek summary ──
   const byDayOfWeek = {};
   for (const [dayDisplay, data] of Object.entries(byDay)) {
     const dayCount = data.workedDates.size;
@@ -1758,49 +1532,57 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
     };
   }
 
-  // ── 5. Final utilization + availability metrics ──
-  const utilization = totalCapacityMinutes > 0
-    ? round((totalUtilizedMinutes / totalCapacityMinutes) * 100, 1)
+  // ── 6. Compute final metrics from pooled slot counts ──
+  const pooledUtilization = totalScheduledSlots > 0
+    ? round(((totalOccupiedSlots + totalOvertimeSlots) / totalScheduledSlots) * 100, 1)
     : null;
 
-  // Availability Index: % of raw schedule kept open (not blocked by discretionary blocks).
-  // Recurring breaks (daily lunch) don't count against availability.
-  const availabilityIndex = totalRawScheduleMinutes > 0
-    ? round(((totalRawScheduleMinutes - totalDiscretionaryBlockedMinutes) / totalRawScheduleMinutes) * 100, 1)
+  const totalPotential = totalScheduledSlots + totalManuallyBlockedSlots;
+  const availabilityIndex = totalPotential > 0
+    ? round((totalScheduledSlots / totalPotential) * 100, 1)
     : null;
-
-  // Shop Impact = Utilization × Availability Index.
-  // When availability is 100%, shop impact equals utilization.
-  // When a barber blocks time off, shop impact drops proportionally.
-  const shopImpact = (utilization !== null && availabilityIndex !== null)
-    ? round((utilization * availabilityIndex) / 100, 1)
+  const shopImpact = (pooledUtilization !== null && availabilityIndex !== null)
+    ? round((pooledUtilization * availabilityIndex) / 100, 1)
     : null;
-
-  // Blocked percentage for "at risk" indicator (discretionary blocks only).
-  // Show "at risk" when >= 25% of raw schedule is discretionary blocked time.
-  const blockedPercent = totalRawScheduleMinutes > 0
-    ? round((totalDiscretionaryBlockedMinutes / totalRawScheduleMinutes) * 100, 1)
+  const blockedPercent = totalPotential > 0
+    ? round((totalManuallyBlockedSlots / totalPotential) * 100, 1)
     : 0;
 
+  // Legacy backwards-compat fields computed from grid-walk slot counts
+  const slotInterval = primarySlotInterval || 30;
+  const rawScheduleMinutes = totalPotential * slotInterval;
+  const discretionaryBlockedMinutes = totalManuallyBlockedSlots * slotInterval;
+
   return {
-    utilization,
+    utilization: pooledUtilization,
     capacityMinutes: totalCapacityMinutes,
     utilizedMinutes: totalUtilizedMinutes,
-    freeSlotMinutes: Math.max(0, totalCapacityMinutes - totalUtilizedMinutes),
+    freeSlotMinutes: totalFreeSlotMinutes,
     appointmentCount: totalAppointmentCount,
     periodDays,
-    mode: "historical",
+    mode,
     bookedHours: round(totalUtilizedMinutes / 60, 1),
     availableHours: round(totalCapacityMinutes / 60, 1),
     byDayOfWeek,
-    scheduleSource: "calendar_events_api",
-    // Availability & Shop Impact metrics
-    rawScheduleMinutes: totalRawScheduleMinutes,
-    discretionaryBlockedMinutes: totalDiscretionaryBlockedMinutes,
+    scheduleSource: "grid_walk",
+    // Legacy backwards-compat availability metrics
+    rawScheduleMinutes,
+    discretionaryBlockedMinutes,
     availabilityIndex,
     shopImpact,
     blockedPercent,
     atRisk: blockedPercent >= 25,
+    // Grid-walk fields
+    scheduledSlots: totalScheduledSlots,
+    occupiedSlots: totalOccupiedSlots,
+    overtimeSlots: totalOvertimeSlots,
+    breakBlockedSlots: totalBreakBlockedSlots,
+    manuallyBlockedSlots: totalManuallyBlockedSlots,
+    unfilledCancelledSlots: totalUnfilledCancelled,
+    unfilledNoshowSlots: totalUnfilledNoshow,
+    deadSpaceMinutes: totalDeadSpaceMinutes,
+    hcDeadSpaceMinutes: totalHcDeadSpaceMinutes,
+    slotIntervalMinutes: slotInterval,
   };
 }
 
@@ -1816,108 +1598,24 @@ async function _fetchCalendarEvents(httpClient, locationId, userId, startMs, end
     );
     return resp.data?.events || [];
   } catch (err) {
-    console.warn(`[ChairUtil] Calendar events fetch failed: ${err.message}`);
+    console.warn(`[GridWalk] Calendar events fetch failed: ${err.message}`);
     return [];
   }
 }
 
 /**
- * Process calendar events: calculate appointment minutes and per-day breakdown.
- * Excludes cancelled appointments and non-appointment events (breaks, blocks).
- * If calendarIds is provided, only counts appointments on those calendars.
+ * MODE 1 — Live: Grid-walk using Calendar Events API (real-time data).
  */
-function _processEvents(events, calendarIds = null) {
-  const calFilter = calendarIds ? new Set(calendarIds) : null;
-  let appointmentMinutes = 0;
-  let appointmentCount = 0;
-  const byDay = {};
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-  const breakKeywords = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
-
-  for (const ev of events) {
-    // Skip non-appointment events (breaks, blocks)
-    const title = (ev.title || "").toLowerCase();
-    if (breakKeywords.some(kw => title.includes(kw))) continue;
-
-    // Must be an appointment (has contactId) and not cancelled
-    if (!ev.contactId) continue;
-    const status = (ev.appointmentStatus || "").toLowerCase();
-    if (status === "cancelled") continue;
-
-    // Skip appointments on calendars not in our tracking set
-    if (calFilter && ev.calendarId && !calFilter.has(ev.calendarId)) continue;
-
-    const start = new Date(ev.startTime);
-    const end = new Date(ev.endTime);
-    const durationMinutes = (end - start) / (1000 * 60);
-
-    if (durationMinutes > 0 && durationMinutes < 480) {
-      appointmentMinutes += durationMinutes;
-      appointmentCount++;
-
-      // Central time day-of-week for byDayOfWeek
-      const centralDate = new Date(start.toLocaleString("en-US", { timeZone: "America/Chicago" }));
-      const dayName = dayNames[centralDate.getDay()];
-      const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(start);
-      if (!byDay[dayName]) byDay[dayName] = { bookedMinutes: 0, workedDates: new Set() };
-      byDay[dayName].bookedMinutes += durationMinutes;
-      byDay[dayName].workedDates.add(dateKey);
-    }
-  }
-
-  const byDayOfWeek = {};
-  for (const [dayName, data] of Object.entries(byDay)) {
-    const dayCount = data.workedDates.size;
-    byDayOfWeek[dayName] = {
-      avgBookedHours: dayCount > 0 ? round(data.bookedMinutes / dayCount / 60, 1) : 0,
-      daysWorked: dayCount,
-    };
-  }
-
-  return { appointmentMinutes, appointmentCount, byDayOfWeek };
+async function _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
+  return _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDate, endDateStr, periodDays, "live");
 }
 
 /**
- * Process Supabase appointment rows for historical utilization.
- * Similar to _processEvents but works with Supabase appointment format.
+ * MODE 2 — Historical: Grid-walk using Calendar Events API (past data).
+ * Same algorithm as live — Calendar Events API works for all dates.
  */
-function _processSupabaseAppointments(appointments) {
-  let appointmentMinutes = 0;
-  let appointmentCount = 0;
-  const byDay = {};
-  const dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-
-  for (const appt of appointments) {
-    if (appt.status === "cancelled") continue;
-
-    const start = new Date(appt.start_time);
-    const end = new Date(appt.end_time);
-    const durationMinutes = (end - start) / (1000 * 60);
-
-    if (durationMinutes > 0 && durationMinutes < 480) {
-      appointmentMinutes += durationMinutes;
-      appointmentCount++;
-
-      const centralDate = new Date(start.toLocaleString("en-US", { timeZone: "America/Chicago" }));
-      const dayName = dayNames[centralDate.getDay()];
-      const dateKey = new Intl.DateTimeFormat("en-CA", { timeZone: "America/Chicago" }).format(start);
-      if (!byDay[dayName]) byDay[dayName] = { bookedMinutes: 0, workedDates: new Set() };
-      byDay[dayName].bookedMinutes += durationMinutes;
-      byDay[dayName].workedDates.add(dateKey);
-    }
-  }
-
-  const byDayOfWeek = {};
-  for (const [dayName, data] of Object.entries(byDay)) {
-    const dayCount = data.workedDates.size;
-    byDayOfWeek[dayName] = {
-      avgBookedHours: dayCount > 0 ? round(data.bookedMinutes / dayCount / 60, 1) : 0,
-      daysWorked: dayCount,
-    };
-  }
-
-  return { appointmentMinutes, appointmentCount, byDayOfWeek };
+async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays) {
+  return _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDate, endDateStr, periodDays, "historical");
 }
 
 
