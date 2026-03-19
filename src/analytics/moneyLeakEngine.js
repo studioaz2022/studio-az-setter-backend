@@ -585,7 +585,7 @@ async function computeOverflowDemand(barberGhlId, locationId) {
  * Cap Zone metric: Suggested price bump.
  * Only triggers when utilization > 90% for 4+ consecutive weeks.
  */
-async function computeSuggestedPriceBump(barberGhlId, locationId, avgRevenuePerVisit) {
+async function computeSuggestedPriceBump(barberGhlId, locationId, avgRevenuePerVisit, shopImpact) {
   if (avgRevenuePerVisit == null) return null;
 
   // Check the last 8 weeks of snapshots for consecutive >90% utilization
@@ -635,6 +635,12 @@ async function computeSuggestedPriceBump(barberGhlId, locationId, avgRevenuePerV
   }
 
   if (maxConsecutive < 4) return null;
+
+  // Shop impact gate: suppress the price bump message if the barber is blocking
+  // too much capacity. They have room to grow by opening their schedule, not
+  // raising prices. The subtle "*" at-risk indicator handles the nudge instead.
+  // Threshold: shopImpact must be >= 85% to show the price bump.
+  if (shopImpact != null && shopImpact < 85) return null;
 
   // Suggest ~10% bump, rounded to nearest $5
   const rawBump = avgRevenuePerVisit * 0.10;
@@ -702,7 +708,7 @@ async function computeFullScorecard(barberGhlId, locationId) {
     const [avgRevPerHour, overflow, priceBump] = await Promise.all([
       safeCompute(() => computeAvgRevenuePerHour(barberGhlId, locationId), null),
       safeCompute(() => computeOverflowDemand(barberGhlId, locationId), { fullyBookedDays: 0, avgWaitDays: null }),
-      safeCompute(() => computeSuggestedPriceBump(barberGhlId, locationId, moneyOnTheFloor.avgRevenuePerVisit), null),
+      safeCompute(() => computeSuggestedPriceBump(barberGhlId, locationId, moneyOnTheFloor.avgRevenuePerVisit, moneyOnTheFloor.shopImpact), null),
     ]);
     capZoneMetrics = {
       avgRevenuePerHour: avgRevPerHour,
