@@ -1622,43 +1622,68 @@ async function _historicalUtilization(ghlBarber, barberGhlId, locationId, calend
       }
     }
 
-    // ── Compute dead space: unbookable gaps NOT adjacent to breaks ──
-    // Gaps adjacent to breaks are already covered by the break's slot-aligned cost
-    // (e.g., a 15-min break that costs 30 min already accounts for the 15-min gap).
-    // Dead space only applies to gaps between client appointments (or between the
-    // last appointment and the schedule end) where no break is involved.
-    // E.g., Lionel's H+B ends at 2:15, next appt at 2:30 — 15 min unbookable gap.
+    // ── Compute dead space: unbookable gaps between client appointments ──
+    // Dead space = off-grid time created by H+B appointments (45 min on 30-min grid)
+    // that leaves gaps shorter than minBookable (the smallest HC slot duration).
+    //
+    // Two scenarios:
+    // 1. Simple gap: H+B ends at :45, next appt at :00 → 15 min dead space
+    // 2. Gap with break in between: H+B ends at :45, break at :15-:30, next appt
+    //    at :30 → total gap is 45 min but break's slot-aligned cost covers 30 min,
+    //    leaving 15 min of off-grid dead space (the :45 to :00 portion).
+    //
+    // For gaps adjacent to breaks, we subtract the break's slot-aligned cost from
+    // the total gap to find the remaining dead space. If the remainder is > 0 but
+    // < minBookable, it's unbookable dead space.
     const minBookable = Math.min(...primaryConfigs.map(c => c.slotDuration));
     const allNonCancelledEvents = sortedEvents.filter(ev => !ev.isCancelled);
     let deadSpaceMinutes = 0;
 
-    // Use merged break ranges for adjacency checks
-    const breakRanges = mergedBreaks.map(br => ({ start: br.startMin, end: br.endMin }));
+    // Build a sorted list of client-only events for gap analysis
+    const clientOnlyEvents = allNonCancelledEvents.filter(ev => !ev.isBreak);
 
-    const isAdjacentToBreak = (gapStart, gapEnd) => {
-      return breakRanges.some(br => br.start === gapEnd || br.end === gapStart ||
-        (gapStart >= br.start && gapEnd <= br.end));
+    // Helper: find merged breaks that fall within a gap range
+    const breaksInRange = (gapStart, gapEnd) => {
+      return mergedBreaks.filter(br => br.startMin >= gapStart && br.endMin <= gapEnd);
     };
 
-    for (let i = 0; i < allNonCancelledEvents.length; i++) {
-      const ev = allNonCancelledEvents[i];
-      if (ev.isBreak) continue; // skip break events themselves
-      const nextEv = allNonCancelledEvents[i + 1];
+    // Helper: compute total slot-aligned break cost within a gap
+    const breakCostInRange = (gapStart, gapEnd) => {
+      const breaks = breaksInRange(gapStart, gapEnd);
+      let cost = 0;
+      for (const brk of breaks) {
+        const breakDur = brk.endMin - brk.startMin;
+        cost += Math.ceil(breakDur / defaultSlotInterval) * defaultSlotInterval;
+      }
+      return cost;
+    };
 
-      const gapEnd = nextEv ? nextEv.startMin : null;
-      if (gapEnd !== null) {
-        const gap = gapEnd - ev.endMin;
-        if (gap > 0 && gap < minBookable && !isAdjacentToBreak(ev.endMin, gapEnd)) {
-          const inSchedule = schedWindows.some(w => ev.endMin >= w.from && gapEnd <= w.to);
-          if (inSchedule) deadSpaceMinutes += gap;
+    for (let i = 0; i < clientOnlyEvents.length; i++) {
+      const ev = clientOnlyEvents[i];
+      const nextClientEv = clientOnlyEvents[i + 1];
+
+      if (nextClientEv) {
+        const totalGap = nextClientEv.startMin - ev.endMin;
+        if (totalGap <= 0) continue;
+
+        // Subtract any break cost within the gap to find remaining free time
+        const brkCost = breakCostInRange(ev.endMin, nextClientEv.startMin);
+        const remainingGap = totalGap - brkCost;
+
+        if (remainingGap > 0 && remainingGap < minBookable) {
+          const inSchedule = schedWindows.some(w => ev.endMin >= w.from && nextClientEv.startMin <= w.to);
+          if (inSchedule) deadSpaceMinutes += remainingGap;
         }
       } else {
-        // Last event of the day: check gap to schedule window end
+        // Last client event of the day: check gap to schedule window end
         for (const w of schedWindows) {
           if (ev.endMin > w.from && ev.endMin < w.to) {
-            const gap = w.to - ev.endMin;
-            if (gap > 0 && gap < minBookable && !isAdjacentToBreak(ev.endMin, w.to)) {
-              deadSpaceMinutes += gap;
+            const totalGap = w.to - ev.endMin;
+            const brkCost = breakCostInRange(ev.endMin, w.to);
+            const remainingGap = totalGap - brkCost;
+
+            if (remainingGap > 0 && remainingGap < minBookable) {
+              deadSpaceMinutes += remainingGap;
             }
           }
         }
