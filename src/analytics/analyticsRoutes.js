@@ -341,17 +341,17 @@ async function runUtilizationBackfill(barbers, startDate, endDate, locationId) {
               shop_impact: util.shopImpact != null ? util.shopImpact : null,
               blocked_percent: util.blockedPercent != null ? util.blockedPercent : null,
               at_risk: util.atRisk || false,
-              // Grid-walk slot counts
-              scheduled_slots: util.scheduledSlots || null,
-              occupied_slots: util.occupiedSlots || null,
-              overtime_slots: util.overtimeSlots || null,
-              break_blocked_slots: util.breakBlockedSlots || null,
-              manually_blocked_slots: util.manuallyBlockedSlots || null,
-              unfilled_cancelled_slots: util.unfilledCancelledSlots || null,
-              unfilled_noshow_slots: util.unfilledNoshowSlots || null,
-              dead_space_minutes: util.deadSpaceMinutes || null,
-              hc_dead_space_minutes: util.hcDeadSpaceMinutes || null,
-              slot_interval_minutes: util.slotIntervalMinutes || null,
+              // Grid-walk slot counts (use ?? to preserve 0 values)
+              scheduled_slots: util.scheduledSlots ?? null,
+              occupied_slots: util.occupiedSlots ?? null,
+              overtime_slots: util.overtimeSlots ?? null,
+              break_blocked_slots: util.breakBlockedSlots ?? null,
+              manually_blocked_slots: util.manuallyBlockedSlots ?? null,
+              unfilled_cancelled_slots: util.unfilledCancelledSlots ?? null,
+              unfilled_noshow_slots: util.unfilledNoshowSlots ?? null,
+              dead_space_minutes: util.deadSpaceMinutes ?? null,
+              hc_dead_space_minutes: util.hcDeadSpaceMinutes ?? null,
+              slot_interval_minutes: util.slotIntervalMinutes ?? null,
             },
             { onConflict: "barber_ghl_id,location_id,snapshot_date" }
           );
