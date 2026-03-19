@@ -1126,8 +1126,10 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
   const noshowAppts = appointments.filter(a => a.status === "no_showed");
 
   // ── Step 4 & 5: Classify slots per calendar, HC-based denominator ──
-  const primaryCalId = barberConfig.calendars?.haircut;
-  const primaryConfig = calendarSlotConfigs[primaryCalId];
+  // Union HC + HC F&F grids as primary denominator (they may have different schedule hours)
+  const hcCalId = barberConfig.calendars?.haircut;
+  const hcFnfCalId = barberConfig.calendars?.haircut_fnf;
+  const primaryConfig = calendarSlotConfigs[hcCalId] || calendarSlotConfigs[hcFnfCalId];
   const primaryInterval = primaryConfig ? primaryConfig.slotInterval : null;
   const primaryDuration = primaryConfig ? primaryConfig.slotDuration : null;
 
@@ -1165,8 +1167,10 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
     }
   }
 
-  // HC-based primary denominator
-  const primaryGrid = calendarGrids[primaryCalId] || [];
+  // HC-based primary denominator — union of HC + HC F&F grids
+  const hcGrid = calendarGrids[hcCalId] || [];
+  const hcFnfGrid = calendarGrids[hcFnfCalId] || [];
+  const primaryGrid = [...new Set([...hcGrid, ...hcFnfGrid])].sort((a, b) => a - b);
   const primarySlotStatus = new Map();
   if (primaryGrid.length > 0 && primaryConfig) {
     for (const slotStart of primaryGrid) {
@@ -1269,7 +1273,7 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
     for (const appt of sortedAppts) {
       const apptDuration = appt.endMin - appt.startMin;
       const apptCalConfig = appt.calendarId ? calendarSlotConfigs[appt.calendarId] : null;
-      const isPrimary = appt.calendarId === primaryCalId;
+      const isPrimary = appt.calendarId === hcCalId || appt.calendarId === hcFnfCalId;
       const calType = apptCalConfig ? apptCalConfig.type : null;
       const isHaircutService = isPrimary || calType === "haircut" || calType === "haircut_fnf";
 

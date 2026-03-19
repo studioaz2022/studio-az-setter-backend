@@ -20,14 +20,14 @@ const TESTS = [
     barber: LIONEL_ID,
     date: "2026-03-14",
     expected: {
-      // Actual HC schedule: 10:00-13:30 = 7 slots, 1 break-blocked = 6 scheduled
-      // 6 occupied + 2 overtime (Shawn Messner at 14:30) = 133.3%
-      scheduledSlots: 6,
-      occupiedSlots: 6,
+      // HC + HC F&F union: 10:00-14:30 = 9 slots, 1 break-blocked = 8 scheduled
+      // 8 occupied + 2 overtime (Shawn Messner at 14:30) = 125%
+      scheduledSlots: 8,
+      occupiedSlots: 8,
       overtimeSlots: 2,
       breakBlockedSlots: 1,
       manuallyBlockedSlots: 0,
-      utilization: 133.3, // (6+2)/6 = 133.3%
+      utilization: 125, // (8+2)/8 = 125%
     },
   },
   {
