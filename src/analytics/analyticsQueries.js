@@ -918,15 +918,20 @@ function _classifyBlockedSlot(block) {
   if (parenMatch && /[a-zA-Z]/.test(parenMatch[1])) {
     return "synced_appointment";
   }
-  // Rule 3: Informal name block — 1-3 short words, not a known block keyword
+  // Rule 3: Informal name block — 2-3 words (first+last name pattern), not a known block keyword.
+  // Single words are ambiguous (could be a block reason like "balding") — default to manual block.
+  // Exception: any word count with a phone number is a synced appointment.
   if (title.length > 0) {
     const words = title.split(/\s+/);
     const wordsNoPhone = words.filter(w => !/^\d{7,}$/.test(w));
     const hasPhone = words.some(w => /^\d{7,}$/.test(w));
-    if (wordsNoPhone.length >= 1 && wordsNoPhone.length <= 3) {
+    if (hasPhone) {
+      return "synced_appointment";
+    }
+    if (wordsNoPhone.length >= 2 && wordsNoPhone.length <= 3) {
       const isBlockKeyword = wordsNoPhone.some(w => BLOCK_KEYWORDS.includes(w.toLowerCase()));
       if (!isBlockKeyword) {
-        return hasPhone ? "synced_appointment" : "informal_appointment";
+        return "informal_appointment";
       }
     }
   }
@@ -1117,13 +1122,13 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
     }
   }
 
-  // Active appointments
+  // Active appointments (GHL uses "noshow" not "no_showed")
   const ghlActiveAppts = appointments.filter(
-    a => a.status !== "cancelled" && a.status !== "no_showed"
+    a => a.status !== "cancelled" && a.status !== "noshow"
   );
   const activeAppts = [...ghlActiveAppts, ...syncedAppointments];
   const cancelledAppts = appointments.filter(a => a.status === "cancelled");
-  const noshowAppts = appointments.filter(a => a.status === "no_showed");
+  const noshowAppts = appointments.filter(a => a.status === "noshow");
 
   // ── Step 4 & 5: Classify slots per calendar, HC-based denominator ──
   // Union HC + HC F&F grids as primary denominator (they may have different schedule hours)
