@@ -904,57 +904,56 @@ const BLOCK_KEYWORDS = ["blocked", "block", "off", "unavailable", "vacation", "p
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_DISPLAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/** Service keywords for detecting synced appointments from Google Calendar. */
+/** Service keywords for detecting appointments in blocked slot titles. */
 const SERVICE_KEYWORDS = ["haircut", "beard", "trim", "shave", "fade", "buzz", "taper", "lineup", "line up"];
 
-/** Classify a blocked slot as synced appointment, informal appointment, break, or manual block. */
+/**
+ * Classify a blocked slot from the Blocked Slots API.
+ * Returns: "break" | "synced_appointment" | "manually_blocked"
+ *
+ * Rules (in priority order):
+ * 1. Title contains "break" or "lunch" → break (no availability impact)
+ * 2. Has structured booking notes ("Reservada por") → synced appointment (occupied)
+ * 3. Title matches "SERVICE (Client Name)" pattern → synced appointment (occupied)
+ * 4. Title contains a service keyword → synced appointment (occupied)
+ * 5. Title contains a phone number → synced appointment (occupied)
+ * 6. Untitled or anything else → personal time (impacts availability)
+ */
 function _classifyBlockedSlot(block) {
   const title = (block.title || "").trim();
   const titleLower = title.toLowerCase();
   const notes = (block.notes || "");
-  const source = block.createdBy?.source || "";
 
-  // Rule 0: Break keywords in title → break (before any other classification)
+  // Rule 1: Break keywords → break
   if (title.length > 0 && BREAK_KEYWORDS.some(kw => titleLower.includes(kw))) {
     return "break";
   }
 
-  // Rule 0b: Google Calendar sync → check for service keywords
-  // With service keyword (e.g., "Haircut with John") → synced appointment
-  // Without (e.g., "WONDERCIDE", "Club León") → personal/manual block
-  if (source === "google_calendar") {
-    const hasServiceKeyword = SERVICE_KEYWORDS.some(kw => titleLower.includes(kw));
-    return hasServiceKeyword ? "synced_appointment" : "manually_blocked";
-  }
-
-  // Rule 1: Structured notes from external booking platform
+  // Rule 2: Structured notes from external booking platform → occupied
   if (notes.includes("Reservada por") || notes.includes("Reserved by")) {
     return "synced_appointment";
   }
-  // Rule 2: Service title pattern — "SERVICE_NAME (Client Name)"
-  // Parenthetical must contain at least one letter (names do; scores like "0-3" don't)
+
+  // Rule 3: Service title pattern — "SERVICE_NAME (Client Name)" → occupied
   const parenMatch = title.match(/^.+\s*\((.+)\)$/);
   if (parenMatch && /[a-zA-Z]/.test(parenMatch[1])) {
     return "synced_appointment";
   }
-  // Rule 3: Informal name block — 2-3 words (first+last name pattern), not a known block keyword.
-  // Single words are ambiguous (could be a block reason like "balding") — default to manual block.
-  // Exception: any word count with a phone number is a synced appointment.
+
+  // Rule 4: Title contains a service keyword → occupied
+  if (title.length > 0 && SERVICE_KEYWORDS.some(kw => titleLower.includes(kw))) {
+    return "synced_appointment";
+  }
+
+  // Rule 5: Title contains a phone number → occupied
   if (title.length > 0) {
     const words = title.split(/\s+/);
-    const wordsNoPhone = words.filter(w => !/^\d{7,}$/.test(w));
-    const hasPhone = words.some(w => /^\d{7,}$/.test(w));
-    if (hasPhone) {
+    if (words.some(w => /^\d{7,}$/.test(w))) {
       return "synced_appointment";
     }
-    if (wordsNoPhone.length >= 2 && wordsNoPhone.length <= 3) {
-      const isBlockKeyword = wordsNoPhone.some(w => BLOCK_KEYWORDS.includes(w.toLowerCase()));
-      if (!isBlockKeyword) {
-        return "informal_appointment";
-      }
-    }
   }
-  // Rules 4 & 5: true manual block
+
+  // Rule 6: Everything else (untitled, silly titles, personal reasons) → personal time
   return "manually_blocked";
 }
 
@@ -1121,7 +1120,7 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
     const classification = _classifyBlockedSlot(block);
     if (classification === "break") {
       breaks.push({ startMin, endMin });
-    } else if (classification === "synced_appointment" || classification === "informal_appointment") {
+    } else if (classification === "synced_appointment") {
       syncedAppointments.push({
         startMin, endMin, status: "confirmed", calendarId: null,
         title: (block.title || "").trim(),
