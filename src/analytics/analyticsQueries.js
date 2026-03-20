@@ -899,15 +899,34 @@ function _mergeUtilization(historical, live, periodDays) {
 // Grid-Walk Algorithm Core
 // ──────────────────────────────────────
 
-const BREAK_KEYWORDS = ["break", "lunch", "block", "time off", "blocked", "unavailable"];
+const BREAK_KEYWORDS = ["break", "lunch"];
 const BLOCK_KEYWORDS = ["blocked", "block", "off", "unavailable", "vacation", "pto", "lunch", "break", "time off", "day off", "personal", "sick"];
 const DAY_NAMES = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 const DAY_DISPLAY_NAMES = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
 
-/** Classify a blocked slot as synced appointment, informal appointment, or manual block. */
+/** Service keywords for detecting synced appointments from Google Calendar. */
+const SERVICE_KEYWORDS = ["haircut", "beard", "trim", "shave", "fade", "buzz", "taper", "lineup", "line up"];
+
+/** Classify a blocked slot as synced appointment, informal appointment, break, or manual block. */
 function _classifyBlockedSlot(block) {
   const title = (block.title || "").trim();
+  const titleLower = title.toLowerCase();
   const notes = (block.notes || "");
+  const source = block.createdBy?.source || "";
+
+  // Rule 0: Break keywords in title → break (before any other classification)
+  if (title.length > 0 && BREAK_KEYWORDS.some(kw => titleLower.includes(kw))) {
+    return "break";
+  }
+
+  // Rule 0b: Google Calendar sync → check for service keywords
+  // With service keyword (e.g., "Haircut with John") → synced appointment
+  // Without (e.g., "WONDERCIDE", "Club León") → personal/manual block
+  if (source === "google_calendar") {
+    const hasServiceKeyword = SERVICE_KEYWORDS.some(kw => titleLower.includes(kw));
+    return hasServiceKeyword ? "synced_appointment" : "manually_blocked";
+  }
+
   // Rule 1: Structured notes from external booking platform
   if (notes.includes("Reservada por") || notes.includes("Reserved by")) {
     return "synced_appointment";
@@ -1100,7 +1119,9 @@ function _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, cal
   for (const block of blockedSlotsForDay) {
     const { startMin, endMin } = _eventToCentralMinutes(block);
     const classification = _classifyBlockedSlot(block);
-    if (classification === "synced_appointment" || classification === "informal_appointment") {
+    if (classification === "break") {
+      breaks.push({ startMin, endMin });
+    } else if (classification === "synced_appointment" || classification === "informal_appointment") {
       syncedAppointments.push({
         startMin, endMin, status: "confirmed", calendarId: null,
         title: (block.title || "").trim(),
