@@ -1,0 +1,86 @@
+{
+  "@context": "https://schema.org",
+  "@type": "BarberShop",
+  "name": "Studio AZ Barbershop",
+  "alternateName": "Studio AZ Minneapolis Barbershop",
+  "url": "https://minneapolisbarbershop.com/",
+  "logo": "https://assets.cdn.filesafe.space/GLRkNAxfPtWTqTiN83xj/media/69a5f238618c8d1afd552d67.png",
+  "image": "https://assets.cdn.filesafe.space/GLRkNAxfPtWTqTiN83xj/media/69a5f238618c8d1afd552d67.png",
+  "description": "Luxury and upscale barbershop in the North Loop, Minneapolis. Barbers specializing in fades and stylists specializing in men's long hair.",
+  "telephone": "+1-612-326-4769",
+  "address": {
+    "@type": "PostalAddress",
+    "streetAddress": "728 Washington Ave N Suite 4",
+    "addressLocality": "Minneapolis",
+    "addressRegion": "MN",
+    "postalCode": "55401",
+    "addressCountry": "US"
+  },
+  "geo": {
+    "@type": "GeoCoordinates",
+    "latitude": 44.9868,
+    "longitude": -93.2779
+  },
+  "areaServed": {
+    "@type": "City",
+    "name": "Minneapolis",
+    "sameAs": "https://en.wikipedia.org/wiki/Minneapolis"
+  },
+  "priceRange": "$$",
+  "currenciesAccepted": "USD",
+  "paymentAccepted": "Cash, Credit Card, Debit Card, Apple Pay, Google Pay",
+  "openingHoursSpecification": [
+    {
+      "@type": "OpeningHoursSpecification",
+      "dayOfWeek": ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"],
+      "opens": "09:00",
+      "closes": "19:00"
+    },
+    {
+      "@type": "OpeningHoursSpecification",
+      "dayOfWeek": "Saturday",
+      "opens": "09:00",
+      "closes": "17:00"
+    }
+  ],
+  "hasOfferCatalog": {
+    "@type": "OfferCatalog",
+    "name": "Barbershop Services",
+    "itemListElement": [
+      {
+        "@type": "Offer",
+        "itemOffered": {
+          "@type": "Service",
+          "name": "Standard Cut",
+          "description": "Traditional men's haircut"
+        },
+        "price": "45.00",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "itemOffered": {
+          "@type": "Service",
+          "name": "Fade / Taper",
+          "description": "Precision fade and taper haircuts"
+        },
+        "price": "50.00",
+        "priceCurrency": "USD"
+      },
+      {
+        "@type": "Offer",
+        "itemOffered": {
+          "@type": "Service",
+          "name": "Shaping & Line Up",
+          "description": "Beard shaping and hairline lineup"
+        },
+        "price": "25.00",
+        "priceCurrency": "USD"
+      }
+    ]
+  },
+  "sameAs": [
+    "https://www.instagram.com/studioazbarbershop/",
+    "https://www.google.com/maps/place/Studio+AZ+Barbershop/"
+  ]
+}

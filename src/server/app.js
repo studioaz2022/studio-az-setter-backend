@@ -98,6 +98,7 @@ const {
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
 const analyticsRoutes = require("../analytics/analyticsRoutes");
+const seoRoutes = require("../seo/seoRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
@@ -6734,6 +6735,9 @@ function createApp() {
 
   // ═══ ANALYTICS ROUTES ═══
   app.use("/api/barbers", analyticsRoutes);
+
+  // ═══ SEO TOOLKIT ROUTES ═══
+  app.use("/api/seo", seoRoutes);
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();
