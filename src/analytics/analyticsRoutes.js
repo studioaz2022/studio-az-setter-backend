@@ -527,7 +527,7 @@ router.get("/:barberGhlId/analytics/trends", async (req, res) => {
  * GET /api/barbers/:barberGhlId/analytics/scorecard
  *
  * Returns the full Money Leak Scorecard: money on the floor, rebook rate,
- * rebook attempt proxy, weekly goal vs pace.
+ * rebook attempt proxy, weekly goal vs pace, utilization summary, and tier.
  */
 router.get("/:barberGhlId/analytics/scorecard", async (req, res) => {
   try {
@@ -536,7 +536,22 @@ router.get("/:barberGhlId/analytics/scorecard", async (req, res) => {
 
     console.log(`[Analytics] Scorecard for barber ${barberGhlId}`);
 
-    const scorecard = await computeFullScorecard(barberGhlId, locationId);
+    // Read barber's analytics tier (default 'growth')
+    let tier = "growth";
+    try {
+      const { data: settings } = await supabase
+        .from("barber_analytics_settings")
+        .select("analytics_tier")
+        .eq("barber_ghl_id", barberGhlId)
+        .single();
+      if (settings?.analytics_tier) {
+        tier = settings.analytics_tier;
+      }
+    } catch (e) {
+      // Table may not exist yet or no row — use default
+    }
+
+    const scorecard = await computeFullScorecard(barberGhlId, locationId, tier);
 
     res.json({
       success: true,
@@ -545,6 +560,52 @@ router.get("/:barberGhlId/analytics/scorecard", async (req, res) => {
     });
   } catch (error) {
     console.error(`[Analytics] Scorecard error for ${req.params.barberGhlId}:`, error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+/**
+ * PUT /api/barbers/:barberGhlId/analytics/settings
+ *
+ * Update the barber's analytics settings (currently just tier).
+ * Body: { tier: 'growth' | 'stable' }
+ */
+router.put("/:barberGhlId/analytics/settings", async (req, res) => {
+  try {
+    const { barberGhlId } = req.params;
+    const { tier } = req.body || {};
+    const locationId = req.query.locationId || BARBER_LOCATION_ID;
+
+    if (!tier || !["growth", "stable"].includes(tier)) {
+      return res.status(400).json({
+        success: false,
+        error: "Invalid tier. Must be 'growth' or 'stable'.",
+      });
+    }
+
+    console.log(`[Analytics] Setting tier for barber ${barberGhlId} → ${tier}`);
+
+    const { error } = await supabase
+      .from("barber_analytics_settings")
+      .upsert(
+        {
+          barber_ghl_id: barberGhlId,
+          location_id: locationId,
+          analytics_tier: tier,
+          updated_at: new Date().toISOString(),
+        },
+        { onConflict: "barber_ghl_id" }
+      );
+
+    if (error) throw new Error(`Settings upsert failed: ${error.message}`);
+
+    res.json({
+      success: true,
+      barberGhlId,
+      tier,
+    });
+  } catch (error) {
+    console.error(`[Analytics] Settings error for ${req.params.barberGhlId}:`, error.message);
     res.status(500).json({ success: false, error: error.message });
   }
 });

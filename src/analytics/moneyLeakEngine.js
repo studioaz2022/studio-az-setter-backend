@@ -15,6 +15,9 @@ const {
 const { getServicePriceMap } = require("../config/barberServicePrices");
 const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
+// Rolling window for utilization summary aggregation (weeks)
+const UTILIZATION_ROLLING_WEEKS = 6; // ~42 days
+
 // Completed appointment statuses (mirrored from analyticsQueries)
 const COMPLETED_STATUSES = ["showed", "confirmed"];
 
@@ -654,10 +657,157 @@ async function computeSuggestedPriceBump(barberGhlId, locationId, avgRevenuePerV
 }
 
 /**
+ * Build tier-aware display strings for the utilization breakdown.
+ *
+ * Growth tier: direct, action-oriented — "score" language.
+ * Stable tier: observational, business-context — "schedule" language.
+ *
+ * Returns null for any string where the count is 0.
+ */
+function buildDisplayStrings(tier, breakdown) {
+  const isGrowth = tier !== "stable";
+
+  const cancellation = breakdown.cancellationCount > 0
+    ? isGrowth
+      ? `${breakdown.cancellationCount} cancellation${breakdown.cancellationCount !== 1 ? "s" : ""} contributed to ${Math.round(breakdown.cancellationImpact)}% of your utilization score`
+      : `${breakdown.cancellationCount} client${breakdown.cancellationCount !== 1 ? "s" : ""} cancelled (${Math.round(breakdown.cancellationImpact)}% of your schedule)`
+    : null;
+
+  const noshow = breakdown.noshowCount > 0
+    ? isGrowth
+      ? `${breakdown.noshowCount} no-show${breakdown.noshowCount !== 1 ? "s" : ""} contributed to ${Math.round(breakdown.noshowImpact)}% of your utilization score`
+      : `${breakdown.noshowCount} client${breakdown.noshowCount !== 1 ? "s" : ""} didn't show (${Math.round(breakdown.noshowImpact)}% of your schedule)`
+    : null;
+
+  const blockedSlots = breakdown.manuallyBlockedSlots || 0;
+  const blocked = blockedSlots > 0
+    ? isGrowth
+      ? `${blockedSlots} blocked slot${blockedSlots !== 1 ? "s" : ""} contributed to ${Math.round(breakdown.blockedPercent)}% of your utilization score`
+      : `You kept ${blockedSlots} slot${blockedSlots !== 1 ? "s" : ""} for personal time (${Math.round(breakdown.blockedPercent)}% of your schedule)`
+    : null;
+
+  const deadSpace = breakdown.deadSpaceMinutes > 0
+    ? isGrowth
+      ? `${Math.round(breakdown.deadSpaceMinutes)} min of unbookable gaps this week`
+      : `${Math.round(breakdown.deadSpaceMinutes)} min of gaps between appointments`
+    : null;
+
+  return { cancellation, noshow, blocked, deadSpace };
+}
+
+/**
+ * Compute the utilization summary from rolling-window snapshots.
+ *
+ * Uses POOLED slot counts (not averaged percentages) over a 6-week window
+ * of daily snapshots from barber_analytics_snapshots.
+ *
+ * Returns the utilizationSummary object for the scorecard response.
+ */
+async function computeUtilizationSummary(barberGhlId, locationId, tier, revenuePerHour) {
+  const windowDays = UTILIZATION_ROLLING_WEEKS * 7;
+  const endDate = new Date().toISOString().split("T")[0];
+  const startDate = new Date();
+  startDate.setDate(startDate.getDate() - windowDays);
+  const startDateStr = startDate.toISOString().split("T")[0];
+
+  const { data: snapshots, error } = await fetchAllRows(supabase
+    .from("barber_analytics_snapshots")
+    .select("scheduled_slots, occupied_slots, overtime_slots, manually_blocked_slots, unfilled_cancelled_slots, unfilled_noshow_slots, dead_space_minutes, slot_interval_minutes, blocked_percent, availability_index, shop_impact, at_risk")
+    .eq("barber_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .gte("snapshot_date", startDateStr)
+    .lte("snapshot_date", endDate)
+    .not("scheduled_slots", "is", null));
+
+  if (error) throw new Error(`Utilization summary query failed: ${error.message}`);
+
+  if (!snapshots || snapshots.length === 0) {
+    return null; // No grid-walk data available yet
+  }
+
+  // Pool slot counts across all days in the window
+  let totalScheduled = 0;
+  let totalOccupied = 0;
+  let totalOvertime = 0;
+  let totalManuallyBlocked = 0;
+  let totalUnfilledCancelled = 0;
+  let totalUnfilledNoshow = 0;
+  let totalDeadSpaceMinutes = 0;
+  let totalSlotMinutes = 0; // for service mix efficiency denominator
+  let slotIntervalSamples = [];
+
+  for (const s of snapshots) {
+    const scheduled = s.scheduled_slots || 0;
+    totalScheduled += scheduled;
+    totalOccupied += s.occupied_slots || 0;
+    totalOvertime += s.overtime_slots || 0;
+    totalManuallyBlocked += s.manually_blocked_slots || 0;
+    totalUnfilledCancelled += s.unfilled_cancelled_slots || 0;
+    totalUnfilledNoshow += s.unfilled_noshow_slots || 0;
+    totalDeadSpaceMinutes += s.dead_space_minutes || 0;
+    if (s.slot_interval_minutes) {
+      totalSlotMinutes += scheduled * s.slot_interval_minutes;
+      slotIntervalSamples.push(s.slot_interval_minutes);
+    }
+  }
+
+  // Pooled utilization
+  const utilization = totalScheduled > 0
+    ? Math.round(((totalOccupied + totalOvertime) / totalScheduled) * 1000) / 10
+    : null;
+
+  // Service mix efficiency: 1 - (dead_space / scheduled_minutes) × 100
+  const serviceMixEfficiency = totalSlotMinutes > 0
+    ? Math.round((1 - totalDeadSpaceMinutes / totalSlotMinutes) * 1000) / 10
+    : null;
+
+  // Pooled impact percentages
+  const cancellationImpact = totalScheduled > 0
+    ? Math.round((totalUnfilledCancelled / totalScheduled) * 1000) / 10
+    : 0;
+  const noshowImpact = totalScheduled > 0
+    ? Math.round((totalUnfilledNoshow / totalScheduled) * 1000) / 10
+    : 0;
+  const blockedPercent = totalScheduled > 0
+    ? Math.round((totalManuallyBlocked / totalScheduled) * 1000) / 10
+    : 0;
+  const availabilityIndex = totalScheduled > 0
+    ? Math.round(((totalScheduled - totalManuallyBlocked) / totalScheduled) * 1000) / 10
+    : null;
+
+  // Shop impact (pooled utilization — with blocked in denominator, utilization IS shop impact)
+  const shopImpact = utilization;
+
+  // At-risk: blocked_percent >= 25% over the rolling window
+  const atRisk = blockedPercent >= 25;
+
+  const breakdown = {
+    cancellationImpact,
+    cancellationCount: totalUnfilledCancelled,
+    noshowImpact,
+    noshowCount: totalUnfilledNoshow,
+    blockedPercent,
+    manuallyBlockedSlots: totalManuallyBlocked,
+    availabilityIndex,
+    shopImpact,
+    deadSpaceMinutes: totalDeadSpaceMinutes,
+    atRisk,
+  };
+
+  return {
+    utilization,
+    serviceMixEfficiency,
+    revenuePerHour: revenuePerHour || null,
+    breakdown,
+    display: buildDisplayStrings(tier, breakdown),
+  };
+}
+
+/**
  * Compute the full Money Leak Scorecard.
  * Aggregates all sub-computations into a single response.
  */
-async function computeFullScorecard(barberGhlId, locationId) {
+async function computeFullScorecard(barberGhlId, locationId, tier = "growth") {
   // Run sub-computations in parallel; isolate failures so one broken metric
   // doesn't take down the whole scorecard.
   const safeCompute = async (fn, fallback) => {
@@ -703,21 +853,42 @@ async function computeFullScorecard(barberGhlId, locationId) {
 
   // Cap Zone metrics — only computed when utilization >= 90%
   let capZoneMetrics = null;
+  let avgRevPerHour = null;
   const zone = moneyOnTheFloor.capacityZone;
   if (zone === "cap") {
-    const [avgRevPerHour, overflow, priceBump] = await Promise.all([
+    const [_avgRevPerHour, overflow, priceBump] = await Promise.all([
       safeCompute(() => computeAvgRevenuePerHour(barberGhlId, locationId), null),
       safeCompute(() => computeOverflowDemand(barberGhlId, locationId), { fullyBookedDays: 0, avgWaitDays: null }),
       safeCompute(() => computeSuggestedPriceBump(barberGhlId, locationId, moneyOnTheFloor.avgRevenuePerVisit, moneyOnTheFloor.shopImpact), null),
     ]);
+    avgRevPerHour = _avgRevPerHour;
+
+    // priceBumpEligible: shopImpact >= 85% AND 4+ weeks >90% (priceBump is non-null when that condition is met)
+    const priceBumpEligible = priceBump != null && (moneyOnTheFloor.shopImpact == null || moneyOnTheFloor.shopImpact >= 85);
+
     capZoneMetrics = {
       avgRevenuePerHour: avgRevPerHour,
+      serviceMixEfficiency: null, // will be filled from utilizationSummary below
       overflowDemand: overflow,
       suggestedPriceBump: priceBump,
+      priceBumpEligible,
     };
   }
 
+  // Utilization summary — computed for ALL zones from rolling-window snapshots
+  const utilizationSummary = await safeCompute(
+    () => computeUtilizationSummary(barberGhlId, locationId, tier, avgRevPerHour),
+    null
+  );
+
+  // Cross-populate serviceMixEfficiency into capZoneMetrics
+  if (capZoneMetrics && utilizationSummary) {
+    capZoneMetrics.serviceMixEfficiency = utilizationSummary.serviceMixEfficiency;
+  }
+
   return {
+    tier,
+
     moneyOnTheFloor,
 
     recentNewClients: moneyOnTheFloor.recentNewClients,
@@ -740,6 +911,8 @@ async function computeFullScorecard(barberGhlId, locationId) {
       blockedPercent: moneyOnTheFloor.blockedPercent,
       atRisk: moneyOnTheFloor.atRisk,
     },
+
+    utilizationSummary,
 
     capZoneMetrics,
 
@@ -780,6 +953,8 @@ module.exports = {
   computeAvgRevenuePerHour,
   computeOverflowDemand,
   computeSuggestedPriceBump,
+  buildDisplayStrings,
+  computeUtilizationSummary,
   findBestWeek,
   computeWeeklyGoal,
   computeCurrentPace,

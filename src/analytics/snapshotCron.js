@@ -433,8 +433,19 @@ async function runMondayRitual() {
 
   for (const barber of BARBER_DATA) {
     try {
-      // 1. Compute scorecard
-      const scorecard = await computeFullScorecard(barber.ghlUserId, BARBER_LOCATION_ID);
+      // 1. Read barber's tier (default 'growth')
+      let tier = "growth";
+      try {
+        const { data: settings } = await supabase
+          .from("barber_analytics_settings")
+          .select("analytics_tier")
+          .eq("barber_ghl_id", barber.ghlUserId)
+          .single();
+        if (settings?.analytics_tier) tier = settings.analytics_tier;
+      } catch (e) { /* default growth */ }
+
+      // Compute scorecard with tier
+      const scorecard = await computeFullScorecard(barber.ghlUserId, BARBER_LOCATION_ID, tier);
 
       // 2. Save to money_leak_scorecard table
       const moneyLeaked = scorecard.moneyOnTheFloor?.totalAmount;
