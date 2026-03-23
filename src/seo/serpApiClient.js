@@ -8,8 +8,8 @@ const API_KEY = process.env.SERPAPI_KEY;
 const BASE_URL = "https://serpapi.com/search.json";
 
 // Studio AZ coordinates (North Loop, Minneapolis)
-const STUDIO_AZ_LAT = 44.9868;
-const STUDIO_AZ_LNG = -93.2779;
+const STUDIO_AZ_LAT = 44.9842902;
+const STUDIO_AZ_LNG = -93.2738897;
 
 const BUSINESS_NAMES = {
   barbershop: "Studio AZ",

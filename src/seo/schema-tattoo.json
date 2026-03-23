@@ -7,10 +7,10 @@
   "logo": "https://assets.cdn.filesafe.space/GLRkNAxfPtWTqTiN83xj/media/69a5f238618c8d1afd552d67.png",
   "image": "https://assets.cdn.filesafe.space/GLRkNAxfPtWTqTiN83xj/media/69a5f238618c8d1afd552d67.png",
   "description": "No-nonsense and upscale tattoo shop in the North Loop, Minneapolis. Exceptional artistry in a welcoming, professional setting by independent artists.",
-  "telephone": "+1-612-326-4769",
+  "telephone": "+1-612-255-4439",
   "address": {
     "@type": "PostalAddress",
-    "streetAddress": "728 Washington Ave N Suite 4",
+    "streetAddress": "333 N Washington Ave Suite #100",
     "addressLocality": "Minneapolis",
     "addressRegion": "MN",
     "postalCode": "55401",
@@ -18,8 +18,8 @@
   },
   "geo": {
     "@type": "GeoCoordinates",
-    "latitude": 44.9868,
-    "longitude": -93.2779
+    "latitude": 44.9842902,
+    "longitude": -93.2738897
   },
   "areaServed": {
     "@type": "City",
