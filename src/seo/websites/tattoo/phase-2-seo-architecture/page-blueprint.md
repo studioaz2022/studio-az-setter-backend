@@ -50,8 +50,8 @@ Link density target: 3-5 internal links per 1,000 words, placed in contextual se
 *(155 chars — keywords bolded by Google, mid-stage CTA "see portfolio + book consultation")*
 
 ### H1
-`Minneapolis's Premier Custom Tattoo Studio`
-*(Different phrasing from title tag — "studio" instead of "shop", "Premier Custom" adds value signal)*
+`Minneapolis's Top-Rated Custom Tattoo Shop`
+*(Rearranged from title tag — keeps "tattoo shop" (primary keyword), adds "Top-Rated" + "Custom" value signals)*
 
 ### Keywords
 
@@ -676,8 +676,8 @@ Early-stage — visitor is researching, not ready to buy. CTAs should be soft, e
 *(154 chars — full address for local SEO, "free street parking" answers the top concern)*
 
 ### H1
-`How to Find Studio AZ Tattoo in the North Loop`
-*(Different from title — question format, neighborhood-heavy)*
+`Tattoo Shop in North Loop Minneapolis — Parking & Directions`
+*(Keeps "tattoo shop" + "North Loop Minneapolis" primary keyword intact, practical suffix)*
 
 ### Keywords
 
@@ -767,8 +767,8 @@ Late-stage — visitor is literally planning their visit. CTA should confirm the
 *(149 chars — multiple question keywords for bolding, location signal at end)*
 
 ### H1
-`Frequently Asked Questions About Getting a Tattoo`
-*(Different from title — broader phrasing, natural language)*
+`Tattoo FAQ — Minneapolis Pricing, Pain, Prep & More`
+*(Keeps "Tattoo FAQ" + "Minneapolis" from primary keyword, expands with secondary topics)*
 
 ### Keywords
 
@@ -910,8 +910,8 @@ Early-to-mid stage — visitor has questions, is building trust. CTAs should be 
 *(44 chars — brand name front-loaded, city + state for local signal)*
 
 ### Meta Description
-`Contact Studio AZ Tattoo — 333 Washington Ave N, North Loop, Minneapolis. Call (612) 255-4439 or book a consultation online. Mon-Fri 10-7, Sat 10-5.`
-*(149 chars — full NAP for local SEO, phone number for direct action, hours for quick reference)*
+`Contact Studio AZ Tattoo — 333 Washington Ave N, North Loop, Minneapolis. Call (612) 255-4439 or book a consultation online. Tue-Sat 11am-6pm.`
+*(143 chars — full NAP for local SEO, phone number for direct action, hours for quick reference)*
 
 ### H1
 `Get in Touch with Studio AZ Tattoo`
@@ -935,8 +935,8 @@ H2: Visit Us
   — Authority link: Wikipedia — North Loop, Minneapolis
 
 H2: Hours
-  — Monday - Friday: 10:00 AM - 7:00 PM
-  — Saturday: 10:00 AM - 5:00 PM
+  — Monday: Closed
+  — Tuesday - Saturday: 11:00 AM - 6:00 PM
   — Sunday: Closed
   — No authority link needed — factual section
 
@@ -1008,18 +1008,18 @@ All under 60 characters. No two title tags share the same primary keyword phrasi
 
 | Page | H1 |
 |------|-----|
-| Home | Minneapolis's Premier Custom Tattoo Studio |
+| Home | Minneapolis's Top-Rated Custom Tattoo Shop |
 | Services | Custom Tattoo Services in Minneapolis |
 | Artists | Meet Our Minneapolis Tattoo Artists |
 | Joan | Joan Martinez — Tattoo Artist at Studio AZ Minneapolis |
 | Andrew | Andrew Fernandez — Tattoo Artist at Studio AZ Minneapolis |
 | Gallery | Custom Tattoo Portfolio — Studio AZ Minneapolis |
 | Aftercare | How to Care for Your New Tattoo — Aftercare Guide |
-| Parking | How to Find Studio AZ Tattoo in the North Loop |
-| FAQ | Frequently Asked Questions About Getting a Tattoo |
+| Parking | Tattoo Shop in North Loop Minneapolis — Parking & Directions |
+| FAQ | Tattoo FAQ — Minneapolis Pricing, Pain, Prep & More |
 | Contact | Get in Touch with Studio AZ Tattoo |
 
-Every H1 is different from its corresponding title tag. No two H1s are identical. Each contains the page's primary keyword or a close variant.
+Every H1 is different from its corresponding title tag. No two H1s are identical. Each contains the page's primary keyword — never a weaker synonym (e.g., "tattoo shop" not "tattoo studio").
 
 ### Internal Link Matrix
 
