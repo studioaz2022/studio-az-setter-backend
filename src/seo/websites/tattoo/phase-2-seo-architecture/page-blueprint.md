@@ -78,7 +78,7 @@ H2: Our Tattoo Services
 
 H2: Meet Our Artists
   H3: Joan Martinez — Fine Line & Realism
-  H3: Andrew Fernandez — Small Tattoos & First Timers
+  H3: Andrew Fernandez — Realism & Custom Tattoos
   — Authority link: Wikipedia (Tattoo)
 
 H2: What Our Clients Say
@@ -186,7 +186,7 @@ H2: How Our Consultation Process Works
   — Authority link: Minnesota Dept of Health
 
 H2: Tattoo Touch-Ups
-  — Free touch-ups within 60 days, policy details
+  — Assessment made 40 days after session — free touch-up in most cases if aftercare instructions were followed
   — No authority link needed — policy section
 
 H2: Servicios de Tatuaje — Hablamos Espanol
@@ -242,7 +242,7 @@ Mid-to-late stage — visitor is evaluating services, possibly ready to commit. 
 *(58 chars — primary keyword front-loaded, artist names for brand searches)*
 
 ### Meta Description
-`Meet Studio AZ's tattoo artists. Joan Martinez — fine line & realism. Andrew Fernandez — small tattoos & first timers. View portfolios and book your artist.`
+`Meet Studio AZ's tattoo artists. Joan Martinez — fine line & realism. Andrew Fernandez — realism & custom designs. View portfolios and book your artist.`
 *(155 chars — artist names + specialties for bolding, "book your artist" late-leaning CTA)*
 
 ### H1
@@ -264,8 +264,8 @@ H2: Joan Martinez — Fine Line, Realism & Black and Grey
   — CTA: "View Joan's Full Portfolio"
   — Authority link: Wikipedia (Tattoo artist)
 
-H2: Andrew Fernandez — Small Tattoos & First Timers
-  — Bio preview, specialties, welcoming approach, portfolio thumbnail grid
+H2: Andrew Fernandez — Realism & Custom Tattoos
+  — Bio preview, specialties, convention experience, portfolio thumbnail grid
   — CTA: "View Andrew's Full Portfolio"
   — No authority link needed — short bio section
 
@@ -280,7 +280,7 @@ H2: Not Sure Which Artist? We'll Help You Decide
 |---------|-------------|------|
 | / | "tattoo shop Minneapolis" | Target |
 | /artists/joan | "Joan Martinez — fine line specialist" | Target |
-| /artists/andrew | "Andrew Fernandez — small tattoo specialist" | Target |
+| /artists/andrew | "Andrew Fernandez — realism & custom tattoos" | Target |
 | /services | "our tattoo services" | Target |
 | /gallery | "full portfolio" | Generic |
 
@@ -317,7 +317,7 @@ Mid-stage — visitor wants to evaluate artists before committing. CTAs should g
 *(51 chars — artist name front-loaded, style keywords for long-tail)*
 
 ### Meta Description
-`Joan Martinez specializes in fine line, realism, and black & grey tattoos at Studio AZ in Minneapolis. View her portfolio and book a consultation today.`
+`Joan Martinez specializes in fine line, realism, and black & grey tattoos at Studio AZ in Minneapolis. View his portfolio and book a consultation today.`
 *(151 chars — all style keywords for bolding, "book a consultation" late-stage CTA)*
 
 ### H1
@@ -344,7 +344,7 @@ H2: Joan's Specialties
   H3: Fine Line Tattoos
   H3: Realism & Portrait Work
   H3: Black and Grey
-  — What makes her approach distinct in each style
+  — What makes his approach distinct in each style
   — Authority link: AAD.org (tattoo and skin health)
 
 H2: Portfolio
@@ -387,7 +387,7 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 ### Content Hook
 
 **Style:** Knowledge bomb
-**First paragraph approach:** Lead with Joan's defining specialty and a specific detail — "Joan Martinez is a fine line and realism tattoo artist at Studio AZ in Minneapolis's North Loop. Her work emphasizes precision linework and photorealistic detail, with a portfolio spanning portraits, botanicals, and intricate black and grey compositions."
+**First paragraph approach:** Lead with Joan's defining specialty and a specific detail — "Joan Martinez is a fine line and realism tattoo artist at Studio AZ in Minneapolis's North Loop. His work emphasizes precision linework and photorealistic detail, with a portfolio spanning portraits, botanicals, and intricate black and grey compositions."
 
 ---
 
@@ -399,12 +399,12 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 **Spanish Content:** No
 
 ### Title Tag
-`Andrew Fernandez — Small Tattoo & First Tattoo Artist`
-*(54 chars — name front-loaded, targets both "small" and "first" long-tails)*
+`Andrew Fernandez — Realism & Custom Tattoo Artist`
+*(51 chars — name front-loaded, targets realism and custom long-tails)*
 
 ### Meta Description
-`Andrew Fernandez at Studio AZ Minneapolis — the go-to artist for small tattoos and first-timers. See his work and book a relaxed, judgment-free consultation.`
-*(155 chars — keywords for bolding, "judgment-free" addresses first-timer anxiety)*
+`Andrew Fernandez at Studio AZ Minneapolis — realism, fine line, and custom tattoo artist with international convention experience. See his work and book a consultation.`
+*(165 chars — keywords for bolding, convention experience signals authority)*
 
 ### H1
 `Andrew Fernandez — Tattoo Artist at Studio AZ Minneapolis`
@@ -415,32 +415,32 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 | Type | Keyword | Target Density |
 |------|---------|---------------|
 | Primary | Andrew Fernandez tattoo artist | Exact 2-3x |
-| Secondary | small tattoo Minneapolis | Exact 2-3x |
-| Secondary | first tattoo Minneapolis | Exact 2-3x |
+| Secondary | realism tattoo Minneapolis | Exact 2-3x |
+| Secondary | custom tattoo Minneapolis | Exact 2-3x |
 
 ### H2/H3 Outline
 
 ```
 H2: About Andrew
-  — Background, approach, personality, what clients say
-  — Emphasis on welcoming energy for nervous first-timers
+  — Background, Latin American artistry heritage, convention circuit experience
+  — Featured at Milwaukee, Chicago, Baltimore, Minneapolis tattoo festivals
   — Authority link: Wikipedia — Tattoo
 
 H2: Andrew's Specialties
-  H3: Small & Minimalist Tattoos
-  H3: First Tattoo Experience
-  — What makes his approach ideal for first-timers
-  — Tone: warm, reassuring, zero judgment
-  — Authority link: AAD.org (what to expect from your first tattoo)
+  H3: Realism & Portrait Work
+  H3: Custom Design Process
+  — Fine line, black and grey, realism — versatile across styles
+  — Convention experience across major U.S. tattoo festivals
+  — Authority link: AAD.org (tattoo and skin health)
 
 H2: Portfolio
-  — Gallery grid focused on small/minimalist work
+  — Gallery grid showcasing realism, fine line, and custom work
   — Image alt text: "[style] tattoo by Andrew Fernandez at Studio AZ Minneapolis"
   — No authority link needed — visual section
 
 H2: Book a Consultation with Andrew
   — Embedded consultation widget (bilingual)
-  — "Not sure what you want yet? That's okay — Andrew will help you figure it out."
+  — "Bring your vision — Andrew's custom design process starts with your ideas."
   — Authority link: Minnesota Dept of Health
 ```
 
@@ -457,10 +457,10 @@ H2: Book a Consultation with Andrew
 
 ### CTA Strategy
 
-Late-stage — visitor is close to booking, possibly anxious (first tattoo). CTAs should be warm and low-pressure:
+Late-stage — visitor has chosen Andrew or is very close to deciding. CTA should be direct and frictionless:
 
-- **Primary CTA:** "Book a Free Consultation with Andrew" (embedded widget)
-- **Secondary CTA:** "Have questions first? Read our FAQ" (links to /faq — safety valve for nervous first-timers)
+- **Primary CTA:** "Book a Consultation with Andrew" (embedded widget on page)
+- **Secondary CTA:** "View Full Portfolio" (anchor to gallery section on same page)
 
 ### Authority Links (1+ per H2)
 
@@ -472,8 +472,8 @@ Late-stage — visitor is close to booking, possibly anxious (first tattoo). CTA
 
 ### Content Hook
 
-**Style:** Entertainer
-**First paragraph approach:** Address the first-timer directly — "Andrew Fernandez is the artist people come to when they've been thinking about a tattoo for years but haven't pulled the trigger yet. He specializes in small, clean designs and making the entire experience feel easy — especially if it's your first." This immediately speaks to the target audience's mindset.
+**Style:** Knowledge bomb
+**First paragraph approach:** Lead with Andrew's convention credentials and artistic range — "Andrew Fernandez is a realism and custom tattoo artist at Studio AZ in Minneapolis's North Loop. With international convention experience — including Milwaukee, Chicago, Baltimore, and Minneapolis tattoo festivals — Andrew brings a Latin American artistry heritage and versatile skill set spanning realism, fine line, and black and grey work."
 
 ---
 
@@ -763,7 +763,7 @@ Late-stage — visitor is literally planning their visit. CTA should confirm the
 *(52 chars — primary keyword front-loaded, secondary topics for click-through)*
 
 ### Meta Description
-`Get answers about tattoo cost in Minneapolis, pain levels, what to wear, how to prepare, deposits, and walk-in policy. Studio AZ Tattoo — North Loop.`
+`Get answers about tattoo cost in Minneapolis, pain levels, what to wear, how to prepare, deposits, and booking policy. Studio AZ Tattoo — North Loop.`
 *(149 chars — multiple question keywords for bolding, location signal at end)*
 
 ### H1
@@ -807,8 +807,9 @@ H2: What Should I Wear to My Tattoo Appointment?
   — Practical tips
   — No authority link needed — practical advice
 
-H2: Do You Accept Walk-Ins?
-  — Direct answer: policy on walk-ins vs consultations
+H2: Do I Need an Appointment?
+  — Direct answer: "Yes — Studio AZ is appointment only. We do not accept walk-ins."
+  — Explain consultation booking process
   — Authority link: Not needed — policy section
 
 H2: What Is Your Deposit and Cancellation Policy?
@@ -828,7 +829,7 @@ H2: What Is the Minimum Age for a Tattoo in Minnesota?
   — Authority link: Minnesota Dept of Health (tattoo regulations)
 
 H2: Do You Offer Touch-Ups?
-  — Policy: free within 60 days, process
+  — Policy: assessment at 40 days — free touch-up in most cases if aftercare was followed
   — Authority link: Not needed — policy
 
 H2: Can I Bring a Friend to My Appointment?
@@ -980,7 +981,7 @@ Late-stage — visitor is ready to reach out. CTAs should be direct and remove a
 ### Content Hook
 
 **Style:** Knowledge bomb
-**First paragraph approach:** Skip the fluff, give them what they need — "Studio AZ Tattoo is located in Minneapolis's North Loop at 333 Washington Ave N, Suite 100. Walk-ins welcome based on availability, but we recommend booking a free consultation for custom work." Direct, practical, action-oriented.
+**First paragraph approach:** Skip the fluff, give them what they need — "Studio AZ Tattoo is located in Minneapolis's North Loop at 333 Washington Ave N, Suite 100. We're appointment only — no walk-ins. Book a free consultation to get started with your custom design." Direct, practical, action-oriented.
 
 ---
 
@@ -994,7 +995,7 @@ Late-stage — visitor is ready to reach out. CTAs should be direct and remove a
 | Services | Custom Tattoo Services Minneapolis \| Free Consultation | 54 |
 | Artists | Tattoo Artists Minneapolis \| Joan Martinez & Andrew Fernandez | 58 |
 | Joan | Joan Martinez — Fine Line & Realism Tattoo Artist | 51 |
-| Andrew | Andrew Fernandez — Small Tattoo & First Tattoo Artist | 54 |
+| Andrew | Andrew Fernandez — Realism & Custom Tattoo Artist | 51 |
 | Gallery | Minneapolis Tattoo Portfolio \| Studio AZ Custom Designs | 55 |
 | Aftercare | Tattoo Aftercare Guide \| Healing Tips from Studio AZ | 53 |
 | Parking | Parking & Directions \| Studio AZ Tattoo — North Loop | 53 |
