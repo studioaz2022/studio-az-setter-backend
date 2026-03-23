@@ -9,12 +9,15 @@
 
 ```
 Phase 1: Research        → Keyword map, competitor teardown, content gaps, baseline audit
-Phase 2: SEO Architecture → Page blueprints, schema, internal linking, image strategy, technical SEO, GEO
-Phase 3: Design & Build  → /frontend-design → Next.js implementation
+Phase 2: SEO Architecture → Page blueprints, schema, internal linking, image strategy, technical SEO, GEO, content intake
+Phase 3: Design & Build  → /frontend-design → Next.js implementation (using content intake answers)
 Phase 4: Deploy & Verify → Launch checklist, Search Console submission, tracking setup
 ```
 
 Each phase requires approval before moving to the next.
+
+### Content Intake Workflow
+Phase 2 produces a `content-intake.md` questionnaire customized to the site. The business owner fills it in with plain-language answers (pricing, policies, bios, parking details, FAQ answers, etc.). Claude then formats those answers into SEO-optimized page content during Phase 3, using the page blueprint and schema markup as formatting guides. This separates "SEO structure" (Claude) from "business knowledge" (owner) and makes the pipeline reusable across sites.
 
 ---
 
@@ -25,7 +28,7 @@ Each phase requires approval before moving to the next.
 | Phase | Status | Deliverables | Approved |
 |-------|--------|-------------|----------|
 | **Phase 1: Research** | COMPLETE | keyword-map.md, competitor-teardown.md, content-gaps.md, baseline-audit.md, local-falcon-baseline.md | **Yes** (March 23, 2026) |
-| **Phase 2: Architecture** | COMPLETE | page-blueprint.md, schema-markup.md, internal-linking.md, image-strategy.md, technical-seo.md, geo-ai-readiness.md | Pending |
+| **Phase 2: Architecture** | COMPLETE | page-blueprint.md, schema-markup.md, internal-linking.md, image-strategy.md, technical-seo.md, geo-ai-readiness.md, content-intake.md | Pending |
 | **Phase 3: Design/Build** | BLOCKED | Next.js site at `tattoo-website/` | — |
 | **Phase 4: Deploy/Verify** | BLOCKED | launch-checklist.md | — |
 

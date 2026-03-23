@@ -3,11 +3,14 @@
 **Goal:** Using Phase 1 research and the shared SEO Playbook (`../SEO_PLAYBOOK.md`), define the exact SEO blueprint for every page — title tags, meta descriptions, H1s, keyword assignments, schema markup, internal linking strategy, image optimization, and AI search readiness.
 
 **Inputs:** All Phase 1 research documents + SEO_PLAYBOOK.md + SEO_OVERRIDES.md
-**Outputs:** Page-by-page SEO blueprint that Phase 3 will implement literally
+**Outputs:** Page-by-page SEO blueprint that Phase 3 will implement literally + content intake questionnaire
 
 **Approval required:** Yes — this is the most critical review. Every SEO decision gets locked here before any code is written.
 
 **Status:** Waiting for Phase 1 completion and approval.
+
+**Content Intake Workflow:**
+After the 6 architecture docs are created, Claude generates `content-intake.md` — a questionnaire customized to this site's pages and services. The business owner fills it in with plain-language answers. Claude then formats those answers into SEO-optimized content during Phase 3. This separates "SEO structure" (Claude's job) from "business knowledge" (owner's job).
 
 ---
 
@@ -68,3 +71,19 @@ JSON-LD structured data per page type:
 - Entity consistency audit checklist
 - Cross-platform sync plan (GBP → Bing Places → Apple Business Connect)
 - AI visibility measurement plan
+
+### 7. `content-intake.md`
+Business-specific questionnaire (generated from template, customized per site):
+- Business identity confirmation (NAP, hours, socials)
+- Team/staff details (bios, specialties, experience, photos)
+- Services & pricing (complete list with rates)
+- Policies (deposits, cancellations, walk-ins, age, payment methods)
+- Service process (client journey, preparation, expectations)
+- Aftercare / post-service instructions (if applicable)
+- Location & parking (entry, parking, transit, landmarks)
+- About the business (founding story, differentiators, vibe)
+- FAQ answers (common client questions in plain language)
+- Image inventory (what photos exist, what needs to be shot)
+- Multilingual content plan (if applicable)
+
+**This is the bridge between Phase 2 and Phase 3.** The owner fills this in; Claude converts it to SEO-optimized content.

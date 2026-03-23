@@ -2,12 +2,12 @@
 
 **Goal:** Using Phase 1 research and the SEO Playbook (SEO_RULES.md), define the exact SEO blueprint for every page — title tags, meta descriptions, H1s, keyword assignments, schema markup, internal linking strategy, image optimization, and AI search readiness.
 
-**Inputs:** All 4 Phase 1 research documents + SEO_RULES.md (synthesized playbook)
-**Outputs:** Page-by-page SEO blueprint that Phase 3 will implement literally
+**Inputs:** All 5 Phase 1 research documents + SEO_PLAYBOOK.md + SEO_OVERRIDES.md
+**Outputs:** Page-by-page SEO blueprint that Phase 3 will implement literally + content intake questionnaire
 
 **Approval required:** Yes — this is the most critical review. Every SEO decision gets locked here before any code is written.
 
-**Status:** Waiting for Phase 1 completion and approval.
+**Status:** COMPLETE — 7 deliverables created. Pending approval.
 
 ---
 
@@ -80,3 +80,19 @@ All schemas validated against Google Rich Results Test + Schema.org Validator.
 - Entity consistency audit checklist (same brand name everywhere)
 - Cross-platform sync plan (GBP → Bing Places → Apple Business Connect)
 - AI visibility measurement plan (quarterly ChatGPT/Perplexity/Gemini checks)
+
+### 7. `content-intake.md`
+Business-specific questionnaire — the bridge between Phase 2 and Phase 3:
+- Business identity confirmation (NAP, hours, socials)
+- Artist details (bios, specialties, experience, philosophy, photos)
+- Services & pricing (complete list with rates, minimums, hourly vs flat)
+- Policies (deposits, cancellations, walk-ins, age, payment, touch-ups)
+- The tattoo process (client journey, preparation, what to expect, what to avoid)
+- Aftercare instructions (bandage, washing, moisturizing, healing timeline, products)
+- Location & parking (entry, parking lots/ramps/meters, transit, landmarks)
+- About the studio (founding, philosophy, differentiators, vibe)
+- FAQ answers (plain-language answers to the 15-20 questions from page-blueprint.md)
+- Image inventory (portfolio, artist portraits, studio, location photos)
+- Spanish content plan (who translates, tone, specific messaging)
+
+**The owner fills this in with plain-language answers. Claude converts them to SEO-optimized content during Phase 3.**
