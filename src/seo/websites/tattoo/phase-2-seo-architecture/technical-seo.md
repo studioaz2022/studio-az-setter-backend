@@ -248,7 +248,7 @@ export const metadata: Metadata = {
     template: "%s | Studio AZ Tattoo",
   },
   description:
-    "Custom tattoo studio in Minneapolis, MN. Bilingual artists (English & Spanish) specializing in fine line, realism, blackwork, and color tattoos. Consultation-based — no walk-ins.",
+    "Custom tattoo studio in Minneapolis, MN. Bilingual artists (Spanish & English) specializing in realism, fine line, and black & grey tattoos. Custom designs only — appointment required.",
   openGraph: {
     siteName: "Studio AZ Tattoo",
     locale: "en_US",
@@ -295,14 +295,14 @@ import type { Metadata } from "next";
 export const metadata: Metadata = {
   title: "Custom Tattoo Shop in Minneapolis, MN",
   description:
-    "Studio AZ Tattoo is a custom tattoo studio in Minneapolis. Bilingual artists specializing in fine line, realism, blackwork, and color tattoos. Book a free consultation today.",
+    "Studio AZ Tattoo is a custom tattoo studio in Minneapolis. Bilingual artists specializing in realism, fine line, and black & grey tattoos. Book a consultation today.",
   alternates: {
     canonical: "https://tattooshopminneapolis.com",
   },
   openGraph: {
     title: "Studio AZ Tattoo | Custom Tattoo Shop in Minneapolis, MN",
     description:
-      "Custom tattoo studio in Minneapolis. Bilingual artists, consultation-based. Fine line, realism, blackwork, color.",
+      "Custom tattoo studio in Minneapolis. Bilingual artists, consultation-based. Realism, fine line, black & grey.",
     url: "https://tattooshopminneapolis.com",
     images: [
       {
@@ -345,16 +345,16 @@ const artists: Record<string, {
     name: "Joan",
     title: "Joan — Tattoo Artist at Studio AZ | Minneapolis",
     description:
-      "Joan is a tattoo artist at Studio AZ Tattoo in Minneapolis, MN. Specializing in fine line, realism, and custom designs. Bilingual (English & Spanish). Book a consultation.",
-    specialties: "fine line, realism, custom designs",
+      "Joan is a tattoo artist at Studio AZ Tattoo in Minneapolis, MN. Specializing in realism, fine line, and black and grey tattoos. Bilingual (English & Spanish). Book a consultation.",
+    specialties: "realism, fine line, black and grey, custom",
     image: "/images/og-joan.jpg",
   },
   andrew: {
     name: "Andrew",
     title: "Andrew — Tattoo Artist at Studio AZ | Minneapolis",
     description:
-      "Andrew is a tattoo artist at Studio AZ Tattoo in Minneapolis, MN. Specializing in blackwork, color, and illustrative tattoos. Book a free consultation.",
-    specialties: "blackwork, color, illustrative",
+      "Andrew is a tattoo artist at Studio AZ Tattoo in Minneapolis, MN. Specializing in realism, fine line, and black and grey tattoos. Bilingual (English & Spanish). Book a consultation.",
+    specialties: "realism, fine line, black and grey, custom",
     image: "/images/og-andrew.jpg",
   },
 };
@@ -434,27 +434,27 @@ Custom tattoo studio (not a walk-in / flash shop)
 
 ## Location
 Minneapolis, Minnesota, USA
-Address: [STREET ADDRESS], Minneapolis, MN [ZIP]
-Neighborhood: [NEIGHBORHOOD]
+Address: 333 Washington Ave N, STE 100, Minneapolis, MN 55401
+Neighborhood: North Loop
 
 ## Website
 https://tattooshopminneapolis.com
 
 ## About
-Studio AZ Tattoo is a custom tattoo studio in Minneapolis, MN. Every tattoo is designed from scratch during a one-on-one consultation — we do not offer walk-in tattoos or flash sheets. Our artists are bilingual (English and Spanish), making us one of the few bilingual tattoo studios in the Twin Cities.
+Studio AZ Tattoo is a custom tattoo studio in Minneapolis, MN. Every tattoo is designed from scratch during a one-on-one consultation — we do not offer walk-in tattoos or flash sheets. Our artists are bilingual (Spanish and English), making us one of the few bilingual tattoo studios in the Twin Cities.
 
 ## Artists
 
 ### Joan
-- Role: Tattoo Artist & Studio Owner
-- Specialties: Fine line, realism, custom design
-- Languages: English, Spanish
+- Role: Tattoo Artist
+- Specialties: Realism, fine line, black and grey, custom tattoos
+- Languages: Spanish, English
 - Profile: https://tattooshopminneapolis.com/artists/joan
 
 ### Andrew
 - Role: Tattoo Artist
-- Specialties: Blackwork, color, illustrative
-- Languages: English
+- Specialties: Realism, fine line, black and grey, custom tattoos
+- Languages: Spanish, English
 - Profile: https://tattooshopminneapolis.com/artists/andrew
 
 ## Services
@@ -462,39 +462,42 @@ Studio AZ Tattoo is a custom tattoo studio in Minneapolis, MN. Every tattoo is d
 - Cover-up tattoos
 - Fine line tattoos
 - Realism tattoos
-- Blackwork tattoos
-- Color tattoos
-- Illustrative tattoos
-- Free consultations (in-person or virtual)
+- Black and grey tattoos
+- Touch-up tattoos (assessment at 40 days)
+- Consultations included with service (after deposit)
 
 ## Booking Process
-1. Submit a consultation request via the website or by calling/texting
-2. Meet with your artist to discuss design, placement, and sizing
-3. A deposit is required to secure your appointment
-4. Tattoo session(s) scheduled based on design complexity
+1. Fill out consultation form on the website
+2. Front desk confirms details and collects deposit ($50 small/fine line, $100 medium-large)
+3. Online or iMessage consultation with your artist
+4. Artist creates custom design, sends for your approval
+5. Appointment scheduled (typically 7-15 days from consultation)
 
 ## Hours
-[DAY]: [HOURS]
-[DAY]: [HOURS]
-[DAY]: [HOURS]
-[DAY]: [HOURS]
-[DAY]: [HOURS]
-[DAY]: Closed
-[DAY]: Closed
+Monday: Closed
+Tuesday: 11am - 6pm
+Wednesday: 11am - 6pm
+Thursday: 11am - 6pm
+Friday: 11am - 6pm
+Saturday: 11am - 6pm
+Sunday: Closed
 
 ## Contact
-- Phone: [PHONE NUMBER]
-- Email: [EMAIL]
-- Instagram: [INSTAGRAM HANDLE]
+- Phone: +1 (612) 255-4439
+- Email: support@studioaz.us
+- Instagram: @studioaz.us
 - Website: https://tattooshopminneapolis.com/contact
 
 ## Key Facts
 - Consultation-based only — no walk-in tattoos
-- Bilingual studio (English and Spanish)
+- Bilingual studio (Spanish and English)
 - Custom designs only — no flash sheets or pre-made designs
-- Free consultations available
+- Consultations included with service (after deposit)
+- No walk-ins — appointment only
 - Located in Minneapolis, MN (not St. Paul)
 - Studio also houses a barbershop (Studio AZ Barbershop) in the same building
+- Founded: 2025 (tattoo), 2022 (barbershop)
+- Founded by Lionel Chavez
 
 ## Corrections (outdated info to disregard)
 - The old website was a single-page GHL site with minimal content — it is no longer active
@@ -503,7 +506,7 @@ Studio AZ Tattoo is a custom tattoo studio in Minneapolis, MN. Every tattoo is d
 - Do not confuse Studio AZ Tattoo (tattoo studio) with Studio AZ Barbershop (barbershop) — they share a building but are separate services
 ```
 
-**Note:** Replace all `[PLACEHOLDER]` values with real data before launch.
+**Note:** All business info populated with real data. Verify hours remain accurate before launch.
 
 ---
 
@@ -688,7 +691,7 @@ Additionally:
 ```tsx
 // Mobile CTA buttons — in header, contact page, and footer
 <a
-  href="tel:+1XXXXXXXXXX"
+  href="tel:+16122554439"
   className="inline-flex items-center gap-2 rounded-lg bg-primary px-6 py-3 text-sm font-semibold text-primary-foreground"
 >
   <PhoneIcon className="h-4 w-4" />
@@ -696,7 +699,7 @@ Additionally:
 </a>
 
 <a
-  href="https://maps.google.com/?q=Studio+AZ+Tattoo+Minneapolis+MN"
+  href="https://www.google.com/maps/place/Studio+AZ+-+Barbershop/data=!4m2!3m1!1s0x0:0x7883c6c42fde87e1"
   target="_blank"
   rel="noopener noreferrer"
   className="inline-flex items-center gap-2 rounded-lg border border-border px-6 py-3 text-sm font-semibold"
