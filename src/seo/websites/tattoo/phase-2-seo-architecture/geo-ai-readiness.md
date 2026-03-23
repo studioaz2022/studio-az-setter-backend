@@ -118,8 +118,8 @@ Include a statistic or specific detail every 150-200 words. AI engines prefer co
 - Price ranges: "Small tattoos start at $150, medium pieces $300-$500, large work $500+"
 - Healing timelines: "Most tattoos heal in 2-3 weeks with proper aftercare"
 - Session durations: "A typical session lasts 2-4 hours"
-- Review counts: "Rated 4.9 stars across 120+ Google reviews"
-- Years of experience: "Over 8 years of professional tattooing experience"
+- Review counts: "Rated 5.0 stars on Google reviews"
+- Experience scope: "Professional tattoo artists with combined convention and studio experience across the US and Latin America"
 - Quantified differentiators: "One of 3 Minneapolis tattoo shops offering bilingual consultations"
 
 **Bad specifics (avoid):**
@@ -157,7 +157,7 @@ end of every session.
 1. Tattoo cost/pricing in Minneapolis
 2. Tattoo healing time and aftercare
 3. First tattoo tips and what to expect
-4. Tattoo styles available (fine line, blackwork, realism, etc.)
+4. Tattoo styles available (realism, fine line, black and grey, etc.)
 5. Walk-in vs. appointment availability
 6. Tattoo touch-up policy
 7. Age requirements for tattoos in Minnesota
@@ -178,7 +178,7 @@ AI engines build a knowledge graph of business entities. If the brand name, addr
 | **Business Name** | Studio AZ Tattoo |
 | **Address** | 333 Washington Ave N, STE 100, Minneapolis, MN 55401 |
 | **Phone** | +1 (612) 255-4439 |
-| **Hours** | Mon-Fri 10am-7pm, Sat 10am-5pm |
+| **Hours** | Tue-Sat 11am-6pm, Mon & Sun Closed |
 | **Website** | https://tattooshopminneapolis.com |
 
 ### Brand Entity Checklist
@@ -186,7 +186,7 @@ AI engines build a knowledge graph of business entities. If the brand name, addr
 - [ ] Business name spelled identically everywhere: "Studio AZ Tattoo" (not "Studio AZ", not "StudioAZ Tattoo", not "Studio A-Z Tattoo", not "Studio Az Tattoo")
 - [ ] Address format identical everywhere: "333 Washington Ave N, STE 100, Minneapolis, MN 55401" (not "Suite 100", not "Ste. 100", not "Washington Avenue North")
 - [ ] Phone format identical: "+1 (612) 255-4439" (not "612-255-4439", not "6122554439")
-- [ ] Hours format identical: "Mon-Fri 10am-7pm, Sat 10am-5pm" (not "Monday-Friday 10:00 AM - 7:00 PM")
+- [ ] Hours format identical: "Tue-Sat 11am-6pm, Mon & Sun Closed" (not "Tuesday-Saturday 11:00 AM - 6:00 PM")
 - [ ] Schema markup on website matches Google Business Profile exactly
 - [ ] Website NAP (Name, Address, Phone) matches GBP NAP character-for-character
 
@@ -201,9 +201,11 @@ AI engines build a knowledge graph of business entities. If the brand name, addr
 | 5 | **Bing Places** | To claim | High |
 | 6 | **Facebook Business Page** | To verify | Medium |
 | 7 | **Instagram bio** | To verify | Medium |
-| 8 | **Foursquare** | To claim | Low |
-| 9 | **Data Axle** (aggregator) | To submit | Low |
-| 10 | **Neustar/Localeze** (aggregator) | To submit | Low |
+| 8 | **TikTok** | To verify | Medium |
+| 9 | **LinkedIn** | To verify | Medium |
+| 10 | **Foursquare** | To claim | Low |
+| 11 | **Data Axle** (aggregator) | To submit | Low |
+| 12 | **Neustar/Localeze** (aggregator) | To submit | Low |
 
 ### Common Entity Inconsistencies to Watch For
 
@@ -305,7 +307,7 @@ AI engines extract declarative statements. Content should directly answer common
 
 **Do this:**
 
-> Studio AZ Tattoo is a custom tattoo shop in Minneapolis's North Loop neighborhood. Founded by professional artists with over 8 years of experience, the shop specializes in fine line work, blackwork, and realism. Walk-ins are welcome, and consultations are free.
+> Studio AZ Tattoo is a custom tattoo shop in Minneapolis's North Loop neighborhood. Professional tattoo artists with combined convention and studio experience across the US and Latin America specialize in realism, fine line, and black and grey. Walk-ins are not available — all tattoos are by appointment only. Consultations included after deposit.
 
 **Not this:**
 
@@ -322,7 +324,7 @@ AI engines frequently generate comparison responses ("What are the best tattoo s
 - "Unlike most Minneapolis tattoo shops, Studio AZ offers bilingual consultations in English and Spanish."
 - "Studio AZ Tattoo is one of the few Minneapolis shops that offers a fully digital consultation process — clients can submit reference images and get a quote online before visiting."
 - "Located in Minneapolis's North Loop, Studio AZ is the neighborhood's only dedicated tattoo studio."
-- "Studio AZ Tattoo offers free consultations for all custom work, with no deposit required until the design is approved."
+- "Studio AZ Tattoo includes consultations after deposit for all custom work — clients can discuss design details and revisions with their artist before the session."
 
 **Pattern:** "Unlike [competitors/category], [Brand] offers [specific differentiator]."
 
@@ -335,7 +337,7 @@ AI engines prefer pulling bulleted and numbered lists into responses. They becom
 **Use lists for:**
 
 - Services offered (with brief descriptions)
-- Tattoo styles available (fine line, blackwork, realism, traditional, watercolor, geometric, etc.)
+- Tattoo styles available (realism, fine line, black and grey, traditional, watercolor, etc.)
 - Artist specialties
 - Aftercare steps (numbered, sequential)
 - What to bring to your appointment
@@ -348,9 +350,9 @@ AI engines prefer pulling bulleted and numbered lists into responses. They becom
 
 Studio AZ Tattoo artists specialize in a range of tattoo styles:
 
-- **Fine Line** — Delicate, precise linework ideal for minimalist designs
-- **Blackwork** — Bold, solid black designs including geometric patterns
 - **Realism** — Photorealistic portraits and nature scenes
+- **Fine Line** — Delicate, precise linework ideal for minimalist designs
+- **Black and Grey** — Smooth shading and tonal depth without color
 - **Traditional** — Classic American bold-line tattoos with rich color
 - **Watercolor** — Soft, painterly effects that mimic watercolor art
 - **Script & Lettering** — Custom typography and calligraphy
@@ -421,7 +423,7 @@ AI engines serve responses in the searcher's language. A user searching "tatuaje
 - Have a native speaker review all Spanish content before publishing
 - Avoid literal translations of English idioms
 - Use Spanish tattoo terminology, not anglicized versions where a Spanish term exists
-- "Consulta gratuita" not "free consultation" in Spanish sections
+- "Consulta incluida con depósito" not "consultation included after deposit" in Spanish sections
 - "Tatuaje personalizado" not "custom tattoo" in Spanish sections
 
 ### AI Advantage
