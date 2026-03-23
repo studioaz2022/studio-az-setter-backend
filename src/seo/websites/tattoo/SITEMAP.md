@@ -93,7 +93,7 @@ Every page reachable within 2 clicks. Primary nav: Home, Services, Artists, Gall
 - **Name:** Studio AZ Tattoo
 - **Address:** 333 Washington Ave N, STE 100, Minneapolis, MN 55401
 - **Phone:** +1 (612) 255-4439
-- **Hours:** Mon–Fri 10am–7pm, Sat 10am–5pm
+- **Hours:** Tue–Sat 11am–6pm, Mon & Sun Closed
 - **Neighborhood:** North Loop, Minneapolis
 - **GPS:** 44.98445714702983, -93.27393261534043
 - **Google Place ID:** ChIJt_vZnAAzs1IR5e7h5BUE0O0

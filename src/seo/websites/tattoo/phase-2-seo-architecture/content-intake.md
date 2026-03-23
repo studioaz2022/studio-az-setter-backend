@@ -22,81 +22,81 @@ Answer: 333 Washington Ave N, STE 100, Minneapolis, MN 55401
 Answer: +1 (612) 255-4439
 
 **Q1.4** Email:
-Answer:
+Answer: support@studioaz.us
 
 **Q1.5** Hours (confirm each day):
-- Monday:
-- Tuesday:
-- Wednesday:
-- Thursday:
-- Friday:
-- Saturday:
-- Sunday:
+- Monday: Closed
+- Tuesday: 11AM - 6PM
+- Wednesday: 11AM - 6PM
+- Thursday: 11AM - 6PM
+- Friday: 11AM - 6PM
+- Saturday: 11AM - 6PM
+- Sunday: Closed
 
 **Q1.6** Instagram handle (shop):
-Answer: @studioaztattoo
+Answer: @studioaz.us
 
 **Q1.7** Any other social profiles? (Facebook, TikTok, etc.):
-Answer:
+Answer: Tiktok - @studio.az.tattoo, Facebook - https://www.facebook.com/studioaz.us/, Linked In - https://www.linkedin.com/company/studioazus
 
 ---
 
 ## Section 2: Artists
 
-### Joan Martinez
+### Joan Martinez (Male)
 
 **Q2.1** Full legal name (as it should appear on the site):
-Answer:
+Answer: Joan Martinez
 
 **Q2.2** Job title (e.g., "Tattoo Artist", "Lead Artist", "Owner & Artist"):
-Answer:
+Answer: Tattoo Artist
 
 **Q2.3** How many years tattooing?
-Answer:
+Answer: 5 years
 
 **Q2.4** Training/background (apprenticeship, art school, self-taught, etc.):
-Answer:
+Answer: self taught
 
 **Q2.5** Tattoo styles she specializes in (confirm or update: fine line, realism, black & grey):
-Answer:
+Answer: Realism, fine line, black and grey, Color (only if it's palm size or less), custom tattoos
 
 **Q2.6** Languages spoken:
-Answer:
+Answer: Spanish
 
-**Q2.7** Her tattoo philosophy / approach in 1-2 sentences (what would she say about her work?):
-Answer:
+**Q2.7** His tattoo philosophy / approach in 1-2 sentences (what would she say about her work?):
+Answer: His current bio "Joan truly embodies the saying "excellence is in the details". Coming from Nicaragua to the US has challenged him in more ways than one and came out the other side stronger. Joan is wired to continually improve and make a name for himself in Minneapolis."
 
-**Q2.8** Her Instagram handle:
-Answer:
+**Q2.8** His Instagram handle:
+Answer: @joan_martinez_tattoo
 
-**Q2.9** Anything else that makes her unique? (awards, notable clients, media features, training with specific artists):
-Answer:
+**Q2.9** Anything else that makes him unique? (awards, notable clients, media features, training with specific artists):
+Answer: 
 
 ### Andrew Fernandez
 
 **Q2.10** Full legal name:
-Answer:
+Answer: Andrew Fernandez
 
 **Q2.11** Job title:
-Answer:
+Answer: Tattoo Artist
 
 **Q2.12** How many years tattooing?
-Answer:
+Answer: 4
 
 **Q2.13** Training/background:
-Answer:
+Answer:  he's attended/tattooed at the Milwaukee Tattoo Arts Festival,  Villain Arts 15th Annual Chicago Tattoo Art Festival,  Villain Arts 17th Annual Baltimore Tattoo Arts Festival and  Villain Arts 16th Annual Minneapolis Tattoo Arts Festival
 
 **Q2.14** Tattoo styles he specializes in (confirm or update: small tattoos, first tattoos, custom designs):
-Answer:
+Answer: Realism, fine line, black and grey, custom tattoos
 
 **Q2.15** Languages spoken:
-Answer:
+Answer: Spanish
 
 **Q2.16** His tattoo philosophy / approach in 1-2 sentences:
-Answer:
+Answer: his current bio "Coming from Mexico's vibrant Puebla region, Tlaxcala, Andrew brings a blend of local heritage and global tattoo artistry. His journey for mentorships and tattoo education across the US and Latin America has infused his work with diverse techniques and styles, ensuring each piece tells a unique story."
 
 **Q2.17** His Instagram handle:
-Answer:
+Answer: @andrefernan_tattoo
 
 **Q2.18** Anything else that makes him unique?
 Answer:
@@ -108,102 +108,101 @@ Answer:
 **Q3.1** List every service you offer (check all that apply and add any missing):
 - [ ] Custom tattoos
 - [ ] Cover-up tattoos
-- [ ] Touch-up tattoos
 - [ ] Tattoo consultations
 - [ ] Other: ___
 
 **Q3.2** Starting price for a small tattoo (e.g., "$100", "$150"):
-Answer:
+Answer: Fine line starts at $100, a small tat with little detail is around $200
 
 **Q3.3** Typical price range for medium pieces:
-Answer:
+Answer: $400 - $800 depending on the detail and amount of coverage
 
 **Q3.4** Do you charge by the hour or flat rate? If hourly, what's the rate?
-Answer:
+Answer: Charge by the project
 
 **Q3.5** Is there a shop minimum?
-Answer:
+Answer: $100 which is for a fine line tattoo only
 
 **Q3.6** Are consultations free?
-Answer:
+Answer: Yes they are included with the tattoo service BUT only after a deposit is made. Either a $100 deposit for medium to large tattoos, or $50 deposit for fine line and small tattoos. Deposits count towards the tattoo cost itself and are fully refundable.
 
 **Q3.7** Cover-up tattoo starting price (if different from custom):
-Answer:
+Answer: Not known
 
 **Q3.8** Do you do 100% custom work only, or also flash/walk-in designs?
-Answer:
+Answer: 100% custom work. any flash designs will be on the artists's instagrams only.
 
 **Q3.9** What's the typical timeline from consultation to tattoo day?
-Answer:
+Answer: 20% of time is all same week. usually 7-15 days
 
 ---
 
 ## Section 4: Policies
 
 **Q4.1** Deposit amount (flat dollar amount or percentage?):
-Answer:
+Answer: Either a $100 deposit for medium to large tattoos, or $50 deposit for fine line and small tattoos. Deposits count towards the tattoo cost itself and are fully refundable.
 
 **Q4.2** Is the deposit refundable? Under what conditions?
-Answer:
+Answer: Yes 100%
 
 **Q4.3** Is the deposit applied toward the final cost?
-Answer:
+Answer: Yes
 
 **Q4.4** Cancellation policy (how much notice? What happens to deposit?):
-Answer:
+Answer: 24 hour cancellation before tattoo appt. Or they forfeit the deposit
 
 **Q4.5** Do you accept walk-ins? If yes, when/how often?
-Answer:
+Answer: Not currently
 
 **Q4.6** Touch-up policy (free within how many days? Any conditions?):
-Answer:
+Answer: an assessment is made 40 days after the session to see how the tattoo has healed and how the skin retains the ink. Artist will decide if a touch up is necessary and in most cases it will be free of charge unless they didn't follow the after care treatment as told
 
 **Q4.7** Minimum age (18? Any exceptions with parental consent?):
-Answer:
+Answer: yes min 18 years
 
 **Q4.8** Can clients bring someone with them to the appointment?
-Answer:
+Answer: only 1 other person is allowed to come with. space is limited so they may not be able to be in the procedure room during the tattoo.
 
 **Q4.9** What payment methods do you accept? (cash, credit, debit, Venmo, etc.):
-Answer:
+Answer: Preferred is Zelle, Cash, and Venmo. But Credit is accepted and we offer payment plans as well.
 
 **Q4.10** Rescheduling policy:
-Answer:
+Answer: Must be made 24 hours in advance or may incur a reschedule fee of $50 to $100 depending on the size of tattoo (just like the deposit fees)
 
 ---
 
 ## Section 5: The Tattoo Process
 
 **Q5.1** Walk me through the process from first contact to finished tattoo (step by step):
-Answer:
+Answer:  after you fill out the form, our front desk will be in contact with the lead to confirm any details, take a deposit, and either book an online consultation with the artist or link the lead with the artist via text messaging to do an iMessage-based consultation.  after the consultation, the tattoo artist will create the concept design and text it over to you for you to confirm or make any changes. The appointment (or appointments depending on the amount of sessions needed, subsequent appointments will be made after the first one) day will be made during the consultation or as a follow up through SMS while confirming concept design details.
 
 **Q5.2** How long does a typical small tattoo session take?
-Answer:
+Answer:  usually two hours, mostly three hours max. The tattoo artist will confirm with you after the consultation 
 
 **Q5.3** How long for a medium piece?
-Answer:
+Answer:  from three hours to seven hours, depending on the coverage and detail, the tattoo artist will confirm with you after the consultation 
 
 **Q5.4** How long for a large/multi-session piece?
-Answer:
+Answer: +7 hours. after Seven hours, It will be a multi-session piece. 
 
 **Q5.5** What should clients wear to their appointment?
-Answer:
+Answer:  comfy clothing and clothing that will not cover the tattoo area. It would help to bring a pillow as well if you are lying on your stomach or on your side. 
 
 **Q5.6** What should clients do to prepare? (eat, hydrate, sleep, avoid alcohol, etc.):
-Answer:
+Answer: the typical stuff. eat, stay hydrated and get plenty of rest
 
 **Q5.7** What should clients NOT do before a tattoo?
-Answer:
+Answer: take pain killers
 
 ---
 
-## Section 6: Aftercare
+## Section 6: Aftercare (to be confirmed with tattoo artists)
 
 **Q6.1** What type of bandage do you use? (plastic wrap, Saniderm/Tegaderm, etc.):
-Answer:
+Answer: Saniderm
 
 **Q6.2** How long should the bandage stay on?
-Answer:
+Answer: 
 
 **Q6.3** Washing instructions (what soap? how often? how to wash?):
 Answer:
@@ -237,55 +236,75 @@ Answer:
 ## Section 7: Location & Parking
 
 **Q7.1** What floor/level is the studio on?
-Answer:
+Answer: Basement level inside the barbershop (barbershop is on the first level)
 
 **Q7.2** How do you enter the building from the street? (front door, side entrance, buzzer, etc.):
-Answer:
+Answer: Inside the Union Plaza Building (between Deja Vu and Dario Restaurant), 1st floor corner. Two public entrances: Main Lobby door or South Side entrance across from Dario Restaurant. Tattoo studio is in the basement level — enter through the barbershop on the 1st floor.
 
 **Q7.3** Any landmarks near the studio? (Target Field, specific restaurants, etc.):
-Answer:
+Answer: Union Plaza Building, Deja Vu (pink building), Dario Restaurant, T3 Building, North Loop Green, Target Field, Target Center (skyway connected)
 
 **Q7.4** Free street parking — where specifically? (which streets, any time limits?):
-Answer:
+Answer: No free parking. ALL parking around the studio is paid parking.
+
+https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/6bce136c-b937-4f68-8aa3-05a568a3c15c.webp
+Above is a aerial map of highlighted zones of Building parking and City Parking. Legend is:
+- **GREEN - City Parking**
+- **YELLOW - Building Parking**
+- Green Star = City Parking Pay Box
+- Yellow Star = Building Parking Pay Boxes
+Google maps direction button - https://www.google.com/maps/place/Studio+AZ+-+Barbershop/data=!4m2!3m1!1s0x0:0x7883c6c42fde87e1?sa=X&ved=1t:2428&ictx=111
+Apple Maps direction button - https://maps.apple.com/?address=333%20N%20Washington%20Ave,%20Minneapolis,%20MN%20%2055401,%20United%20States&auid=6964641925607906199&ll=44.984481,-93.273937&lsp=9902&q=Studio%20AZ&t=m
 
 **Q7.5** Nearest parking ramps/lots (name, approximate cost, distance):
-- Ramp 1:
-- Ramp 2:
-- Ramp 3:
+- Building parking - **Pay at box Only
+	- Pay Box 1: 1st is located in front of the T3 building across from the South Entrance of Union Plaza. https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/da84ff1c-3c31-48a4-a429-ca7d5c1328ab.webp
+	- Pay Box 2: 2nd is located on Washington Avenue next to Deja Vu (Pink building) https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/5d222bf2-c4dd-4c73-a996-b791129e1817.webp
+	- 
+- City Parking - **Pay at box or by App** 
+	- This parking is available alongside of Union Plaza and behind Deja Vu & Office Bar (highlighted in green). It also continues along 3rd Ave. Pay box is located along 3rd Ave or pay by [Minneapolis Parking App](https://apps.apple.com/us/app/mpls-parking/id1009365391).  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/094123a2-e818-4926-a05e-67e191e9c24a.webp
+- Ramp 4: Ramp C — Minnesota Twins Parking Ramp (parking garage)
 
 **Q7.6** Metered parking — which blocks? What are the rates/hours?
-Answer:
+Answer: City/street parking pay boxes (or Minneapolis Parking App) along Union Plaza, behind Deja Vu & Office Bar, and continuing along 3rd Ave.
 
 **Q7.7** Nearest light rail stop(s) and which line(s):
-Answer:
+Answer: (NEEDS CONFIRMATION — Target Field station on Blue & Green lines is nearby, ~5-10 min walk)
 
 **Q7.8** Nearest bus stop(s) and which route(s):
-Answer:
+Answer: (NEEDS CONFIRMATION)
 
 **Q7.9** Any other transit tips? (bike rack, Uber drop-off spot, skyway access):
-Answer:
+Answer: Skyway access from downtown — 15-minute walk via SkyWay system: start at Target Center, follow skyways through Target Field to Ramp C parking garage, take elevator to level "B," emerge near North Loop Green Building, T3 Building, and Union Plaza. https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/4e7690ec-58ad-4496-be66-d55410c01e27.webp
 
 ---
 
 ## Section 8: About the Studio
 
 **Q8.1** When was Studio AZ Tattoo founded/opened?
-Answer:
+Answer: 2022 Barbershop // 2025 Tattoo shop
 
 **Q8.2** Who founded it?
-Answer:
+Answer: Lionel Chavez
 
 **Q8.3** Why the North Loop location? What do you like about the neighborhood?
-Answer:
+Answer: Its unique, boutique and matches the creativeness and aesthetic of our studio space. 
 
 **Q8.4** What makes Studio AZ different from other Minneapolis tattoo shops? (in your own words):
-Answer:
+Answer: Here's what are website say currently    
+"You want a tattoo shop that doesn’t feel like you just walked into the back room of a biker bar? Or artists who won’t judge you for asking if it’s gonna hurt?
+
+ Let’s be real... walking into most tattoo shops feels like you’re interrupting a cult meeting. You either have to pretend you know everything, or risk looking like a tourist.
+
+Tattoos at Studio AZ were made for people who care about the art AND the experience. Whether it’s your 1st tattoo or your 50th, you’ll know exactly what you're getting into—who’s doing it, how much it costs, and what kind of work they specialize in."
+
+you can make it less humourous if needed
 
 **Q8.5** Any awards, press mentions, or features?
-Answer:
+Answer: no, we're too new
 
 **Q8.6** What's the vibe/atmosphere of the studio? (calm, energetic, music, art on walls, etc.):
-Answer:
+Answer: Calm, modern, clean, communal (the barbershop usually has life and conversations going on with 10 barbers and there clients)
 
 ---
 
@@ -297,19 +316,19 @@ These are questions we'll include on the FAQ page. Some answers come from sectio
 Answer:
 
 **Q9.2** "Can I bring my own design?" — How do you handle client-provided artwork?
-Answer:
+Answer: Absolutely. And if you need to make any additions or changes to it, we got you.
 
 **Q9.3** "What if I don't have a design idea yet?" — How does the custom design process work?
-Answer:
+Answer: Bring us any references you have to start putting together and we'll help you design it together.
 
 **Q9.4** "Do you do cover-ups?" — What's the cover-up process like?
 Answer:
 
 **Q9.5** "Can I see the design before my appointment?"
-Answer:
+Answer: Yes, the artist will send you your design for you to confirm or make changes
 
 **Q9.6** "Do you speak Spanish?" — How bilingual is the studio?
-Answer:
+Answer: Our artists primarily speak spanish. We offer translators/interpreters during the consultation process to make the process as smooth as possible. At the end of the day, their work speaks for itself!
 
 **Q9.7** Any other questions clients ask frequently that aren't covered above?
 Answer:
@@ -322,25 +341,42 @@ Check off what you have or can get. We need real photos only — zero stock imag
 
 ### Portfolio (REQUIRED — minimum counts)
 - [ ] Joan's work: fine line examples (need 3+)
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/82f297a1-0fe7-41fb-a444-057bb6352841.webp — fine-line-amor-floral-forearm-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/254286d9-236d-4613-8686-4423b776b929.webp — fine-line-geometric-planet-forearm-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/2d640adc-58ce-42d8-8e9b-f778359a474f.webp — fine-line-script-names-hand-joan-martinez
 - [ ] Joan's work: realism examples (need 3+)
-- [ ] Joan's work: black & grey examples (need 3+)
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/a5cde104-7583-4c3e-8c1d-a5e814681ea5.webp — realism-chicana-portrait-minneapolis-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/252ba94b-1fae-406f-ac67-c72ad7684c4d.webp — realism-portrait-queen-forearm-joan-martinez
+- [ ] Joan's work: Large tattoo examples (need 3+)
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/f89bf82e-dc00-4e66-9add-4140679c676a.webp — black-and-grey-polynesian-half-sleeve-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/99d3ecb7-bef0-4c42-b8cf-307fd3382798.webp — realism-religious-lion-cross-half-sleeve-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/077ccfed-ad56-4fbb-bf21-26375d04714b.webp — realism-girl-clock-teddy-bear-half-sleeve-joan-martinez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/cac7ad0a-8781-4e82-9f63-3b438b6cd530.webp — black-and-grey-lily-flower-ribcage-joan-martinez
 - [ ] Andrew's work: small tattoo examples (need 3+)
-- [ ] Andrew's work: first-tattoo-friendly examples (need 3+)
+- [ ] Andrew's work: Realism examples (need 3+)
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/59db435b-bc97-4579-bf6f-e54ed6249e45.webp — realism-jesus-christ-forearm-andrew-fernandez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/03c0ce8f-cf22-4073-b93a-6ea6966b6b4d.webp — realism-tiger-mountain-crow-sleeve-andrew-fernandez
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/948755ca-fe07-4f48-99b9-8cbb4a96458e.webp — realism-angel-dove-sleeve-andrew-fernandez
 - [ ] Andrew's work: custom design examples (need 3+)
 
 ### Artist Photos (REQUIRED)
+Use the photos/cards that we have for Joan and Andrew in the kiosk check in.
 - [ ] Joan — professional headshot or portrait
 - [ ] Andrew — professional headshot or portrait
 - [ ] Team photo (both artists together)
 
 ### Studio Photos (REQUIRED)
-- [ ] Interior — workstation / tattoo area
-- [ ] Interior — waiting area or front desk
-- [ ] Exterior — building entrance / storefront
+- [x] Interior — workstation / tattoo area
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/96def9f4-6485-4816-93bf-4c69b4087e26.webp — studio-az-tattoo-workstation-interior-minneapolis
+- [x] Interior — waiting area or front desk
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/fceb8008-743d-474f-94f5-c3bd4fcef266.webp — studio-az-front-desk-north-loop-minneapolis
+- [x] Exterior — building entrance / storefront
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/1338c00d-8c46-4923-ace8-83ccc24d5d0c.webp — studio-az-storefront-exterior-north-loop-minneapolis
 - [ ] Exterior — street-level signage
 
 ### Location/Parking (REQUIRED)
-- [ ] Parking area near studio (or we can create a map)
+- [x] Parking area near studio (or we can create a map)
+	- [x] https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/6bce136c-b937-4f68-8aa3-05a568a3c15c.webp — parking-map-north-loop-minneapolis
 - [ ] Building entrance / how to find us
 
 ### Aftercare (OPTIONAL — we can use illustrations)

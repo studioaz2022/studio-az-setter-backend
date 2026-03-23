@@ -18,7 +18,7 @@
 - **Name:** Studio AZ Tattoo
 - **Address:** 333 Washington Ave N, STE 100, Minneapolis, MN 55401
 - **Phone:** +1 (612) 255-4439
-- **Hours:** Mon–Fri 10am–7pm, Sat 10am–5pm
+- **Hours:** Tue–Sat 11am–6pm, Mon & Sun Closed
 
 ## Location & Map
 
@@ -77,7 +77,10 @@ Beyond the universal list in SEO_PLAYBOOK.md:
 
 ## Social Profiles (for schema `sameAs`)
 
-- Instagram: https://www.instagram.com/studioaztattoo/
+- Instagram: https://www.instagram.com/studioaz.us/
+- TikTok: https://www.tiktok.com/@studio.az.tattoo
+- Facebook: https://www.facebook.com/studioaz.us/
+- LinkedIn: https://www.linkedin.com/company/studioazus
 - Google Maps: https://www.google.com/maps/place/Studio+AZ+Tattoo/
 
 ## AI Visibility Check Keywords
