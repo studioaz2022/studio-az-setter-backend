@@ -142,7 +142,20 @@ On career growth:
 - Never give generic advice — always tie back to their actual numbers
 - Reference specific concepts from the book by name when relevant
 - Use Bossio's ordering principle: structure before scale, consistency before intensity, margin before expansion, longevity before speed
-- Do NOT use markdown formatting (no **, no ##, no bullet points with -). Write in plain prose with paragraph breaks. For the goals section, use numbered lists (1. 2. 3.)`;
+- Do NOT use markdown formatting (no **, no ##, no bullet points with -). Write in plain prose with paragraph breaks. For the goals section, use numbered lists (1. 2. 3.)
+
+[BOUNDARIES — HARD RULES]
+You must NOT advise on:
+- Pricing decisions (raising prices, lowering prices, price bumps, charging more). If asked or if the topic comes up, say: "Pricing decisions depend on factors beyond what I can see here — talk to your shop owner about pricing strategy."
+- Operational policy (deposit requirements, confirmation texts, booking policies, cancellation fees, late policies). If asked, say: "That's a shop-level decision — talk to your shop owner."
+
+You CAN advise on (things within the barber's control):
+- Rebooking habits — asking clients to rebook before they leave
+- Schedule management — opening/closing slots, adjusting availability
+- Service duration optimization — tightening H+B from 60→45 min to reduce dead space
+- Client relationship patterns — regulars vs one-time, retention trends
+- Service mix decisions — whether shorter services are worth offering
+- Time management — gaps between appointments, break scheduling`;
 }
 
 // ──────────────────────────────────────
@@ -413,8 +426,29 @@ async function requestCoaching(barberGhlId, locationId, focusMetric, scorecardCo
       if (sc.attemptRate != null) parts.push(`rebook attempt rate (booked next visit before leaving): ${Number(sc.attemptRate).toFixed(1)}%`);
       if (sc.weeklyGoal != null) parts.push(`weekly income goal: $${Number(sc.weeklyGoal).toFixed(0)}`);
       if (sc.currentPace != null) parts.push(`current weekly pace: $${Number(sc.currentPace).toFixed(0)}`);
+      if (sc.utilization != null) parts.push(`utilization: ${Number(sc.utilization).toFixed(1)}%`);
+      if (sc.serviceMixEfficiency != null) parts.push(`service mix efficiency: ${Number(sc.serviceMixEfficiency).toFixed(1)}%`);
       if (parts.length > 0) {
         focusAddendum += `Their scorecard shows: ${parts.join(", ")}.\n`;
+      }
+
+      // Tier-aware coaching tone
+      const coachTier = sc.tier || "growth";
+      const coachZone = sc.zone || "build";
+      if (coachTier === "growth") {
+        focusAddendum += `\n[COACHING TONE: GROWTH TIER]\nThis barber is in Growth mode — they want direct, action-oriented advice. "Here's what to fix and how." Focus on utilization improvement, rebooking habits, schedule optimization.\n`;
+        if (sc.utilization != null && Number(sc.utilization) >= 75) {
+          focusAddendum += `Their utilization is ${Number(sc.utilization).toFixed(0)}%+ — mention service mix efficiency when relevant. `;
+          if (Number(sc.utilization) >= 90) {
+            focusAddendum += `At 90%+ they're approaching capacity — focus on schedule tightening, service duration optimization, and the HC-optimized breakdown below.\n`;
+          } else {
+            focusAddendum += `At 75-90% they're building momentum — focus on converting new clients to regulars and mention mix efficiency only if notably low.\n`;
+          }
+        } else {
+          focusAddendum += `Their utilization is below 75% — focus on "fill your slots": rebooking habits, client relationships, schedule management. Don't emphasize mix efficiency at this stage — it's noise.\n`;
+        }
+      } else {
+        focusAddendum += `\n[COACHING TONE: STABLE TIER]\nThis barber is in Stable mode — they prefer observational, business-context insights. "Here's what I see in your numbers." Focus on client retention, long-term trends, business health. Surface patterns rather than prescribe actions.\n`;
       }
 
       // Availability context — schedule consistency
@@ -431,6 +465,37 @@ async function requestCoaching(barberGhlId, locationId, focusMetric, scorecardCo
     }
     focusAddendum += `Prioritize coaching around their focus area while still addressing any critical issues. Reference their specific scorecard numbers (money on the floor, rebook rate vs goal, attempt rate) in your advice.`;
     userPrompt += focusAddendum;
+  }
+
+  // Two efficiency lenses — actual service mix efficiency vs HC-optimized (coach-only context)
+  // These come from the snapshot, not the scorecard — the HC number is NEVER shown on any dashboard
+  if (snapshot.dead_space_minutes != null && snapshot.hc_dead_space_minutes != null && snapshot.capacity_minutes > 0) {
+    const actualEfficiency = (1 - (snapshot.dead_space_minutes / snapshot.capacity_minutes)) * 100;
+    const hcEfficiency = (1 - (snapshot.hc_dead_space_minutes / snapshot.capacity_minutes)) * 100;
+    const gap = actualEfficiency - hcEfficiency;
+
+    let efficiencyAddendum = `\n\n[SERVICE MIX EFFICIENCY — TWO LENSES (coach-only, never shown to barber)]\n`;
+    efficiencyAddendum += `Actual service mix efficiency: ${actualEfficiency.toFixed(1)}% (dead space measured against smallest bookable service — this IS shown on the dashboard).\n`;
+    efficiencyAddendum += `HC-optimized efficiency: ${hcEfficiency.toFixed(1)}% (dead space measured against haircut duration only — this is NEVER shown to the barber).\n`;
+
+    if (gap < 2) {
+      efficiencyAddendum += `Both numbers are nearly identical — the barber's calendar tiles well regardless of service mix. `;
+      if (actualEfficiency >= 97) {
+        efficiencyAddendum += `"Your calendar is perfectly tiled — no gaps anywhere."\n`;
+      } else {
+        efficiencyAddendum += `There are real unbookable gaps that aren't caused by service mix.\n`;
+      }
+    } else {
+      const recoverable = snapshot.hc_dead_space_minutes - snapshot.dead_space_minutes;
+      efficiencyAddendum += `The ${gap.toFixed(0)}% gap means the barber's current service mix fills gaps that haircuts alone wouldn't. `;
+      if (actualEfficiency >= 97) {
+        efficiencyAddendum += `Their schedule works for current services, but they could recover ~${recoverable} min/day by tightening H+B from 60→45 min. As they get busier, consider suggesting this.\n`;
+      } else {
+        efficiencyAddendum += `They have some unbookable gaps AND room to optimize service durations.\n`;
+      }
+    }
+    efficiencyAddendum += `Use this to inform your advice about schedule optimization and service duration. Do NOT quote the HC-optimized number directly to the barber — it's your reasoning tool, not their metric.`;
+    userPrompt += efficiencyAddendum;
   }
 
   console.log(
