@@ -7,6 +7,14 @@ const { listAccounts, listLocations, getDailyMetrics, getSearchKeywords, getPerf
 const { auditPage } = require("./siteAuditor");
 const { runPageSpeed, runFullAudit } = require("./pageSpeedClient");
 const { analyzeData } = require("./seoAnalyzer");
+const {
+  searchGoogleMaps,
+  searchLocalPack,
+  getReviews,
+  findRankingPosition,
+  trackKeywordRankings,
+  competitorAnalysis,
+} = require("./serpApiClient");
 
 const router = express.Router();
 
@@ -335,6 +343,110 @@ router.get("/dashboard/:site", async (req, res) => {
     });
   } catch (err) {
     console.error("[SEO] dashboard error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ──────────────────────────────────────
+// SerpAPI — Google Maps Rankings & Reviews
+// ──────────────────────────────────────
+
+/**
+ * GET /api/seo/maps/search
+ * Search Google Maps for a keyword in Minneapolis.
+ * Query params: q (keyword), lat, lng, zoom
+ */
+router.get("/maps/search", async (req, res) => {
+  try {
+    const { q, lat, lng, zoom } = req.query;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q parameter" });
+    const location = lat && lng ? `@${lat},${lng},${zoom || 14}z` : undefined;
+    const results = await searchGoogleMaps(q, { location });
+    res.json({ success: true, keyword: q, results });
+  } catch (err) {
+    console.error("[SEO] maps search error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/maps/local-pack
+ * Search Google and extract Local Pack results.
+ * Query params: q (keyword)
+ */
+router.get("/maps/local-pack", async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q parameter" });
+    const results = await searchLocalPack(q);
+    res.json({ success: true, keyword: q, ...results });
+  } catch (err) {
+    console.error("[SEO] local-pack error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/maps/ranking/:site
+ * Find Studio AZ's ranking position for a keyword.
+ * Query params: q (keyword)
+ */
+router.get("/maps/ranking/:site", async (req, res) => {
+  try {
+    const { q } = req.query;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q parameter" });
+    const ranking = await findRankingPosition(q, req.params.site);
+    res.json({ success: true, ...ranking });
+  } catch (err) {
+    console.error("[SEO] ranking error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/seo/maps/track-rankings/:site
+ * Track rankings for multiple keywords.
+ * Body: { keywords: ["barbershop near me", "fade haircut Minneapolis", ...] }
+ */
+router.post("/maps/track-rankings/:site", async (req, res) => {
+  try {
+    const { keywords } = req.body;
+    if (!keywords?.length) return res.status(400).json({ success: false, error: "Missing keywords array" });
+    const rankings = await trackKeywordRankings(keywords, req.params.site);
+    res.json({ success: true, site: req.params.site, rankings, searchesUsed: keywords.length });
+  } catch (err) {
+    console.error("[SEO] track-rankings error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * POST /api/seo/maps/competitors/:site
+ * Run a full competitor analysis across multiple keywords.
+ * Body: { keywords: ["barbershop near me", ...] }
+ */
+router.post("/maps/competitors/:site", async (req, res) => {
+  try {
+    const { keywords } = req.body;
+    if (!keywords?.length) return res.status(400).json({ success: false, error: "Missing keywords array" });
+    const analysis = await competitorAnalysis(req.params.site, keywords);
+    res.json({ success: true, ...analysis });
+  } catch (err) {
+    console.error("[SEO] competitors error:", err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/maps/reviews/:placeId
+ * Get Google reviews for a business by place_id.
+ */
+router.get("/maps/reviews/:placeId", async (req, res) => {
+  try {
+    const reviews = await getReviews(req.params.placeId);
+    res.json({ success: true, ...reviews });
+  } catch (err) {
+    console.error("[SEO] reviews error:", err.response?.data || err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });
