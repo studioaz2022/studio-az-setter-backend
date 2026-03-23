@@ -47,12 +47,12 @@ The homepage carries the heaviest schema — full business entity, organization,
       "url": "https://tattooshopminneapolis.com",
       "telephone": "+1-612-255-4439",
       "email": "support@studioaz.us",
-      "description": "Custom tattoo studio in Minneapolis specializing in fine line, realism, black and grey, and cover-up tattoos. Bilingual artists (English & Spanish). Walk-ins welcome.",
+      "description": "Custom tattoo studio in Minneapolis specializing in fine line, realism, black and grey, and cover-up tattoos. Bilingual artists (English & Spanish). Appointment only — no walk-ins.",
       "image": "https://tattooshopminneapolis.com/images/studio-exterior.jpg",
       "logo": "https://assets.cdn.filesafe.space/GLRkNAxfPtWTqTiN83xj/media/69a5f238618c8d1afd552d67.png",
       "priceRange": "$$",
       "currenciesAccepted": "USD",
-      "paymentAccepted": "Cash, Credit Card, Debit Card",
+      "paymentAccepted": "Cash, Zelle, Venmo, Credit Card",
       "address": {
         "@type": "PostalAddress",
         "streetAddress": "333 Washington Ave N, STE 100",
@@ -69,39 +69,33 @@ The homepage carries the heaviest schema — full business entity, organization,
       "openingHoursSpecification": [
         {
           "@type": "OpeningHoursSpecification",
-          "dayOfWeek": "Monday",
-          "opens": "10:00",
-          "closes": "19:00"
-        },
-        {
-          "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Tuesday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Wednesday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Thursday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Friday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Saturday",
-          "opens": "10:00",
-          "closes": "17:00"
+          "opens": "11:00",
+          "closes": "18:00"
         }
       ],
       "areaServed": [
@@ -160,7 +154,7 @@ The homepage carries the heaviest schema — full business entity, organization,
                 "@type": "Offer",
                 "itemOffered": {
                   "@type": "Service",
-                  "name": "Free Tattoo Consultation"
+                  "name": "Tattoo Consultation"
                 }
               }
             ]
@@ -168,7 +162,10 @@ The homepage carries the heaviest schema — full business entity, organization,
         ]
       },
       "sameAs": [
-        "https://www.instagram.com/studioaztattoo/",
+        "https://www.instagram.com/studioaz.us/",
+        "https://www.tiktok.com/@studio.az.tattoo",
+        "https://www.facebook.com/studioaz.us/",
+        "https://www.linkedin.com/company/studioazus",
         "https://www.google.com/maps/place/Studio+AZ+Tattoo/"
       ],
       "employee": [
@@ -195,7 +192,10 @@ The homepage carries the heaviest schema — full business entity, organization,
         "areaServed": "US"
       },
       "sameAs": [
-        "https://www.instagram.com/studioaztattoo/",
+        "https://www.instagram.com/studioaz.us/",
+        "https://www.tiktok.com/@studio.az.tattoo",
+        "https://www.facebook.com/studioaz.us/",
+        "https://www.linkedin.com/company/studioazus",
         "https://www.google.com/maps/place/Studio+AZ+Tattoo/"
       ]
     },
@@ -271,7 +271,7 @@ The homepage carries the heaviest schema — full business entity, organization,
       "offers": {
         "@type": "Offer",
         "priceCurrency": "USD",
-        "description": "Starting at $100. Final price depends on size, detail, and placement. Free consultation available.",
+        "description": "Starting at $100. Final price depends on size, detail, and placement. Consultation included with service after deposit is made.",
         "availability": "https://schema.org/InStock",
         "url": "https://tattooshopminneapolis.com/services"
       },
@@ -300,7 +300,7 @@ The homepage carries the heaviest schema — full business entity, organization,
     {
       "@type": "Service",
       "name": "Tattoo Consultations",
-      "description": "Free in-person or virtual consultations to discuss your tattoo idea, placement, sizing, and pricing. No obligation — just a conversation about your vision.",
+      "description": "In-person or virtual consultations to discuss your tattoo idea, placement, sizing, and pricing. Consultation included with service after deposit is made.",
       "provider": {
         "@id": "https://tattooshopminneapolis.com/#tattoo-parlor"
       },
@@ -312,7 +312,7 @@ The homepage carries the heaviest schema — full business entity, organization,
         "@type": "Offer",
         "priceCurrency": "USD",
         "price": "0",
-        "description": "Free consultation — no deposit required until you're ready to book.",
+        "description": "Consultation included with service after deposit is made.",
         "availability": "https://schema.org/InStock",
         "url": "https://tattooshopminneapolis.com/services"
       },
@@ -321,7 +321,7 @@ The homepage carries the heaviest schema — full business entity, organization,
     {
       "@type": "Service",
       "name": "Touch-Up Tattoos",
-      "description": "Touch-up service for tattoos that need color refreshing, line sharpening, or minor corrections. Available for tattoos done at Studio AZ and other shops.",
+      "description": "Touch-up service for tattoos that need color refreshing, line sharpening, or minor corrections. Assessment made 40 days after session — free touch-up in most cases if aftercare was followed.",
       "provider": {
         "@id": "https://tattooshopminneapolis.com/#tattoo-parlor"
       },
@@ -332,7 +332,7 @@ The homepage carries the heaviest schema — full business entity, organization,
       "offers": {
         "@type": "Offer",
         "priceCurrency": "USD",
-        "description": "Free touch-ups within 3 months for Studio AZ tattoos. Outside touch-ups starting at $50.",
+        "description": "Assessment made 40 days after session. Free touch-up in most cases if aftercare was followed. Outside touch-ups quoted during consultation.",
         "availability": "https://schema.org/InStock",
         "url": "https://tattooshopminneapolis.com/services"
       },
@@ -439,7 +439,7 @@ The homepage carries the heaviest schema — full business entity, organization,
       "@id": "https://tattooshopminneapolis.com/artists/joan#person",
       "name": "Joan Martinez",
       "jobTitle": "Tattoo Artist",
-      "description": "Joan Martinez is a tattoo artist at Studio AZ Tattoo in Minneapolis specializing in fine line, realism, and black and grey tattoos.",
+      "description": "Joan Martinez is a tattoo artist at Studio AZ Tattoo in Minneapolis specializing in fine line, realism, black and grey, and custom tattoos.",
       "url": "https://tattooshopminneapolis.com/artists/joan",
       "image": "https://tattooshopminneapolis.com/images/artists/joan-martinez.jpg",
       "worksFor": {
@@ -448,17 +448,18 @@ The homepage carries the heaviest schema — full business entity, organization,
       "knowsAbout": [
         "Fine Line Tattoos",
         "Realism Tattoos",
-        "Black and Grey Tattoos"
+        "Black and Grey Tattoos",
+        "Custom Tattoos"
       ],
-      "knowsLanguage": ["en", "es"],
+      "knowsLanguage": ["es", "en"],
       "sameAs": [
-        "https://www.instagram.com/joanmartineztattoo/"
+        "https://www.instagram.com/joan_martinez_tattoo/"
       ]
     },
     {
       "@type": "ImageGallery",
       "name": "Joan Martinez — Tattoo Portfolio",
-      "description": "Portfolio of fine line, realism, and black and grey tattoos by Joan Martinez at Studio AZ Tattoo, Minneapolis.",
+      "description": "Portfolio of fine line, realism, black and grey, and custom tattoos by Joan Martinez at Studio AZ Tattoo, Minneapolis.",
       "url": "https://tattooshopminneapolis.com/artists/joan",
       "creator": {
         "@id": "https://tattooshopminneapolis.com/artists/joan#person"
@@ -523,26 +524,27 @@ The homepage carries the heaviest schema — full business entity, organization,
       "@id": "https://tattooshopminneapolis.com/artists/andrew#person",
       "name": "Andrew Fernandez",
       "jobTitle": "Tattoo Artist",
-      "description": "Andrew Fernandez is a tattoo artist at Studio AZ Tattoo in Minneapolis specializing in small tattoos, first tattoos, and custom designs.",
+      "description": "Andrew Fernandez is a tattoo artist at Studio AZ Tattoo in Minneapolis specializing in realism, fine line, black and grey, and custom tattoos. Experienced tattoo convention artist.",
       "url": "https://tattooshopminneapolis.com/artists/andrew",
       "image": "https://tattooshopminneapolis.com/images/artists/andrew-fernandez.jpg",
       "worksFor": {
         "@id": "https://tattooshopminneapolis.com/#tattoo-parlor"
       },
       "knowsAbout": [
-        "Small Tattoos",
-        "First Tattoos",
-        "Custom Designs"
+        "Realism Tattoos",
+        "Fine Line Tattoos",
+        "Black and Grey Tattoos",
+        "Custom Tattoos"
       ],
-      "knowsLanguage": ["en", "es"],
+      "knowsLanguage": ["es", "en"],
       "sameAs": [
-        "https://www.instagram.com/andrewfernandeztattoo/"
+        "https://www.instagram.com/andrefernan_tattoo/"
       ]
     },
     {
       "@type": "ImageGallery",
       "name": "Andrew Fernandez — Tattoo Portfolio",
-      "description": "Portfolio of small tattoos, first tattoos, and custom designs by Andrew Fernandez at Studio AZ Tattoo, Minneapolis.",
+      "description": "Portfolio of realism, fine line, black and grey, and custom tattoos by Andrew Fernandez at Studio AZ Tattoo, Minneapolis. Tattoo convention experience.",
       "url": "https://tattooshopminneapolis.com/artists/andrew",
       "creator": {
         "@id": "https://tattooshopminneapolis.com/artists/andrew#person"
@@ -551,18 +553,18 @@ The homepage carries the heaviest schema — full business entity, organization,
         {
           "@type": "ImageObject",
           "name": "Minimalist Butterfly Tattoo by Andrew Fernandez",
-          "description": "Small minimalist butterfly tattoo on the wrist. Clean lines with delicate detail — ideal first tattoo.",
+          "description": "Fine line butterfly tattoo on the wrist by Andrew Fernandez. Clean lines with delicate detail.",
           "contentUrl": "https://tattooshopminneapolis.com/images/gallery/andrew/minimalist-butterfly.jpg",
           "thumbnailUrl": "https://tattooshopminneapolis.com/images/gallery/andrew/thumbs/minimalist-butterfly.jpg",
           "creator": {
             "@id": "https://tattooshopminneapolis.com/artists/andrew#person"
           },
-          "keywords": ["small tattoo", "butterfly tattoo", "wrist tattoo", "first tattoo", "Minneapolis tattoo"]
+          "keywords": ["fine line tattoo", "butterfly tattoo", "wrist tattoo", "realism tattoo", "Minneapolis tattoo"]
         }
         /*
           IMPLEMENTATION NOTE: Same template pattern as Joan's gallery.
           Duplicate for each portfolio image. Andrew's keywords should
-          emphasize "small tattoo", "first tattoo", "beginner-friendly"
+          emphasize "realism tattoo", "fine line tattoo", "black and grey"
           to match his specialization and target search queries.
         */
       ]
@@ -631,7 +633,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "creator": {
             "@id": "https://tattooshopminneapolis.com/artists/andrew#person"
           },
-          "keywords": ["floral tattoo", "wrist tattoo", "small tattoo", "fine line", "Minneapolis tattoo"]
+          "keywords": ["floral tattoo", "wrist tattoo", "fine line tattoo", "realism tattoo", "Minneapolis tattoo"]
         }
         /*
           IMPLEMENTATION NOTE: Add one ImageObject per gallery image.
@@ -824,7 +826,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "How much does a tattoo cost at Studio AZ?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Tattoo pricing depends on size, detail, placement, and time. Small tattoos start around $100. Medium tattoos typically range from $200-$500. Large or highly detailed pieces are quoted during a free consultation. We don't charge by the hour — you'll get a flat price before we start."
+            "text": "Tattoo pricing depends on size, detail, placement, and time. Small tattoos start around $100. Medium tattoos typically range from $200-$500. Large or highly detailed pieces are quoted during consultation. We don't charge by the hour — you'll get a flat price before we start. Deposit required to book: $50 for small/fine line, $100 for medium/large (fully refundable, applied toward final cost)."
           }
         },
         {
@@ -832,7 +834,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "Do you require a deposit to book a tattoo appointment?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes, we require a non-refundable deposit to secure your appointment. The deposit amount varies by project size and is applied toward the total cost of your tattoo. This protects both the artist's time spent designing your piece and your reserved time slot."
+            "text": "Yes, we require a deposit to secure your appointment — $50 for small/fine line tattoos, $100 for medium/large pieces. The deposit is fully refundable and applied toward the final cost of your tattoo. We have a 24-hour cancellation policy — cancellations with less than 24 hours notice forfeit the deposit."
           }
         },
         {
@@ -840,7 +842,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "Do you accept walk-ins?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes, we welcome walk-ins when our artists have availability. For the best experience, we recommend booking a consultation or appointment in advance, especially for larger or custom pieces. Walk-ins are ideal for smaller, simpler designs."
+            "text": "No, we do not accept walk-ins currently. All tattoos are by appointment only. Book a consultation or appointment through our website, by calling (612) 255-4439, or by DMing us on Instagram @studioaz.us."
           }
         },
         {
@@ -880,7 +882,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "What tattoo styles do your artists specialize in?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Joan Martinez specializes in fine line, realism, and black and grey tattoos. Andrew Fernandez specializes in small tattoos, first tattoos, and custom designs. Together we cover a wide range of styles including illustrative, geometric, lettering, floral, and portrait work."
+            "text": "Joan Martinez specializes in fine line, realism, black and grey, and custom tattoos. Andrew Fernandez specializes in realism, fine line, black and grey, and custom tattoos — he also brings tattoo convention experience. Together we cover a wide range of styles including illustrative, geometric, lettering, floral, and portrait work."
           }
         },
         {
@@ -888,7 +890,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "How do I book a consultation?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "You can book a free consultation through our website, by calling us at (612) 255-4439, or by sending us a DM on Instagram @studioaztattoo. During the consultation we'll discuss your design idea, placement, sizing, and pricing with no obligation to book."
+            "text": "You can book a consultation through our website, by calling us at (612) 255-4439, or by sending us a DM on Instagram @studioaz.us. A deposit is required to book — consultation is included with service after deposit is made. During the consultation we'll discuss your design idea, placement, sizing, and pricing."
           }
         },
         {
@@ -904,7 +906,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "Do you have Spanish-speaking tattoo artists?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes! Both of our artists — Joan Martinez and Andrew Fernandez — are fluent in English and Spanish. We're happy to conduct consultations and tattoo sessions entirely in Spanish. Hablamos espanol."
+            "text": "Yes! Both of our artists — Joan Martinez and Andrew Fernandez — speak Spanish as their primary language and are also fluent in English. We're happy to conduct consultations and tattoo sessions entirely in Spanish. Hablamos espanol."
           }
         },
         {
@@ -912,7 +914,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "Do you offer free touch-ups?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes, we offer free touch-ups within 3 months of your tattoo session for work done at Studio AZ. This covers any areas where ink didn't take evenly during the healing process. Touch-ups for tattoos from other shops start at $50."
+            "text": "We assess touch-up needs 40 days after your session. In most cases, touch-ups are free for Studio AZ tattoos if aftercare instructions were followed. This covers any areas where ink didn't take evenly during the healing process."
           }
         },
         {
@@ -920,7 +922,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "How does the custom tattoo design process work?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "After your consultation and deposit, your artist creates a custom design based on your ideas and reference images. You'll see the design before your appointment and can request revisions. On the day of your session, the artist places a stencil so you can approve the size and placement before any ink hits skin."
+            "text": "After your deposit is made, your artist schedules a consultation and creates a custom design based on your ideas and reference images. You'll see the design before your appointment and can request revisions. On the day of your session, the artist places a stencil so you can approve the size and placement before any ink hits skin."
           }
         },
         {
@@ -928,7 +930,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "How long does a tattoo appointment take?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Small tattoos typically take 1-2 hours including prep and stencil placement. Medium pieces run 2-4 hours. Large or highly detailed tattoos may require multiple sessions of 3-5 hours each. Your artist will give you a time estimate during your consultation."
+            "text": "Small tattoos typically take 2-3 hours including prep and stencil placement. Medium pieces run 3-7 hours. Large or highly detailed tattoos require 7+ hours across multiple sessions. Your artist will give you a time estimate during your consultation."
           }
         },
         {
@@ -944,7 +946,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "What forms of payment do you accept?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "We accept cash, all major credit cards, and debit cards. Deposits can be paid online via our secure payment link. Tips are appreciated and can be added to your card payment or given in cash."
+            "text": "We prefer Zelle, cash, and Venmo. Credit cards are also accepted. Deposits can be paid online via our secure payment link. We also offer payment plans for larger pieces. Tips are appreciated and can be added to your payment or given in cash."
           }
         },
         {
@@ -960,7 +962,7 @@ The homepage carries the heaviest schema — full business entity, organization,
           "name": "Do you do tattoos for people who have never been tattooed before?",
           "acceptedAnswer": {
             "@type": "Answer",
-            "text": "Yes, we love working with first-timers! Andrew Fernandez specializes in first tattoos and will walk you through the entire process. We'll help you choose a design, placement, and size that's right for your first piece. There's no judgment — everyone starts somewhere."
+            "text": "Yes, we love working with first-timers! Both of our artists will walk you through the entire process. We'll help you choose a design, placement, and size that's right for your first piece. There's no judgment — everyone starts somewhere. Appointment only — book through our website or DM us on Instagram @studioaz.us."
           }
         }
       ]
@@ -1022,43 +1024,40 @@ The Contact page intentionally duplicates the `TattooParlor` NAP from the homepa
       "openingHoursSpecification": [
         {
           "@type": "OpeningHoursSpecification",
-          "dayOfWeek": "Monday",
-          "opens": "10:00",
-          "closes": "19:00"
-        },
-        {
-          "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Tuesday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Wednesday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Thursday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Friday",
-          "opens": "10:00",
-          "closes": "19:00"
+          "opens": "11:00",
+          "closes": "18:00"
         },
         {
           "@type": "OpeningHoursSpecification",
           "dayOfWeek": "Saturday",
-          "opens": "10:00",
-          "closes": "17:00"
+          "opens": "11:00",
+          "closes": "18:00"
         }
       ],
       "sameAs": [
-        "https://www.instagram.com/studioaztattoo/",
+        "https://www.instagram.com/studioaz.us/",
+        "https://www.tiktok.com/@studio.az.tattoo",
+        "https://www.facebook.com/studioaz.us/",
+        "https://www.linkedin.com/company/studioazus",
         "https://www.google.com/maps/place/Studio+AZ+Tattoo/"
       ]
     },
