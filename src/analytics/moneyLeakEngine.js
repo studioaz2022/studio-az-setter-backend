@@ -886,8 +886,23 @@ async function computeFullScorecard(barberGhlId, locationId, tier = "growth") {
     capZoneMetrics.serviceMixEfficiency = utilizationSummary.serviceMixEfficiency;
   }
 
+  // Top-level insufficient data flag — true when BOTH rebook rate AND revenue are missing
+  // (brand new barber with no appointment history at all)
+  const hasNoAppointments = rebookAttempt.totalCompleted === 0 && moneyOnTheFloor.currentRebookRate == null;
+  const insufficientData = hasNoAppointments;
+  const insufficientDataMessage = insufficientData ? "Building your scorecard..." : null;
+
+  // Goal vs Pace message for barbers without transaction data
+  const hasNoTransactionData = weeklyGoal == null && moneyOnTheFloor.avgRevenuePerVisit == null;
+  const goalVsPaceMessage = hasNoTransactionData
+    ? "Insufficient transaction data — goal available once revenue tracking starts"
+    : null;
+
   return {
     tier,
+
+    insufficientData,
+    insufficientDataMessage,
 
     moneyOnTheFloor,
 
@@ -938,6 +953,7 @@ async function computeFullScorecard(barberGhlId, locationId, tier = "growth") {
       bookedAppointmentCount: currentPaceData.bookedAppointmentCount,
       tipMultiplier: currentPaceData.tipMultiplier,
       daysElapsed: currentPaceData.daysElapsed,
+      message: goalVsPaceMessage,
     },
 
     snapshotDate: new Date().toISOString().split("T")[0],
