@@ -1,131 +1,126 @@
-# V1 Homepage Update Prompt
+# V1 Homepage SEO Fix Prompt
 
 Copy everything below the line into a new Claude Code chat.
 
 ---
 
-We're updating the existing tattoo website homepage at `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website/`. This is running on localhost:3001. Do NOT touch the v2 site at `tattoo-website-v2/`.
+We're fixing SEO issues on the existing tattoo website homepage at `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website/`. This is running on localhost:3001.
+
+**IMPORTANT: Do NOT change any UI, layout, styling, fonts, or visual design. The UI is already finalized. Only fix the SEO structure and content.**
 
 Read all the files mentioned below before making any changes.
 
-## SEO Architecture (read these for context)
+## SEO Architecture (read these — they are the source of truth)
 
-- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/page-blueprint.md` — Section 1 (Home Page): the approved SEO spec
-- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/schema-markup.md` — Section 1: JSON-LD
-- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/internal-linking.md` — Homepage links
-- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/content-intake.md` — Business answers
+- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/page-blueprint.md` — Section 1 (Home Page): the approved SEO spec with exact H1, H2s, keywords, word count targets, authority links, internal links
+- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/schema-markup.md` — Section 1: JSON-LD spec
+- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/internal-linking.md` — Homepage link map with anchor text
+- `/Users/studioaz/AZ Setter Cursor/studio-az-setter-backend/src/seo/websites/tattoo/phase-2-seo-architecture/content-intake.md` — Business owner's real answers for content
 
-## Current v1 Files to Read
+## Current Files to Read
 
-Read these files to understand the current state:
 - `src/app/page.tsx` — Current homepage
-- `src/app/globals.css` — Current design system
-- `src/app/layout.tsx` — Current root layout
-- `src/components/HeroVideo.tsx` — Hero component
-- `src/components/Navigation.tsx` — Nav
-- `src/components/Footer.tsx` — Footer
-- `src/components/NeedleLine.tsx` — Decorative element
-- `src/components/RevealOnScroll.tsx` — Scroll animations
-- `src/components/Button.tsx` — Buttons
+- `src/components/HeroVideo.tsx` — Hero component (contains the H1)
 - `src/lib/config.ts` — Site config
 - `src/lib/artists.ts` — Artist data
 
-## V2 Files to Read (for sections we're pulling from)
+## SEO Fixes to Make
 
-Read these files from the v2 build to understand the sections we want to bring over:
-- `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website-v2/src/app/page.tsx` — V2 homepage (we need specific sections from here)
-- `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website-v2/src/app/globals.css` — V2 design system (for font references)
-- `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website-v2/src/app/layout.tsx` — V2 layout (for font setup)
-- `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website-v2/src/components/Footer.tsx` — V2 footer
-- `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website-v2/src/lib/seo.ts` — V2 seo config (if it exists)
+### 1. Fix the H1 (in HeroVideo.tsx)
 
-## Changes to Make
+- Current (WRONG): whatever the H1 currently says — check it
+- Correct: **"Minneapolis's Top-Rated Custom Tattoo Shop"**
+- The H1 MUST contain "tattoo shop" — it's the #1 keyword per page-blueprint.md
+- Only change the H1 text. Do not change any styling, layout, or other elements in HeroVideo.tsx.
 
-### 1. SECTION CHANGES ON HOMEPAGE (src/app/page.tsx)
+### 2. Add the missing "Why Studio AZ" H2 section
 
-**KEEP as-is (do NOT change these v1 sections):**
-- Hero section
-- "Not Your Average Tattoo Shop" intro section
-- Services Preview section
-- Artists Preview section
-- Portfolio Teaser section
-- Process "From Idea to Ink in 4 Steps" section
-- "The Studio — Our North Loop Minneapolis Studio" section (the 3 studio photos)
+The page-blueprint.md specifies this H2: **"Why Studio AZ Is Minneapolis's Top-Rated Tattoo Shop"**
 
-**REPLACE the Spanish section:**
-- Keep the v1 UI structure/layout (the `bg-bg-elevated border-l-4 border-purple-primary rounded-r-xl` card style)
-- But replace the copy with the v2 Spanish copy. The v2 version has a 2-column grid layout with "Nicaragua · México" label, and better copy: "Nuestros artistas, Joan Martínez y Andrew Fernández, hablan español como idioma principal..." and the second paragraph about "diseños 100% personalizados" with the Minneapolis Chamber of Commerce authority link. Use this copy inside the v1 card layout.
+Check the current homepage — there may be an intro section that partially covers this. Either:
+- **Option A:** Rename/restructure the existing intro section's H2 heading to match the blueprint text exactly, and add the missing stats (5.0 rating, 100% custom, bilingual, North Loop)
+- **Option B:** Add a new section after the hero with this H2
 
-**REPLACE "Visit Us in the North Loop" section:**
-- Use the v2 version of this section (the grid with address, hours, contact, map buttons, parking link, and the building entry description)
-- But REMOVE the two photos from the v2 version (storefront and front desk images) — those photos already appear in "The Studio" section above, so showing them again is redundant
-- Keep the v2's clean info-only layout for this section (address block, hours grid, phone/email, Google Maps + Apple Maps buttons, parking link, entry directions text)
+Include an authority link to [Wikipedia — Minneapolis](https://en.wikipedia.org/wiki/Minneapolis) in this section.
 
-**REPLACE the Final CTA section:**
-- Use the v2 version: "Ready to start your next piece?" with the `btn-primary` "Book a Consultation" and `btn-secondary` "View Our Portfolio" buttons
-- But ADD this text between the heading and the buttons: "Deposits start at $50 and are fully refundable. Every consultation is free with your deposit. No pressure, no commitment until you're ready."
+Match the existing visual style of surrounding sections. Do NOT introduce new design patterns.
 
-### 2. SEO FIXES ON HOMEPAGE
+### 3. Add the missing "What Our Clients Say" reviews section
 
-These are critical fixes. Read `page-blueprint.md` Section 1 carefully.
+The blueprint requires an H2: **"What Our Clients Say"**
 
-**Fix the H1:**
-- Current (WRONG): "Custom Tattoos in Minneapolis" (in HeroVideo.tsx)
-- Correct: "Minneapolis's Top-Rated Custom Tattoo Shop"
-- The H1 must contain "tattoo shop" — it's the #1 keyword
+Add a reviews/testimonials section with:
+- 2 Google review quotes (write realistic 5-star reviews mentioning the artists by name, the studio vibe, and specific styles)
+- Place it after the portfolio section and before the process section (or wherever it fits naturally in the current page flow)
+- Match the existing visual style — use the same spacing, typography classes, and component patterns already on the page
+- This is a social proof section — keep it clean and impactful
 
-**Add the missing "Why Studio AZ" H2 section:**
-- The page-blueprint.md specifies this as the first H2 after the hero: "Why Studio AZ Is Minneapolis's Top-Rated Tattoo Shop"
-- This section should cover: 5.0 Google rating, 100% custom work, bilingual artists, North Loop location
-- Include authority link to Wikipedia (Minneapolis)
-- The current "Not Your Average Tattoo Shop" section partially covers this, but it's missing the H2 tag with the keyword and missing specific stats
-- Either rename/restructure the existing intro section to match the blueprint, OR add a new section between the hero and the current intro. The H2 heading text must be exactly: "Why Studio AZ Is Minneapolis's Top-Rated Tattoo Shop"
+### 4. Increase word count to 1,500–2,000
 
-**Add the missing "What Our Clients Say" reviews section:**
-- The v2 has this section already (Section 5 in v2's page.tsx) — port it to v1
-- Use the v2's content (the two blockquote reviews with the decorative quote marks and star dots)
-- Style it to match v1's design system (v1 color tokens, v1 fonts)
-- Place it after the Portfolio Teaser section and before the Process section
-- This section targets the "What Our Clients Say" H2 from the blueprint
+Current content is approximately 800–900 words. The SEO blueprint requires 1,500–2,000.
 
-**Increase word count to 1,500-2,000 words:**
-- Current content is ~800-900 words. The SEO blueprint requires 1,500-2,000.
-- Add more descriptive content to existing sections to hit the target:
-  - Expand the "Why Studio AZ" section with more about the consultation process, the bilingual advantage, the North Loop neighborhood
-  - Add more detail to the services preview descriptions
-  - Add a brief paragraph to the Process section about what makes each step unique
-  - The reviews section itself adds ~150 words
-  - The Spanish section copy swap adds more words
-- Primary keyword "tattoo shop Minneapolis" should appear as an exact string 2-3x total on the page
-- Don't artificially stuff — write naturally but ensure the density targets from page-blueprint.md are met
+Expand existing sections with more descriptive content:
+- Add more detail to the "Why Studio AZ" section (consultation process, bilingual advantage, North Loop neighborhood context)
+- Expand service descriptions slightly
+- Add a brief paragraph to the process section about what makes each step unique at Studio AZ
+- The new reviews section adds ~150 words
 
-**Complete the authority links:**
-- The blueprint calls for 1+ authority link per H2 to DA/DR 80+ sites
-- Current: has Wikipedia (Minneapolis, North Loop, Tattoo) — good
-- Missing: Minnesota Department of Health (should be in Services section), Minneapolis Chamber of Commerce (should be in Spanish section)
-- Add these where the blueprint specifies
+**Keyword density targets (from page-blueprint.md):**
+- "tattoo shop Minneapolis" — exact string 2-3x on the page
+- "tattoo studio Minneapolis" — exact string 2-3x
+- "Minneapolis tattoo parlor" — exact string 2-3x
+- "tattoo shop near me" — exact string 1x
+- "best tattoo shop Minneapolis" — exact string 1x
 
-### 3. FOOTER FONT UPDATE
+Don't keyword-stuff. Write naturally but make sure these exact phrases appear the required number of times across the full page content.
 
-- Keep the v1 footer STRUCTURE and LAYOUT (4-column grid with Logo/NAP, Navigation, Hours, CTA/Social)
-- But switch the fonts to match v2's typeface system:
-  - V2 uses: **Geist Sans** (body), **Geist Mono** (mono/labels), **DM Serif Display** (serif headings)
-  - V1 currently uses: DM Sans, JetBrains Mono, Instrument Serif
-- This means updating `src/app/layout.tsx` to load the v2 fonts (Geist Sans, Geist Mono, DM Serif Display) instead of the v1 fonts
-- Update `src/app/globals.css` font variable references to match
-- This font change will affect the ENTIRE site (not just footer), which is fine — it's a global typography upgrade
+### 5. Complete authority links
 
-### 4. DO NOT CHANGE
+The blueprint calls for 1+ authority link per H2 section to DA/DR 80+ sites.
 
-- Any other pages (services, artists, gallery, etc.)
-- The hero video component (except fixing the H1 text)
-- Navigation component
-- NeedleLine, RevealOnScroll, Button components (unless font changes require minor class updates)
-- Schema markup structure (though make sure it's complete per schema-markup.md)
+Check what's currently there, and add any that are missing:
+- **Why Studio AZ section:** Wikipedia — Minneapolis
+- **Services section:** Minnesota Department of Health (https://www.health.state.mn.us/)
+- **Artists section:** Wikipedia — Tattoo (https://en.wikipedia.org/wiki/Tattoo)
+- **Spanish section:** Minneapolis Chamber of Commerce (https://www.minneapolischamber.org/)
+- **Visit Us section:** Wikipedia — North Loop, Minneapolis (https://en.wikipedia.org/wiki/North_Loop,_Minneapolis)
+
+### 6. Verify internal links match the spec
+
+Check that these internal links exist on the homepage with the correct anchor text (from internal-linking.md):
+
+| Link To | Anchor Text | Type |
+|---------|-------------|------|
+| /services | "custom tattoo services" | Target |
+| /artists | "meet our tattoo artists" | Target |
+| /gallery | "view our portfolio" | Generic |
+| /aftercare | "tattoo aftercare guide" | Target |
+| /faq | "frequently asked questions" | Generic |
+| /contact | "Studio AZ Tattoo" | Brand |
+| /parking | "parking and directions" | Generic |
+
+If any are missing or have wrong anchor text, fix them. Place them naturally in the content — not in a generic link block.
+
+### 7. Verify schema markup
+
+Compare the homepage's JSON-LD against schema-markup.md Section 1. Make sure:
+- TattooParlor entity has correct hours (Tue-Sat 11:00-18:00)
+- Organization sameAs includes all social profiles (Instagram, TikTok, Facebook, LinkedIn, Google Maps)
+- BreadcrumbList is present
+- AggregateRating is commented out (not enough reviews yet)
+
+## DO NOT CHANGE
+
+- Any visual design, styling, colors, fonts, or layout
+- Any UI components or their appearance
+- The hero video (except the H1 text)
+- Navigation or footer
+- Any other pages
 - robots.ts, sitemap.ts, llms.txt
 
 ## After Making Changes
 
-1. Make sure the dev server is running on port 3001
-2. Tell me to check localhost:3001 and describe what changed
-3. Wait for my feedback before making any further changes
+1. List every change you made with file and line references
+2. Tell me the approximate word count of the page after changes
+3. List every "tattoo shop Minneapolis" occurrence and confirm the count
+4. Wait for my feedback
