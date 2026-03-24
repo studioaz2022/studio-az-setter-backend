@@ -77,8 +77,8 @@ H2: Our Tattoo Services
   — Authority link: Minnesota Dept of Health (licensing)
 
 H2: Meet Our Artists
-  H3: Joan Martinez — Fine Line & Realism
-  H3: Andrew Fernandez — Realism & Custom Tattoos
+  H3: Joan Martinez — Self-Taught Artist from Nicaragua
+  H3: Andrew Fernandez — Convention-Circuit Artist from Mexico
   — Authority link: Wikipedia (Tattoo)
 
 H2: What Our Clients Say
@@ -242,8 +242,8 @@ Mid-to-late stage — visitor is evaluating services, possibly ready to commit. 
 *(58 chars — primary keyword front-loaded, artist names for brand searches)*
 
 ### Meta Description
-`Meet Studio AZ's tattoo artists. Joan Martinez — fine line & realism. Andrew Fernandez — realism & custom designs. View portfolios and book your artist.`
-*(155 chars — artist names + specialties for bolding, "book your artist" late-leaning CTA)*
+`Meet Studio AZ's tattoo artists — Joan Martinez and Andrew Fernandez. Bilingual artists specializing in realism, fine line, black & grey, and custom tattoos. View portfolios and book.`
+*(180 chars — artist names + shared styles for bolding, "book" CTA)*
 
 ### H1
 `Meet Our Minneapolis Tattoo Artists`
@@ -259,13 +259,17 @@ Mid-to-late stage — visitor is evaluating services, possibly ready to commit. 
 ### H2/H3 Outline
 
 ```
-H2: Joan Martinez — Fine Line, Realism & Black and Grey
-  — Bio preview, specialties, years of experience, portfolio thumbnail grid
+H2: Joan Martinez — From Nicaragua to Minneapolis
+  — Bio preview: self-taught artist, 5 years experience, detail-oriented perfectionist, bilingual (Spanish)
+  — Specialties: realism, fine line, black & grey, custom designs
+  — Portfolio thumbnail grid
   — CTA: "View Joan's Full Portfolio"
   — Authority link: Wikipedia (Tattoo artist)
 
-H2: Andrew Fernandez — Realism & Custom Tattoos
-  — Bio preview, specialties, convention experience, portfolio thumbnail grid
+H2: Andrew Fernandez — Convention-Circuit Artist from Mexico
+  — Bio preview: from Tlaxcala, Mexico, 4 years experience, international convention circuit (Milwaukee, Chicago, Baltimore, Minneapolis), bilingual (Spanish)
+  — Specialties: realism, fine line, black & grey, custom designs
+  — Portfolio thumbnail grid
   — CTA: "View Andrew's Full Portfolio"
   — No authority link needed — short bio section
 
@@ -279,8 +283,8 @@ H2: Not Sure Which Artist? We'll Help You Decide
 | Link To | Anchor Text | Type |
 |---------|-------------|------|
 | / | "tattoo shop Minneapolis" | Target |
-| /artists/joan | "Joan Martinez — fine line specialist" | Target |
-| /artists/andrew | "Andrew Fernandez — realism & custom tattoos" | Target |
+| /artists/joan | "Joan Martinez" | Brand |
+| /artists/andrew | "Andrew Fernandez" | Brand |
 | /services | "our tattoo services" | Target |
 | /gallery | "full portfolio" | Generic |
 
@@ -313,12 +317,12 @@ Mid-stage — visitor wants to evaluate artists before committing. CTAs should g
 **Spanish Content:** No
 
 ### Title Tag
-`Joan Martinez — Fine Line & Realism Tattoo Artist`
-*(51 chars — artist name front-loaded, style keywords for long-tail)*
+`Joan Martinez — Tattoo Artist Minneapolis | Studio AZ`
+*(55 chars — artist name front-loaded, city + brand for local signal)*
 
 ### Meta Description
-`Joan Martinez specializes in fine line, realism, and black & grey tattoos at Studio AZ in Minneapolis. View his portfolio and book a consultation today.`
-*(151 chars — all style keywords for bolding, "book a consultation" late-stage CTA)*
+`Joan Martinez — self-taught tattoo artist from Nicaragua specializing in realism, fine line, black & grey, and custom tattoos at Studio AZ Minneapolis. View portfolio and book.`
+*(172 chars — background + all style keywords for bolding, "book" late-stage CTA)*
 
 ### H1
 `Joan Martinez — Tattoo Artist at Studio AZ Minneapolis`
@@ -337,14 +341,16 @@ Mid-stage — visitor wants to evaluate artists before committing. CTAs should g
 
 ```
 H2: About Joan
-  — Background, training, artistic influences, years of experience
+  — Self-taught artist originally from Nicaragua, 5 years experience
+  — Detail-oriented perfectionist, bilingual (Spanish)
   — Authority link: Wikipedia — Tattoo
 
 H2: Joan's Specialties
+  H3: Realism & Portraits
   H3: Fine Line Tattoos
-  H3: Realism & Portrait Work
   H3: Black and Grey
-  — What makes his approach distinct in each style
+  H3: Custom Designs
+  — All styles listed equally — what makes his approach distinct in each
   — Authority link: AAD.org (tattoo and skin health)
 
 H2: Portfolio
@@ -387,7 +393,7 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 ### Content Hook
 
 **Style:** Knowledge bomb
-**First paragraph approach:** Lead with Joan's defining specialty and a specific detail — "Joan Martinez is a fine line and realism tattoo artist at Studio AZ in Minneapolis's North Loop. His work emphasizes precision linework and photorealistic detail, with a portfolio spanning portraits, botanicals, and intricate black and grey compositions."
+**First paragraph approach:** Lead with Joan's origin story and artistic identity — "Joan Martinez is a self-taught tattoo artist from Nicaragua, now based at Studio AZ in Minneapolis's North Loop. With 5 years of experience and a detail-oriented approach, Joan specializes in realism, fine line, black and grey, and custom tattoo designs — with a portfolio spanning portraits, botanicals, and intricate compositions."
 
 ---
 
@@ -399,12 +405,12 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 **Spanish Content:** No
 
 ### Title Tag
-`Andrew Fernandez — Realism & Custom Tattoo Artist`
-*(51 chars — name front-loaded, targets realism and custom long-tails)*
+`Andrew Fernandez — Tattoo Artist Minneapolis | Studio AZ`
+*(58 chars — name front-loaded, city + brand for local signal)*
 
 ### Meta Description
-`Andrew Fernandez at Studio AZ Minneapolis — realism, fine line, and custom tattoo artist with international convention experience. See his work and book a consultation.`
-*(165 chars — keywords for bolding, convention experience signals authority)*
+`Andrew Fernandez — convention-circuit tattoo artist from Mexico specializing in realism, fine line, black & grey, and custom tattoos at Studio AZ Minneapolis. View portfolio and book.`
+*(179 chars — background + all style keywords for bolding, "book" late-stage CTA)*
 
 ### H1
 `Andrew Fernandez — Tattoo Artist at Studio AZ Minneapolis`
@@ -415,22 +421,26 @@ Late-stage — visitor has chosen Joan or is very close to deciding. CTA should 
 | Type | Keyword | Target Density |
 |------|---------|---------------|
 | Primary | Andrew Fernandez tattoo artist | Exact 2-3x |
+| Secondary | fine line tattoo Minneapolis | Exact 2-3x |
 | Secondary | realism tattoo Minneapolis | Exact 2-3x |
+| Secondary | black and grey tattoo Minneapolis | Exact 1x |
 | Secondary | custom tattoo Minneapolis | Exact 2-3x |
 
 ### H2/H3 Outline
 
 ```
 H2: About Andrew
-  — Background, Latin American artistry heritage, convention circuit experience
-  — Featured at Milwaukee, Chicago, Baltimore, Minneapolis tattoo festivals
+  — Originally from Tlaxcala, Mexico, 4 years experience
+  — International convention circuit: Milwaukee, Chicago, Baltimore, Minneapolis tattoo festivals
+  — Bilingual (Spanish), Latin American artistry heritage
   — Authority link: Wikipedia — Tattoo
 
 H2: Andrew's Specialties
-  H3: Realism & Portrait Work
-  H3: Custom Design Process
-  — Fine line, black and grey, realism — versatile across styles
-  — Convention experience across major U.S. tattoo festivals
+  H3: Realism & Portraits
+  H3: Fine Line Tattoos
+  H3: Black and Grey
+  H3: Custom Designs
+  — All styles listed equally — what makes his approach distinct in each
   — Authority link: AAD.org (tattoo and skin health)
 
 H2: Portfolio
@@ -473,7 +483,7 @@ Late-stage — visitor has chosen Andrew or is very close to deciding. CTA shoul
 ### Content Hook
 
 **Style:** Knowledge bomb
-**First paragraph approach:** Lead with Andrew's convention credentials and artistic range — "Andrew Fernandez is a realism and custom tattoo artist at Studio AZ in Minneapolis's North Loop. With international convention experience — including Milwaukee, Chicago, Baltimore, and Minneapolis tattoo festivals — Andrew brings a Latin American artistry heritage and versatile skill set spanning realism, fine line, and black and grey work."
+**First paragraph approach:** Lead with Andrew's origin story and convention credentials — "Andrew Fernandez is a tattoo artist from Tlaxcala, Mexico, now based at Studio AZ in Minneapolis's North Loop. With international convention experience — including Milwaukee, Chicago, Baltimore, and Minneapolis tattoo festivals — Andrew specializes in realism, fine line, black and grey, and custom tattoo designs."
 
 ---
 
@@ -994,8 +1004,8 @@ Late-stage — visitor is ready to reach out. CTAs should be direct and remove a
 | Home | Tattoo Shop Minneapolis \| Studio AZ Tattoo — North Loop | 56 |
 | Services | Custom Tattoo Services Minneapolis \| Free Consultation | 54 |
 | Artists | Tattoo Artists Minneapolis \| Joan Martinez & Andrew Fernandez | 58 |
-| Joan | Joan Martinez — Fine Line & Realism Tattoo Artist | 51 |
-| Andrew | Andrew Fernandez — Realism & Custom Tattoo Artist | 51 |
+| Joan | Joan Martinez — Tattoo Artist Minneapolis \| Studio AZ | 55 |
+| Andrew | Andrew Fernandez — Tattoo Artist Minneapolis \| Studio AZ | 58 |
 | Gallery | Minneapolis Tattoo Portfolio \| Studio AZ Custom Designs | 55 |
 | Aftercare | Tattoo Aftercare Guide \| Healing Tips from Studio AZ | 53 |
 | Parking | Parking & Directions \| Studio AZ Tattoo — North Loop | 53 |
