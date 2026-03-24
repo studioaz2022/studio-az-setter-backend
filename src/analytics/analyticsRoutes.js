@@ -536,19 +536,24 @@ router.get("/:barberGhlId/analytics/scorecard", async (req, res) => {
 
     console.log(`[Analytics] Scorecard for barber ${barberGhlId}`);
 
-    // Read barber's analytics tier (default 'growth')
-    let tier = "growth";
-    try {
-      const { data: settings } = await supabase
-        .from("barber_analytics_settings")
-        .select("analytics_tier")
-        .eq("barber_ghl_id", barberGhlId)
-        .single();
-      if (settings?.analytics_tier) {
-        tier = settings.analytics_tier;
+    // Read barber's analytics tier — prefer query param (client knows the freshest value
+    // after an optimistic update), fall back to DB, then default 'growth'.
+    let tier = req.query.tier || null;
+    if (!tier || !["growth", "stable"].includes(tier)) {
+      try {
+        const { data: settings } = await supabase
+          .from("barber_analytics_settings")
+          .select("analytics_tier")
+          .eq("barber_ghl_id", barberGhlId)
+          .single();
+        if (settings?.analytics_tier) {
+          tier = settings.analytics_tier;
+        } else {
+          tier = "growth";
+        }
+      } catch (e) {
+        tier = "growth";
       }
-    } catch (e) {
-      // Table may not exist yet or no row — use default
     }
 
     const scorecard = await computeFullScorecard(barberGhlId, locationId, tier);
