@@ -6747,30 +6747,36 @@ function createApp() {
     submitConsentForm,
     getConsentFormStatus,
     getConsentFormStatusBatch,
+    sendDayOfConsentReminders,
   } = require("../consentForm/consentFormService");
 
   // Send consent form SMS to a contact (called from iOS app)
+  // Accepts either contactId (existing) or newContact { firstName, lastName, phone } (new)
   app.post("/api/consent-form/send", async (req, res) => {
     try {
       const {
         contactId,
+        newContact,
         quotedPrice,
         numberOfSessions,
         assignedTechnician,
+        technicianLicense,
         procedureDate,
         tattooPlacement,
         appointmentId,
       } = req.body;
 
-      if (!contactId) {
-        return res.status(400).json({ success: false, error: "contactId is required" });
+      if (!contactId && !newContact) {
+        return res.status(400).json({ success: false, error: "contactId or newContact is required" });
       }
 
       const result = await sendConsentForm({
         contactId,
+        newContact,
         quotedPrice,
         numberOfSessions,
         assignedTechnician,
+        technicianLicense,
         procedureDate,
         tattooPlacement,
         appointmentId,
@@ -6849,6 +6855,17 @@ function createApp() {
       res.json(result);
     } catch (err) {
       console.error("❌ POST /api/consent-form/status/batch error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Send day-of consent form reminders (cron or manual trigger)
+  app.post("/api/consent-form/send-day-of-reminders", async (req, res) => {
+    try {
+      const result = await sendDayOfConsentReminders();
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/send-day-of-reminders error:", err);
       res.status(500).json({ success: false, error: err.message });
     }
   });

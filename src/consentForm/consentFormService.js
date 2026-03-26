@@ -5,6 +5,7 @@ const crypto = require("crypto");
 const { supabase } = require("../clients/supabaseClient");
 const {
   getContact,
+  createContact,
   updateContact,
   sendConversationMessage,
   uploadFilesToTattooCustomField,
@@ -13,6 +14,13 @@ const { GHL_LOCATION_ID } = require("../config/constants");
 
 const CONSENT_FORM_BASE_URL =
   process.env.CONSENT_FORM_URL || "https://consent.studioaz.us";
+
+// Artist name → MN tattoo technician license number mapping
+const ARTIST_LICENSE_MAP = {
+  joan: "3110164",
+  andrew: "319777",
+  lionel: "317960",
+};
 
 // GHL custom field IDs for consent form fields
 const GHL_FIELD_IDS = {
@@ -37,6 +45,16 @@ const GHL_FIELD_IDS = {
 };
 
 /**
+ * Look up technician license number by artist name (case-insensitive).
+ * Returns empty string if not found.
+ */
+function lookupLicense(artistName) {
+  if (!artistName) return "";
+  const firstName = artistName.split(" ")[0].toLowerCase();
+  return ARTIST_LICENSE_MAP[firstName] || "";
+}
+
+/**
  * Generate a secure, short-lived token for a consent form link.
  * Returns a random hex string stored in the consent_forms row.
  */
@@ -47,12 +65,15 @@ function generateFormToken() {
 /**
  * Send a consent form to a contact.
  * Creates a Supabase row, generates a token, sends SMS via GHL.
+ * If newContact is provided, creates the GHL contact first (atomic).
  *
  * @param {object} params
- * @param {string} params.contactId - GHL contact ID
+ * @param {string} [params.contactId] - GHL contact ID (for existing contacts)
+ * @param {object} [params.newContact] - New contact info: { firstName, lastName, phone }
  * @param {number} params.quotedPrice - Tattoo quote (from artist confirmation)
  * @param {number} params.numberOfSessions - Number of sessions (from artist confirmation)
  * @param {string} params.assignedTechnician - Artist name
+ * @param {string} [params.technicianLicense] - License # (auto-populated if omitted)
  * @param {string} params.procedureDate - ISO date string
  * @param {string} params.tattooPlacement - Tattoo placement description
  * @param {string} [params.appointmentId] - GHL appointment ID (for stable linking)
@@ -60,23 +81,82 @@ function generateFormToken() {
  */
 async function sendConsentForm({
   contactId,
+  newContact,
   quotedPrice,
   numberOfSessions,
   assignedTechnician,
+  technicianLicense,
   procedureDate,
   tattooPlacement,
   appointmentId = null,
 }) {
   try {
-    // 1. Fetch contact data from GHL for pre-fill fields
-    const contact = await getContact(contactId);
-    if (!contact) {
-      return { success: false, error: "Contact not found in GHL" };
+    // Auto-populate technician license from artist name if not provided
+    const resolvedLicense = technicianLicense || lookupLicense(assignedTechnician);
+
+    let contact;
+    let resolvedContactId = contactId;
+
+    // 0. If newContact provided, create the GHL contact first (atomic)
+    if (newContact && !contactId) {
+      const { firstName, lastName, phone } = newContact;
+      if (!phone) {
+        return { success: false, error: "New contact must have a phone number" };
+      }
+      if (!firstName) {
+        return { success: false, error: "New contact must have a first name" };
+      }
+
+      console.log(`📝 Creating new GHL contact: ${firstName} ${lastName || ""} (${phone})`);
+
+      const createBody = {
+        firstName: firstName.trim(),
+        lastName: (lastName || "").trim(),
+        phone,
+        locationId: GHL_LOCATION_ID,
+        source: "Consent Form — Studio AZ App",
+      };
+
+      // Set assigned artist + quote on the new contact
+      const customFields = [];
+      if (assignedTechnician) {
+        customFields.push({ id: GHL_FIELD_IDS.assignedTechnician, field_value: assignedTechnician });
+      }
+      if (resolvedLicense) {
+        customFields.push({ id: GHL_FIELD_IDS.technicianLicense, field_value: resolvedLicense });
+      }
+      if (quotedPrice) {
+        customFields.push({ id: GHL_FIELD_IDS.finalPrice, field_value: String(quotedPrice) });
+      }
+      if (customFields.length > 0) {
+        createBody.customFields = customFields;
+      }
+
+      try {
+        const createResult = await createContact(createBody);
+        const newContactData = createResult?.data?.contact || createResult?.data;
+        if (!newContactData?.id) {
+          console.error("❌ GHL createContact returned no ID:", JSON.stringify(createResult?.data));
+          return { success: false, error: "Failed to create contact in GHL — no contact ID returned" };
+        }
+        resolvedContactId = newContactData.id;
+        contact = newContactData;
+        console.log(`✅ Created GHL contact ${resolvedContactId} for ${firstName}`);
+      } catch (createErr) {
+        console.error("❌ Failed to create GHL contact:", createErr.message);
+        return { success: false, error: `Failed to create contact: ${createErr.message}` };
+      }
+    } else {
+      // 1. Fetch existing contact data from GHL for pre-fill fields
+      contact = await getContact(resolvedContactId);
+      if (!contact) {
+        return { success: false, error: "Contact not found in GHL" };
+      }
     }
 
     const firstName =
       contact.firstName || contact.name?.split(" ")[0] || "there";
-    const phone = contact.phone;
+    const phone = contact.phone || newContact?.phone;
 
     if (!phone) {
       return { success: false, error: "Contact has no phone number — cannot send SMS" };
@@ -90,15 +170,15 @@ async function sendConsentForm({
       .from("consent_forms")
       .upsert(
         {
-          contact_id: contactId,
+          contact_id: resolvedContactId,
           appointment_id: appointmentId,
-          first_name: contact.firstName || null,
-          last_name: contact.lastName || null,
-          phone: contact.phone || null,
+          first_name: contact.firstName || newContact?.firstName || null,
+          last_name: contact.lastName || newContact?.lastName || null,
+          phone: phone || null,
           email: contact.email || null,
           date_of_procedure: procedureDate || null,
           assigned_technician: assignedTechnician || null,
-          technician_license: contact.customField?.assigned_technician_license_ || null,
+          technician_license: resolvedLicense || contact.customField?.assigned_technician_license_ || null,
           quoted_price: quotedPrice || null,
           number_of_sessions: numberOfSessions || null,
           location_of_tattoo: contact.customField?.location_of_tattoo || null,
@@ -131,7 +211,7 @@ async function sendConsentForm({
     const smsBody = `Hi ${firstName}, please complete your consent form before your appointment on ${dateDisplay}${assignedTechnician ? ` with ${assignedTechnician}` : ""}: ${formUrl}`;
 
     await sendConversationMessage({
-      contactId,
+      contactId: resolvedContactId,
       body: smsBody,
       channelContext: { hasPhone: true, phone },
     });
@@ -139,7 +219,7 @@ async function sendConsentForm({
     // 6. Update GHL consent form status
     if (GHL_FIELD_IDS.consentFormStatus) {
       try {
-        await updateContact(contactId, {
+        await updateContact(resolvedContactId, {
           customFields: [
             { id: GHL_FIELD_IDS.consentFormStatus, field_value: "sent" },
             {
@@ -154,7 +234,7 @@ async function sendConsentForm({
       }
     }
 
-    console.log(`✅ Consent form sent to ${firstName} (${contactId}), token: ${token}`);
+    console.log(`✅ Consent form sent to ${firstName} (${resolvedContactId}), token: ${token}`);
 
     return {
       success: true,
@@ -190,6 +270,17 @@ async function getConsentFormByToken(token) {
       return { success: false, error: "This consent form has already been submitted" };
     }
 
+    // Fetch language preference from GHL contact (for Spanish auto-detection)
+    let languagePreference = null;
+    try {
+      const contact = await getContact(data.contact_id);
+      if (contact?.customField?.language_preference) {
+        languagePreference = contact.customField.language_preference;
+      }
+    } catch (langErr) {
+      console.warn("⚠️ Could not fetch language preference:", langErr.message);
+    }
+
     // Return pre-filled data (exclude internal fields)
     return {
       success: true,
@@ -206,6 +297,7 @@ async function getConsentFormByToken(token) {
         numberOfSessions: data.number_of_sessions,
         locationOfTattoo: data.location_of_tattoo,
         tattooPlacement: data.tattoo_placement,
+        languagePreference,
         // Don't expose: contact_id, appointment_id, token, internal status
       },
     };
@@ -461,11 +553,91 @@ async function getConsentFormStatusBatch(contactIds) {
   }
 }
 
+/**
+ * Send day-of consent form reminders to clients with upcoming tattoo appointments
+ * who haven't completed their consent forms.
+ *
+ * Queries Supabase for consent forms where:
+ * - status ≠ "completed"
+ * - date_of_procedure = today (Central time, America/Chicago)
+ * - day_of_reminder_sent = false (avoid duplicate sends)
+ *
+ * @returns {object} { success, sent: number, errors: number }
+ */
+async function sendDayOfConsentReminders() {
+  try {
+    // Get today's date in Central time (America/Chicago)
+    const centralNow = new Date(
+      new Date().toLocaleString("en-US", { timeZone: "America/Chicago" })
+    );
+    const todayStr = centralNow.toISOString().split("T")[0]; // YYYY-MM-DD
+
+    console.log(`🔔 Checking day-of consent reminders for ${todayStr} (Central)`);
+
+    // Find consent forms for today that aren't completed and haven't been reminded
+    const { data: pendingForms, error } = await supabase
+      .from("consent_forms")
+      .select("id, contact_id, first_name, phone, token, assigned_technician")
+      .eq("date_of_procedure", todayStr)
+      .neq("status", "completed")
+      .eq("day_of_reminder_sent", false);
+
+    if (error) {
+      console.error("❌ Error querying pending consent forms:", error);
+      return { success: false, error: error.message };
+    }
+
+    if (!pendingForms || pendingForms.length === 0) {
+      console.log("✅ No day-of consent reminders to send");
+      return { success: true, sent: 0, errors: 0 };
+    }
+
+    console.log(`📋 Found ${pendingForms.length} pending consent forms for today`);
+
+    let sent = 0;
+    let errors = 0;
+
+    for (const form of pendingForms) {
+      try {
+        const firstName = form.first_name || "there";
+        const formUrl = `${CONSENT_FORM_BASE_URL}/f/${form.token}`;
+
+        const smsBody = `Hi ${firstName}, your tattoo appointment is today! Please complete your consent form before arriving: ${formUrl}`;
+
+        await sendConversationMessage({
+          contactId: form.contact_id,
+          body: smsBody,
+          channelContext: { hasPhone: true, phone: form.phone },
+        });
+
+        // Mark reminder as sent
+        await supabase
+          .from("consent_forms")
+          .update({ day_of_reminder_sent: true })
+          .eq("id", form.id);
+
+        console.log(`✅ Day-of reminder sent to ${firstName} (${form.contact_id})`);
+        sent++;
+      } catch (sendErr) {
+        console.error(`❌ Failed to send day-of reminder for ${form.contact_id}:`, sendErr.message);
+        errors++;
+      }
+    }
+
+    console.log(`🔔 Day-of reminders complete: ${sent} sent, ${errors} errors`);
+    return { success: true, sent, errors };
+  } catch (err) {
+    console.error("❌ Error sending day-of consent reminders:", err);
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   sendConsentForm,
   getConsentFormByToken,
   submitConsentForm,
   getConsentFormStatus,
   getConsentFormStatusBatch,
+  sendDayOfConsentReminders,
   GHL_FIELD_IDS,
 };
