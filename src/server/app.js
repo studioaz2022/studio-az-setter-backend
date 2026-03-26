@@ -452,6 +452,7 @@ function createApp() {
         'https://app.onthebusinesscrm.com', // GHL custom domain
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
+        'https://consent.studioaz.us', // Consent form web app
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:8080',
@@ -6738,6 +6739,113 @@ function createApp() {
 
   // ═══ SEO TOOLKIT ROUTES ═══
   app.use("/api/seo", seoRoutes);
+
+  // ═══ CONSENT FORM ROUTES ═══
+  const {
+    sendConsentForm,
+    getConsentFormByToken,
+    submitConsentForm,
+    getConsentFormStatus,
+    getConsentFormStatusBatch,
+  } = require("../consentForm/consentFormService");
+
+  // Send consent form SMS to a contact (called from iOS app)
+  app.post("/api/consent-form/send", async (req, res) => {
+    try {
+      const {
+        contactId,
+        quotedPrice,
+        numberOfSessions,
+        assignedTechnician,
+        procedureDate,
+        tattooPlacement,
+        appointmentId,
+      } = req.body;
+
+      if (!contactId) {
+        return res.status(400).json({ success: false, error: "contactId is required" });
+      }
+
+      const result = await sendConsentForm({
+        contactId,
+        quotedPrice,
+        numberOfSessions,
+        assignedTechnician,
+        procedureDate,
+        tattooPlacement,
+        appointmentId,
+      });
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/send error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get pre-filled consent form data by token (called from web form)
+  app.get("/api/consent-form/:token", async (req, res) => {
+    try {
+      const result = await getConsentFormByToken(req.params.token);
+
+      if (!result.success) {
+        return res.status(404).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ GET /api/consent-form/:token error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Submit completed consent form (called from web form)
+  app.post("/api/consent-form/:token/submit", async (req, res) => {
+    try {
+      const result = await submitConsentForm(req.params.token, req.body);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/:token/submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get consent form status for a single contact (called from iOS app)
+  app.get("/api/consent-form/status/:contactId", async (req, res) => {
+    try {
+      const result = await getConsentFormStatus(req.params.contactId);
+      res.json(result);
+    } catch (err) {
+      console.error("❌ GET /api/consent-form/status/:contactId error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Batch get consent form statuses (called from iOS calendar day view)
+  app.post("/api/consent-form/status/batch", async (req, res) => {
+    try {
+      const { contactIds } = req.body;
+
+      if (!Array.isArray(contactIds)) {
+        return res.status(400).json({ success: false, error: "contactIds array is required" });
+      }
+
+      const result = await getConsentFormStatusBatch(contactIds);
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/status/batch error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();
