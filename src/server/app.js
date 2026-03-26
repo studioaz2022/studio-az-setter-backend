@@ -6806,7 +6806,13 @@ function createApp() {
   // Submit completed consent form (called from web form)
   app.post("/api/consent-form/:token/submit", async (req, res) => {
     try {
-      const result = await submitConsentForm(req.params.token, req.body);
+      // Capture e-signature evidence from request
+      const requestMeta = {
+        ip: req.headers["x-forwarded-for"]?.split(",")[0]?.trim() || req.socket?.remoteAddress || null,
+        userAgent: req.headers["user-agent"] || null,
+      };
+
+      const result = await submitConsentForm(req.params.token, req.body, requestMeta);
 
       if (!result.success) {
         return res.status(400).json(result);

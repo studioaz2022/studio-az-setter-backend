@@ -19,6 +19,10 @@ const GHL_FIELD_IDS = {
   consentFormStatus: "t6ky77s281oHFEJepml2",
   consentFormSentAt: "fSPJFS6t0B2mER1k6v4U",
   consentFormCompletedAt: "xr7j0PrbBde5WXyQRAgn",
+  consentSignedAt: "fGEVZ3rksFpFFJJUA9nt",
+  consentSignerIp: "r1M2tnNjzod58OGjxgQQ",
+  consentSignerDevice: "3RcDtX7gLf1K9QzbhbYI",
+  consentLegalTextHash: "yzcr4kgEO6xWp2GRhBgm",
   medicalHistory: "n9fWT15VGRpi3XHQeHKH",
   medicalHistoryDescription: "nmCsftTxJGoZ3MN3lbvk",
   emergencyContact: "QLNaHO4A0DZ36Z0WEEIz",
@@ -214,12 +218,16 @@ async function getConsentFormByToken(token) {
 /**
  * Submit a completed consent form.
  * Writes to Supabase, uploads ID photo to GHL, syncs fields to GHL contact.
+ * Captures e-signature evidence package (IP, user agent, legal text hash, timestamp).
  *
  * @param {string} token - Form token
  * @param {object} submission - Client-submitted data
+ * @param {object} [requestMeta] - Request metadata for e-signature evidence
+ * @param {string} [requestMeta.ip] - Client IP address
+ * @param {string} [requestMeta.userAgent] - Client user agent string
  * @returns {object} { success, error }
  */
-async function submitConsentForm(token, submission) {
+async function submitConsentForm(token, submission, requestMeta = {}) {
   try {
     // 1. Look up the consent form by token
     const { data: form, error: lookupError } = await supabase
@@ -260,12 +268,17 @@ async function submitConsentForm(token, submission) {
       }
     }
 
-    // 3. Write full record to Supabase
+    // 3. Generate legal text hash for tamper-proof audit trail
+    const legalTextHash = submission.legalTextHash || null;
+
+    // 4. Write full record to Supabase (including e-signature evidence package)
     const now = new Date().toISOString();
     const { error: updateError } = await supabase
       .from("consent_forms")
       .update({
+        // Client-entered fields
         date_of_birth: submission.dateOfBirth || null,
+        email: submission.email || form.email || null,
         emergency_contact_name: submission.emergencyContactName || null,
         emergency_contact_phone: submission.emergencyContactPhone || null,
         address: submission.address || null,
@@ -277,6 +290,15 @@ async function submitConsentForm(token, submission) {
         id_photo_url: idPhotoUrl || submission.idPhotoFallbackUrl || null,
         consent_checkbox: submission.consentCheckbox === true,
         signature_data: submission.signatureData || null,
+        // Backfill optional fields if artist left them empty
+        date_of_procedure: submission.dateOfProcedure || form.date_of_procedure || null,
+        tattoo_placement: submission.tattooPlacement || form.tattoo_placement || null,
+        // E-signature evidence package
+        signed_at: now,
+        signer_ip: requestMeta.ip || null,
+        signer_user_agent: requestMeta.userAgent || null,
+        legal_text_hash: legalTextHash,
+        // Status
         status: "completed",
         completed_at: now,
       })
@@ -296,7 +318,7 @@ async function submitConsentForm(token, submission) {
         { id: GHL_FIELD_IDS.consentCheckbox, field_value: submission.consentCheckbox ? "Yes" : "No" },
       ];
 
-      // Only sync signature if GHL accepts base64 writes (needs verification — see plan issue #7)
+      // Signature — verified 2026-03-26 that GHL accepts base64 data URI writes
       if (submission.signatureData && GHL_FIELD_IDS.signature) {
         customFields.push({
           id: GHL_FIELD_IDS.signature,
@@ -305,21 +327,32 @@ async function submitConsentForm(token, submission) {
       }
 
       // Consent form status fields
-      if (GHL_FIELD_IDS.consentFormStatus) {
-        customFields.push(
-          { id: GHL_FIELD_IDS.consentFormStatus, field_value: "completed" },
-          { id: GHL_FIELD_IDS.consentFormCompletedAt, field_value: now }
-        );
-      }
+      customFields.push(
+        { id: GHL_FIELD_IDS.consentFormStatus, field_value: "completed" },
+        { id: GHL_FIELD_IDS.consentFormCompletedAt, field_value: now }
+      );
 
-      await updateContact(contactId, {
-        dateOfBirth: submission.dateOfBirth || undefined,
-        address1: submission.address || undefined,
-        city: submission.city || undefined,
-        state: submission.state || undefined,
-        country: submission.country || undefined,
+      // E-signature audit trail backup to GHL
+      customFields.push(
+        { id: GHL_FIELD_IDS.consentSignedAt, field_value: now },
+        { id: GHL_FIELD_IDS.consentSignerIp, field_value: requestMeta.ip || "" },
+        { id: GHL_FIELD_IDS.consentSignerDevice, field_value: requestMeta.userAgent || "" },
+        { id: GHL_FIELD_IDS.consentLegalTextHash, field_value: legalTextHash || "" }
+      );
+
+      const contactUpdate = {
         customFields,
-      });
+      };
+
+      // Backfill standard fields — only update if client provided a value
+      if (submission.dateOfBirth) contactUpdate.dateOfBirth = submission.dateOfBirth;
+      if (submission.address) contactUpdate.address1 = submission.address;
+      if (submission.city) contactUpdate.city = submission.city;
+      if (submission.state) contactUpdate.state = submission.state;
+      if (submission.country) contactUpdate.country = submission.country;
+      if (submission.email) contactUpdate.email = submission.email;
+
+      await updateContact(contactId, contactUpdate);
 
       console.log(`✅ GHL contact ${contactId} synced with consent form data`);
     } catch (ghlErr) {
