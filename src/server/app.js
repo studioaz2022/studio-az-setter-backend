@@ -6870,6 +6870,10 @@ function createApp() {
     }
   });
 
+  // ═══ CONSENT FORM DAY-OF REMINDER CRON ═══
+  const { startConsentReminderCron } = require("../consentForm/consentReminderCron");
+  startConsentReminderCron();
+
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();
 
