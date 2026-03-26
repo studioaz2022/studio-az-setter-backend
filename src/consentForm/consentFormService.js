@@ -16,9 +16,9 @@ const CONSENT_FORM_BASE_URL =
 
 // GHL custom field IDs for consent form fields
 const GHL_FIELD_IDS = {
-  consentFormStatus: null,       // TODO: create in GHL, add ID here
-  consentFormSentAt: null,       // TODO: create in GHL, add ID here
-  consentFormCompletedAt: null,  // TODO: create in GHL, add ID here
+  consentFormStatus: "t6ky77s281oHFEJepml2",
+  consentFormSentAt: "fSPJFS6t0B2mER1k6v4U",
+  consentFormCompletedAt: "xr7j0PrbBde5WXyQRAgn",
   medicalHistory: "n9fWT15VGRpi3XHQeHKH",
   medicalHistoryDescription: "nmCsftTxJGoZ3MN3lbvk",
   emergencyContact: "QLNaHO4A0DZ36Z0WEEIz",
