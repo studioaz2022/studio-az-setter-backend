@@ -13,7 +13,7 @@ const {
 const { GHL_LOCATION_ID } = require("../config/constants");
 
 const CONSENT_FORM_BASE_URL =
-  process.env.CONSENT_FORM_URL || "https://consent.studioaz.us";
+  process.env.CONSENT_FORM_URL || "https://consent.studioaztattoo.com";
 
 // Artist name → MN tattoo technician license number mapping
 const ARTIST_LICENSE_MAP = {
