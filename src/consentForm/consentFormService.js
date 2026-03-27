@@ -216,22 +216,31 @@ async function sendConsentForm({
       channelContext: { hasPhone: true, phone },
     });
 
-    // 6. Update GHL consent form status
-    if (GHL_FIELD_IDS.consentFormStatus) {
-      try {
-        await updateContact(resolvedContactId, {
-          customFields: [
-            { id: GHL_FIELD_IDS.consentFormStatus, field_value: "sent" },
-            {
-              id: GHL_FIELD_IDS.consentFormSentAt,
-              field_value: new Date().toISOString(),
-            },
-          ],
-        });
-      } catch (ghlErr) {
-        console.warn("⚠️ Failed to update GHL consent status:", ghlErr.message);
-        // Non-fatal — Supabase is the source of truth
+    // 6. Update GHL consent form status + key fields
+    try {
+      const sendCustomFields = [
+        { id: GHL_FIELD_IDS.consentFormStatus, field_value: "sent" },
+        { id: GHL_FIELD_IDS.consentFormSentAt, field_value: new Date().toISOString() },
+      ];
+      if (quotedPrice) {
+        sendCustomFields.push({ id: GHL_FIELD_IDS.finalPrice, field_value: String(quotedPrice) });
       }
+      if (tattooPlacement) {
+        sendCustomFields.push({ id: GHL_FIELD_IDS.locationOfTattoo, field_value: tattooPlacement });
+      }
+      if (assignedTechnician) {
+        sendCustomFields.push({ id: GHL_FIELD_IDS.assignedTechnician, field_value: assignedTechnician });
+      }
+      if (resolvedLicense) {
+        sendCustomFields.push({ id: GHL_FIELD_IDS.technicianLicense, field_value: resolvedLicense });
+      }
+      if (procedureDate) {
+        sendCustomFields.push({ id: GHL_FIELD_IDS.dateOfProcedure, field_value: procedureDate });
+      }
+      await updateContact(resolvedContactId, { customFields: sendCustomFields });
+    } catch (ghlErr) {
+      console.warn("⚠️ Failed to update GHL consent status:", ghlErr.message);
+      // Non-fatal — Supabase is the source of truth
     }
 
     console.log(`✅ Consent form sent to ${firstName} (${resolvedContactId}), token: ${token}`);
@@ -348,13 +357,14 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
     if (submission.idPhoto) {
       try {
         // submission.idPhoto is expected as { buffer, filename, contentType }
+        // Upload to the Valid ID field, NOT the tattoo reference photo field
         const uploadResult = await uploadFilesToTattooCustomField(contactId, [
           {
             buffer: submission.idPhoto.buffer,
             originalname: submission.idPhoto.filename || "valid-id.jpg",
             mimetype: submission.idPhoto.contentType || "image/jpeg",
           },
-        ]);
+        ], GHL_FIELD_IDS.validIdUpload);
         // Extract URL from GHL upload response
         if (uploadResult?.data?.urls?.length > 0) {
           idPhotoUrl = uploadResult.data.urls[0];

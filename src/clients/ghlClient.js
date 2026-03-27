@@ -239,15 +239,15 @@ async function getContact(contactId) {
 const getContactV2 = getContact; // Both now use the same SDK v2 endpoint
 
 /** Photo Form Data — No SDK method, uses raw httpClient */
-async function uploadFilesToTattooCustomField(contactId, files = []) {
+async function uploadFilesToTattooCustomField(contactId, files = [], targetFieldId = null) {
   if (!files || files.length === 0) return null;
 
   const locationId = process.env.GHL_LOCATION_ID;
-  const customFieldId = process.env.GHL_TATTOO_FILE_FIELD_ID;
+  const customFieldId = targetFieldId || process.env.GHL_TATTOO_FILE_FIELD_ID;
 
   if (!locationId || !customFieldId) {
     console.warn(
-      "⚠️ GHL_LOCATION_ID or GHL_TATTOO_FILE_FIELD_ID missing, skipping file upload."
+      "⚠️ GHL_LOCATION_ID or custom field ID missing, skipping file upload."
     );
     return null;
   }
