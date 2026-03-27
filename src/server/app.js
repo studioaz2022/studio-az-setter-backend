@@ -4552,25 +4552,27 @@ function createApp() {
   // ═══ GHL APPOINTMENT WEBHOOK (Supabase sync + reschedule detection + push) ═══
   app.post("/webhooks/ghl/appointments", async (req, res) => {
     try {
-      console.log("📥 Received GHL appointment webhook");
-
       const { type } = req.body;
 
       switch (type) {
         case "AppointmentCreate":
         case "appointment.created":
+          console.log("📥 Received GHL appointment webhook");
           await handleAppointmentCreated(req.body);
           break;
         case "AppointmentUpdate":
         case "appointment.updated":
+          console.log("📥 Received GHL appointment webhook");
           await handleAppointmentUpdated(req.body);
           break;
         case "AppointmentDelete":
         case "appointment.deleted":
+          console.log("📥 Received GHL appointment webhook");
           await handleAppointmentDeleted(req.body);
           break;
         default:
-          console.log(`⚠️ Unknown appointment event type: ${type}`);
+          // Non-appointment events (ContactUpdate, OutboundMessage, etc.) — ignore silently
+          break;
       }
 
       res.status(200).json({ success: true });
