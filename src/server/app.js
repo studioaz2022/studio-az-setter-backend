@@ -6816,8 +6816,8 @@ function createApp() {
     }
   });
 
-  // Submit completed consent form (called from web form)
-  app.post("/api/consent-form/:token/submit", async (req, res) => {
+  // Submit completed consent form (called from web form — multipart/form-data with optional ID photo)
+  app.post("/api/consent-form/:token/submit", upload.single("idPhoto"), async (req, res) => {
     try {
       // Capture e-signature evidence from request
       const requestMeta = {
@@ -6825,7 +6825,17 @@ function createApp() {
         userAgent: req.headers["user-agent"] || null,
       };
 
-      const result = await submitConsentForm(req.params.token, req.body, requestMeta);
+      // Build submission object from multipart form fields + uploaded file
+      const submission = { ...req.body };
+      if (req.file) {
+        submission.idPhoto = {
+          buffer: req.file.buffer,
+          filename: req.file.originalname,
+          contentType: req.file.mimetype,
+        };
+      }
+
+      const result = await submitConsentForm(req.params.token, submission, requestMeta);
 
       if (!result.success) {
         return res.status(400).json(result);
