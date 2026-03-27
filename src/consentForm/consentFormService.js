@@ -270,6 +270,11 @@ async function getConsentFormByToken(token) {
       return { success: false, error: "This consent form has already been submitted" };
     }
 
+    // Check if this form has been expired/superseded by an update
+    if (data.expired_at) {
+      return { success: false, error: "form_expired", expired: true };
+    }
+
     // Fetch language preference from GHL contact (for Spanish auto-detection)
     let languagePreference = null;
     try {
@@ -632,6 +637,503 @@ async function sendDayOfConsentReminders() {
   }
 }
 
+// ─── Phase 6: Consent Form Updates & Amendments ───────────────────────
+
+// GHL field ID → human-readable label (for SMS change summaries)
+const FIELD_LABELS = {
+  tattoo_placement: { en: "placement", es: "ubicación" },
+  quoted_price: { en: "price", es: "precio" },
+  number_of_sessions: { en: "sessions", es: "sesiones" },
+  assigned_technician: { en: "artist", es: "artista" },
+  date_of_procedure: { en: "procedure date", es: "fecha del procedimiento" },
+};
+
+// GHL field ID mapping for amendment GHL sync
+const AMENDABLE_GHL_FIELDS = {
+  tattoo_placement: GHL_FIELD_IDS.locationOfTattoo,
+  quoted_price: GHL_FIELD_IDS.finalPrice,
+  assigned_technician: GHL_FIELD_IDS.assignedTechnician,
+  date_of_procedure: GHL_FIELD_IDS.dateOfProcedure,
+};
+
+/**
+ * Build a changes array by comparing old and new values for amendable fields.
+ */
+function buildChangesArray(currentValues, newValues) {
+  const changes = [];
+  const fields = ["tattoo_placement", "quoted_price", "number_of_sessions", "assigned_technician", "date_of_procedure"];
+
+  for (const field of fields) {
+    if (newValues[field] !== undefined && String(newValues[field]) !== String(currentValues[field] || "")) {
+      changes.push({
+        field,
+        old: currentValues[field] ?? null,
+        new: newValues[field],
+      });
+    }
+  }
+  return changes;
+}
+
+/**
+ * Build a brief SMS summary of what changed (e.g., "placement changed" / "cambio de ubicación").
+ */
+function buildChangesSummary(changes, lang = "en") {
+  return changes
+    .map((c) => {
+      const label = FIELD_LABELS[c.field]?.[lang] || c.field;
+      return lang === "es" ? `cambio de ${label}` : `${label} changed`;
+    })
+    .join(", ");
+}
+
+/**
+ * Update an UNSIGNED consent form (status = "sent").
+ * Expires old token, generates new token, updates values, records audit trail, sends SMS.
+ *
+ * @param {string} contactId - GHL contact ID
+ * @param {object} updates - { tattoo_placement, quoted_price, number_of_sessions, assigned_technician, date_of_procedure }
+ * @param {string} [changedBy] - Artist name who made the change
+ * @returns {object} { success, formUrl, error }
+ */
+async function updateConsentForm(contactId, updates, changedBy = null) {
+  try {
+    // 1. Find the most recent active (non-expired) sent form for this contact
+    const { data: form, error: lookupError } = await supabase
+      .from("consent_forms")
+      .select("*")
+      .eq("contact_id", contactId)
+      .eq("status", "sent")
+      .is("expired_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (lookupError || !form) {
+      return { success: false, error: "No active unsigned consent form found for this contact" };
+    }
+
+    // 2. Build changes array
+    const changes = buildChangesArray(form, updates);
+    if (changes.length === 0) {
+      return { success: false, error: "No changes detected" };
+    }
+
+    // 3. Generate new token
+    const newToken = generateFormToken();
+
+    // 4. Expire old form (keep old token in DB so expired check works)
+    //    Clear appointment_id on expired row to avoid unique constraint conflict with new row
+    const { error: expireError } = await supabase
+      .from("consent_forms")
+      .update({ expired_at: new Date().toISOString(), appointment_id: null })
+      .eq("id", form.id);
+
+    if (expireError) {
+      console.error("❌ Error expiring old consent form:", expireError);
+      return { success: false, error: expireError.message };
+    }
+
+    // 5. Create new form row with updated values + new token
+    const newFormData = {
+      contact_id: form.contact_id,
+      appointment_id: form.appointment_id,
+      first_name: form.first_name,
+      last_name: form.last_name,
+      phone: form.phone,
+      email: form.email,
+      date_of_procedure: updates.date_of_procedure !== undefined ? updates.date_of_procedure : form.date_of_procedure,
+      assigned_technician: updates.assigned_technician !== undefined ? updates.assigned_technician : form.assigned_technician,
+      technician_license: updates.assigned_technician !== undefined
+        ? (lookupLicense(updates.assigned_technician) || form.technician_license)
+        : form.technician_license,
+      quoted_price: updates.quoted_price !== undefined ? updates.quoted_price : form.quoted_price,
+      number_of_sessions: updates.number_of_sessions !== undefined ? updates.number_of_sessions : form.number_of_sessions,
+      location_of_tattoo: form.location_of_tattoo,
+      tattoo_placement: updates.tattoo_placement !== undefined ? updates.tattoo_placement : form.tattoo_placement,
+      token: newToken,
+      status: "sent",
+      sent_at: new Date().toISOString(),
+    };
+
+    const { data: newForm, error: insertError } = await supabase
+      .from("consent_forms")
+      .insert(newFormData)
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("❌ Error creating updated consent form:", insertError);
+      return { success: false, error: insertError.message };
+    }
+
+    // Link old form to new one
+    await supabase
+      .from("consent_forms")
+      .update({ superseded_by: newForm.id })
+      .eq("id", form.id);
+
+    // 6. Record audit trail (on the NEW form, linking back to original)
+    await supabase.from("consent_form_changes").insert({
+      consent_form_id: newForm.id,
+      changes,
+      changed_by: changedBy,
+    });
+
+    // 7. Send SMS with new link
+    const formUrl = `${CONSENT_FORM_BASE_URL}/f/${newToken}`;
+    const firstName = form.first_name || "there";
+
+    // Detect language preference
+    let lang = "en";
+    try {
+      const contact = await getContact(contactId);
+      if (contact?.customField?.language_preference?.toLowerCase() === "spanish" || contact?.customField?.language_preference === "es") {
+        lang = "es";
+      }
+    } catch (e) { /* default to English */ }
+
+    const summary = buildChangesSummary(changes, lang);
+    const smsBody = lang === "es"
+      ? `Hola ${firstName}, tu formulario de consentimiento ha sido actualizado (${summary}). Por favor usa este nuevo enlace: ${formUrl}`
+      : `Hi ${firstName}, your consent form has been updated (${summary}). Please use this new link: ${formUrl}`;
+
+    try {
+      await sendConversationMessage({
+        contactId,
+        body: smsBody,
+        channelContext: { hasPhone: true, phone: form.phone },
+      });
+    } catch (smsErr) {
+      console.error("⚠️ SMS send failed for consent form update (DB update succeeded):", smsErr.message);
+      // Non-fatal — form was updated, client can be resent manually
+    }
+
+    console.log(`✅ Consent form updated for ${firstName} (${contactId}), new token: ${newToken}`);
+    return { success: true, formUrl };
+  } catch (err) {
+    console.error("❌ Error updating consent form:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Create an amendment for a SIGNED consent form (status = "completed").
+ * Creates a consent_amendments record with fresh token, sends SMS.
+ *
+ * @param {string} contactId - GHL contact ID
+ * @param {object} updates - { tattoo_placement, quoted_price, number_of_sessions, assigned_technician, date_of_procedure }
+ * @returns {object} { success, amendmentId, amendmentUrl, error }
+ */
+async function amendConsentForm(contactId, updates) {
+  try {
+    // 1. Find the most recent completed form for this contact
+    const { data: form, error: lookupError } = await supabase
+      .from("consent_forms")
+      .select("*")
+      .eq("contact_id", contactId)
+      .eq("status", "completed")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (lookupError || !form) {
+      return { success: false, error: "No completed consent form found for this contact" };
+    }
+
+    // 2. Build changes array (compare against current effective values — apply ALL completed amendments)
+    const { data: completedAmendments } = await supabase
+      .from("consent_amendments")
+      .select("changes")
+      .eq("consent_form_id", form.id)
+      .eq("status", "completed")
+      .order("created_at", { ascending: true });
+
+    // Get current effective values (original form + all completed amendments in order)
+    const currentValues = {
+      tattoo_placement: form.tattoo_placement,
+      quoted_price: form.quoted_price,
+      number_of_sessions: form.number_of_sessions,
+      assigned_technician: form.assigned_technician,
+      date_of_procedure: form.date_of_procedure,
+    };
+
+    // Apply all completed amendments chronologically
+    if (completedAmendments) {
+      for (const amdt of completedAmendments) {
+        for (const change of amdt.changes) {
+          if (currentValues.hasOwnProperty(change.field)) {
+            currentValues[change.field] = change.new;
+          }
+        }
+      }
+    }
+
+    const changes = buildChangesArray(currentValues, updates);
+    if (changes.length === 0) {
+      return { success: false, error: "No changes detected" };
+    }
+
+    // 3. Generate amendment token
+    const token = generateFormToken();
+
+    // 4. Create consent_amendments record
+    const { data: amendment, error: insertError } = await supabase
+      .from("consent_amendments")
+      .insert({
+        consent_form_id: form.id,
+        contact_id: contactId,
+        changes,
+        token,
+        status: "sent",
+        sent_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (insertError) {
+      console.error("❌ Error creating consent amendment:", insertError);
+      return { success: false, error: insertError.message };
+    }
+
+    // 5. Send SMS with amendment link
+    const amendmentUrl = `${CONSENT_FORM_BASE_URL}/a/${token}`;
+    const firstName = form.first_name || "there";
+
+    let lang = "en";
+    try {
+      const contact = await getContact(contactId);
+      if (contact?.customField?.language_preference?.toLowerCase() === "spanish" || contact?.customField?.language_preference === "es") {
+        lang = "es";
+      }
+    } catch (e) { /* default to English */ }
+
+    const smsBody = lang === "es"
+      ? `Hola ${firstName}, los detalles de tu tatuaje han sido actualizados. Por favor revisa y firma la enmienda: ${amendmentUrl}`
+      : `Hi ${firstName}, your tattoo details have been updated. Please review and sign the amendment: ${amendmentUrl}`;
+
+    try {
+      await sendConversationMessage({
+        contactId,
+        body: smsBody,
+        channelContext: { hasPhone: true, phone: form.phone },
+      });
+    } catch (smsErr) {
+      console.error("⚠️ SMS send failed for consent amendment (DB record created):", smsErr.message);
+    }
+
+    console.log(`✅ Amendment created for ${firstName} (${contactId}), token: ${token}`);
+    return { success: true, amendmentId: amendment.id, amendmentUrl };
+  } catch (err) {
+    console.error("❌ Error creating consent amendment:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Get amendment details by token (for the amendment web page).
+ *
+ * @param {string} token - Amendment token
+ * @returns {object} { success, data, error }
+ */
+async function getAmendmentByToken(token) {
+  try {
+    const { data: amendment, error } = await supabase
+      .from("consent_amendments")
+      .select("*")
+      .eq("token", token)
+      .single();
+
+    if (error || !amendment) {
+      return { success: false, error: "Amendment not found or link expired" };
+    }
+
+    if (amendment.status === "completed") {
+      return { success: false, error: "This amendment has already been signed" };
+    }
+
+    // Fetch the original consent form for context
+    const { data: form } = await supabase
+      .from("consent_forms")
+      .select("first_name, last_name, assigned_technician, signed_at, completed_at")
+      .eq("id", amendment.consent_form_id)
+      .single();
+
+    // Fetch language preference
+    let languagePreference = null;
+    try {
+      const contact = await getContact(amendment.contact_id);
+      if (contact?.customField?.language_preference) {
+        languagePreference = contact.customField.language_preference;
+      }
+    } catch (e) { /* default */ }
+
+    return {
+      success: true,
+      data: {
+        id: amendment.id,
+        changes: amendment.changes,
+        firstName: form?.first_name || null,
+        lastName: form?.last_name || null,
+        assignedTechnician: form?.assigned_technician || null,
+        originalSignedAt: form?.signed_at || form?.completed_at || null,
+        languagePreference,
+      },
+    };
+  } catch (err) {
+    console.error("❌ Error fetching amendment by token:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Submit a signed amendment.
+ * Updates amendment record, syncs changed fields to GHL contact.
+ *
+ * @param {string} token - Amendment token
+ * @param {object} submission - { signatureData, consentCheckbox, legalTextHash }
+ * @param {object} [requestMeta] - { ip, userAgent }
+ * @returns {object} { success, error }
+ */
+async function submitAmendment(token, submission, requestMeta = {}) {
+  try {
+    // 1. Look up amendment
+    const { data: amendment, error: lookupError } = await supabase
+      .from("consent_amendments")
+      .select("*")
+      .eq("token", token)
+      .single();
+
+    if (lookupError || !amendment) {
+      return { success: false, error: "Amendment not found or link expired" };
+    }
+
+    if (amendment.status === "completed") {
+      return { success: false, error: "This amendment has already been signed" };
+    }
+
+    const now = new Date().toISOString();
+
+    // 2. Update amendment with signature + evidence
+    const { error: updateError } = await supabase
+      .from("consent_amendments")
+      .update({
+        signature_data: submission.signatureData || null,
+        signed_at: now,
+        signer_ip: requestMeta.ip || null,
+        signer_user_agent: requestMeta.userAgent || null,
+        legal_text_hash: submission.legalTextHash || null,
+        status: "completed",
+        completed_at: now,
+      })
+      .eq("id", amendment.id);
+
+    if (updateError) {
+      console.error("❌ Error updating amendment:", updateError);
+      return { success: false, error: updateError.message };
+    }
+
+    // 3. Sync changed fields to GHL contact
+    try {
+      const customFields = [];
+      for (const change of amendment.changes) {
+        const ghlFieldId = AMENDABLE_GHL_FIELDS[change.field];
+        if (ghlFieldId) {
+          customFields.push({ id: ghlFieldId, field_value: String(change.new) });
+        }
+      }
+
+      if (customFields.length > 0) {
+        await updateContact(amendment.contact_id, { customFields });
+        console.log(`✅ GHL contact ${amendment.contact_id} synced with amendment changes`);
+      }
+    } catch (ghlErr) {
+      console.error("⚠️ GHL sync failed for amendment (Supabase is source of truth):", ghlErr.message);
+    }
+
+    console.log(`✅ Amendment completed for contact ${amendment.contact_id}`);
+    return { success: true };
+  } catch (err) {
+    console.error("❌ Error submitting amendment:", err);
+    return { success: false, error: err.message };
+  }
+}
+
+/**
+ * Get the current effective consent form data for a contact.
+ * Returns the latest form values + any completed amendments applied on top.
+ * Used by the iOS update/amend sheet to show current values.
+ *
+ * @param {string} contactId - GHL contact ID
+ * @returns {object} { success, data: { status, form fields, amendmentCount }, error }
+ */
+async function getConsentFormDetails(contactId) {
+  try {
+    const { data: form, error } = await supabase
+      .from("consent_forms")
+      .select("*")
+      .eq("contact_id", contactId)
+      .is("expired_at", null)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error || !form) {
+      return { success: false, error: "No consent form found for this contact" };
+    }
+
+    // Get current effective values
+    const values = {
+      tattooPlacement: form.tattoo_placement,
+      quotedPrice: form.quoted_price,
+      numberOfSessions: form.number_of_sessions,
+      assignedTechnician: form.assigned_technician,
+      dateOfProcedure: form.date_of_procedure,
+    };
+
+    // Count amendments + apply latest completed amendment values
+    let amendmentCount = 0;
+    if (form.status === "completed") {
+      const { data: amendments } = await supabase
+        .from("consent_amendments")
+        .select("changes, status")
+        .eq("consent_form_id", form.id)
+        .order("created_at", { ascending: true });
+
+      if (amendments) {
+        amendmentCount = amendments.filter(a => a.status === "completed").length;
+        for (const amendment of amendments) {
+          if (amendment.status === "completed") {
+            for (const change of amendment.changes) {
+              const camelKey = {
+                tattoo_placement: "tattooPlacement",
+                quoted_price: "quotedPrice",
+                number_of_sessions: "numberOfSessions",
+                assigned_technician: "assignedTechnician",
+                date_of_procedure: "dateOfProcedure",
+              }[change.field];
+              if (camelKey) values[camelKey] = change.new;
+            }
+          }
+        }
+      }
+    }
+
+    return {
+      success: true,
+      data: {
+        status: form.status,
+        consentFormId: form.id,
+        ...values,
+        amendmentCount,
+      },
+    };
+  } catch (err) {
+    console.error("❌ Error fetching consent form details:", err);
+    return { success: false, error: err.message };
+  }
+}
+
 module.exports = {
   sendConsentForm,
   getConsentFormByToken,
@@ -639,5 +1141,10 @@ module.exports = {
   getConsentFormStatus,
   getConsentFormStatusBatch,
   sendDayOfConsentReminders,
+  updateConsentForm,
+  amendConsentForm,
+  getAmendmentByToken,
+  submitAmendment,
+  getConsentFormDetails,
   GHL_FIELD_IDS,
 };

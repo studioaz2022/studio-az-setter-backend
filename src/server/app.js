@@ -6748,6 +6748,11 @@ function createApp() {
     getConsentFormStatus,
     getConsentFormStatusBatch,
     sendDayOfConsentReminders,
+    updateConsentForm,
+    amendConsentForm,
+    getAmendmentByToken,
+    submitAmendment,
+    getConsentFormDetails,
   } = require("../consentForm/consentFormService");
 
   // Send consent form SMS to a contact (called from iOS app)
@@ -6799,7 +6804,9 @@ function createApp() {
       const result = await getConsentFormByToken(req.params.token);
 
       if (!result.success) {
-        return res.status(404).json(result);
+        // Expired form → 410, already completed → 410, not found → 404
+        const status = result.expired ? 410 : result.error?.includes("already") ? 410 : 404;
+        return res.status(status).json(result);
       }
 
       res.json(result);
@@ -6866,6 +6873,110 @@ function createApp() {
       res.json(result);
     } catch (err) {
       console.error("❌ POST /api/consent-form/send-day-of-reminders error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // ─── Phase 6: Consent Form Updates & Amendments ───
+
+  // Update an unsigned consent form (new token, expire old, send SMS)
+  app.post("/api/consent-form/:contactId/update", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { tattooPlacement, quotedPrice, numberOfSessions, assignedTechnician, dateOfProcedure, changedBy } = req.body;
+
+      const updates = {};
+      if (tattooPlacement !== undefined) updates.tattoo_placement = tattooPlacement;
+      if (quotedPrice !== undefined) updates.quoted_price = quotedPrice;
+      if (numberOfSessions !== undefined) updates.number_of_sessions = numberOfSessions;
+      if (assignedTechnician !== undefined) updates.assigned_technician = assignedTechnician;
+      if (dateOfProcedure !== undefined) updates.date_of_procedure = dateOfProcedure;
+
+      const result = await updateConsentForm(contactId, updates, changedBy);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/:contactId/update error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Create amendment for a signed consent form (new token, send SMS)
+  app.post("/api/consent-form/:contactId/amend", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { tattooPlacement, quotedPrice, numberOfSessions, assignedTechnician, dateOfProcedure } = req.body;
+
+      const updates = {};
+      if (tattooPlacement !== undefined) updates.tattoo_placement = tattooPlacement;
+      if (quotedPrice !== undefined) updates.quoted_price = quotedPrice;
+      if (numberOfSessions !== undefined) updates.number_of_sessions = numberOfSessions;
+      if (assignedTechnician !== undefined) updates.assigned_technician = assignedTechnician;
+      if (dateOfProcedure !== undefined) updates.date_of_procedure = dateOfProcedure;
+
+      const result = await amendConsentForm(contactId, updates);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/:contactId/amend error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get amendment details for web page
+  app.get("/api/consent-form/amendment/:token", async (req, res) => {
+    try {
+      const result = await getAmendmentByToken(req.params.token);
+
+      if (!result.success) {
+        const status = result.error?.includes("already") ? 410 : 404;
+        return res.status(status).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ GET /api/consent-form/amendment/:token error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Submit signed amendment
+  app.post("/api/consent-form/amendment/:token/submit", async (req, res) => {
+    try {
+      const requestMeta = {
+        ip: req.headers["x-forwarded-for"] || req.socket?.remoteAddress || null,
+        userAgent: req.headers["user-agent"] || null,
+      };
+
+      const result = await submitAmendment(req.params.token, req.body, requestMeta);
+
+      if (!result.success) {
+        const status = result.error?.includes("already") ? 410 : 400;
+        return res.status(status).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/amendment/:token/submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Get current effective consent form details (for iOS update/amend sheet)
+  app.get("/api/consent-form/:contactId/details", async (req, res) => {
+    try {
+      const result = await getConsentFormDetails(req.params.contactId);
+      res.json(result);
+    } catch (err) {
+      console.error("❌ GET /api/consent-form/:contactId/details error:", err);
       res.status(500).json({ success: false, error: err.message });
     }
   });
