@@ -3,7 +3,7 @@
 // Used as a backup transcription source when Google Meet/Gemini artifacts
 // are unavailable (e.g., host joined from mobile).
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const axios = require("axios");
 
 const TAG = "[Fireflies]";

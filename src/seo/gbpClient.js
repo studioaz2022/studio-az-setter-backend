@@ -1,7 +1,7 @@
 // gbpClient.js
 // Google Business Profile API client for SEO toolkit
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const axios = require("axios");
 
 const CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;

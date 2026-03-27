@@ -1,7 +1,7 @@
 // seoAnalyzer.js
 // Claude-powered SEO analysis — feeds collected data to LLM for actionable recommendations
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const Anthropic = require("@anthropic-ai/sdk").default;
 
 const anthropic = new Anthropic({ apiKey: process.env.LLM_API_KEY });

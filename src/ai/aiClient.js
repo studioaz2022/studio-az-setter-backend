@@ -1,5 +1,5 @@
 // aiClient.js
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const OpenAI = require("openai");
 const { masterPromptA, phasePromptsRaw } = require("../prompts/promptsIndex");
 const { buildCanonicalState } = require("./phaseContract");

@@ -3,7 +3,7 @@
 // a Fireflies transcript. Output format deliberately matches Gemini's section
 // headers so the existing iOS parseGeminiNotes() parser works without changes.
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const OpenAI = require("openai");
 
 const openai = new OpenAI({

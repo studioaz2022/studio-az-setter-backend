@@ -1,6 +1,6 @@
 // ghlSdk.js — Shared GHL SDK singleton
 // All GHL client files import from here instead of creating their own axios instances
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const { HighLevel } = require("@gohighlevel/api-client");
 
 const GHL_FILE_UPLOAD_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;

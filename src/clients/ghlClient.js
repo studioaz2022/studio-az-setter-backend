@@ -1,4 +1,4 @@
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 
 // ghlClient.js — powered by @gohighlevel/api-client SDK
 const axios = require("axios"); // Retained for: uploadFilesToTattooCustomField (multipart FormData upload)

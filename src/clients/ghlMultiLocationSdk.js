@@ -1,6 +1,6 @@
 // ghlMultiLocationSdk.js — Multi-location GHL SDK for staff email verification
 // Creates separate SDK instances for tattoo shop and barber shop locations
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const { HighLevel } = require("@gohighlevel/api-client");
 
 const TATTOO_TOKEN = process.env.GHL_FILE_UPLOAD_TOKEN;

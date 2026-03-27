@@ -8,7 +8,7 @@
 //   4. After granting access, the script catches the callback and prints your refresh token
 //   5. Copy the refresh token → add to .env as GOOGLE_SEO_REFRESH_TOKEN
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const http = require("http");
 const { exec } = require("child_process");
 

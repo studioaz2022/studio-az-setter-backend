@@ -1,7 +1,7 @@
 // googleMeet.js
 // Lightweight Google Calendar client to generate Google Meet links
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const axios = require("axios");
 const crypto = require("crypto");
 

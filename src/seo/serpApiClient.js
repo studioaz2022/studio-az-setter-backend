@@ -1,7 +1,7 @@
 // serpApiClient.js
 // SerpAPI client for local SEO — Google Maps rankings, reviews, competitor analysis
 
-require("dotenv").config();
+require("dotenv").config({ quiet: true });
 const axios = require("axios");
 
 const API_KEY = process.env.SERPAPI_KEY;
