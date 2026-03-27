@@ -368,6 +368,12 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
     // 3. Generate legal text hash for tamper-proof audit trail
     const legalTextHash = submission.legalTextHash || null;
 
+    // Parse fields that arrive as strings from FormData (multipart/form-data)
+    const medicalHistory = typeof submission.medicalHistory === "string"
+      ? (() => { try { return JSON.parse(submission.medicalHistory); } catch { return []; } })()
+      : submission.medicalHistory || [];
+    const consentChecked = submission.consentCheckbox === true || submission.consentCheckbox === "true";
+
     // 4. Write full record to Supabase (including e-signature evidence package)
     const now = new Date().toISOString();
     const { error: updateError } = await supabase
@@ -382,10 +388,10 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
         city: submission.city || null,
         state: submission.state || null,
         country: submission.country || null,
-        medical_history: submission.medicalHistory || [],
+        medical_history: medicalHistory,
         medical_history_description: submission.medicalHistoryDescription || null,
         id_photo_url: idPhotoUrl || submission.idPhotoFallbackUrl || null,
-        consent_checkbox: submission.consentCheckbox === true,
+        consent_checkbox: consentChecked,
         signature_data: submission.signatureData || null,
         // Backfill optional fields if artist left them empty
         date_of_procedure: submission.dateOfProcedure || form.date_of_procedure || null,
@@ -409,10 +415,10 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
     // 4. Sync key fields back to GHL contact
     try {
       const customFields = [
-        { id: GHL_FIELD_IDS.medicalHistory, field_value: (submission.medicalHistory || []).join(", ") },
+        { id: GHL_FIELD_IDS.medicalHistory, field_value: medicalHistory.join(", ") },
         { id: GHL_FIELD_IDS.medicalHistoryDescription, field_value: submission.medicalHistoryDescription || "" },
         { id: GHL_FIELD_IDS.emergencyContact, field_value: submission.emergencyContactPhone || "" },
-        { id: GHL_FIELD_IDS.consentCheckbox, field_value: submission.consentCheckbox ? "Yes" : "No" },
+        { id: GHL_FIELD_IDS.consentCheckbox, field_value: consentChecked ? "Yes" : "No" },
       ];
 
       // Signature — verified 2026-03-26 that GHL accepts base64 data URI writes
