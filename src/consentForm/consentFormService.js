@@ -1177,8 +1177,9 @@ async function checkPhoneForExistingContact(phone) {
   try {
     // Use getDuplicateContact to check if phone exists in GHL
     const { ghl: ghlSdk } = require("../clients/ghlSdk");
+    const locationId = process.env.GHL_LOCATION_ID;
     const dupeData = await ghlSdk.contacts.getDuplicateContact({
-      locationId: GHL_LOCATION_ID,
+      locationId,
       number: phone,
     });
 
