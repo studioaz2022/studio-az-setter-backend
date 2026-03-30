@@ -143,8 +143,20 @@ async function sendConsentForm({
         contact = newContactData;
         console.log(`✅ Created GHL contact ${resolvedContactId} for ${firstName}`);
       } catch (createErr) {
-        console.error("❌ Failed to create GHL contact:", createErr.message);
-        return { success: false, error: `Failed to create contact: ${createErr.message}` };
+        // Handle duplicate contact — extract existing contact ID and continue
+        const dupeContactId = createErr.response?.meta?.contactId
+          || createErr.response?.contactId;
+        if (dupeContactId) {
+          console.log(`🔄 Phone already exists in GHL — using existing contact ${dupeContactId}`);
+          resolvedContactId = dupeContactId;
+          contact = await getContact(dupeContactId);
+          if (!contact) {
+            return { success: false, error: "Duplicate contact found but could not fetch details" };
+          }
+        } else {
+          console.error("❌ Failed to create GHL contact:", createErr.message);
+          return { success: false, error: `Failed to create contact: ${createErr.message}` };
+        }
       }
     } else {
       // 1. Fetch existing contact data from GHL for pre-fill fields
@@ -1150,6 +1162,66 @@ async function getConsentFormDetails(contactId) {
   }
 }
 
+/**
+ * Check if a phone number belongs to an existing GHL contact.
+ * Used by iOS when artist enters a "new" phone number — if the contact
+ * already exists, we return their data so iOS can pre-fill the form
+ * instead of erroring on duplicate creation.
+ *
+ * @param {string} phone - Phone number (E.164 format, e.g. +16125550142)
+ * @returns {object} { exists, contact: { id, firstName, lastName, phone, email, customFields... } | null }
+ */
+async function checkPhoneForExistingContact(phone) {
+  if (!phone) return { exists: false, contact: null };
+
+  try {
+    // Use getDuplicateContact to check if phone exists in GHL
+    const { ghl: ghlSdk } = require("../clients/ghlSdk");
+    const dupeData = await ghlSdk.contacts.getDuplicateContact({
+      locationId: GHL_LOCATION_ID,
+      number: phone,
+    });
+
+    const contactId = dupeData?.contact?.id || dupeData?.id;
+    if (!contactId) {
+      return { exists: false, contact: null };
+    }
+
+    // Fetch the full contact to get custom fields for pre-fill
+    const contact = await getContact(contactId);
+    if (!contact) {
+      return { exists: false, contact: null };
+    }
+
+    // Return a normalized subset iOS needs for pre-filling
+    return {
+      exists: true,
+      contact: {
+        id: contact.id,
+        firstName: contact.firstName || null,
+        lastName: contact.lastName || null,
+        phone: contact.phone || phone,
+        email: contact.email || null,
+        assignedTo: contact.assignedTo || null,
+        // Custom fields relevant to consent form pre-fill
+        assignedArtist: contact.customField?.assigned_artist || null,
+        tattooPlacement: contact.customField?.tattoo_placement || null,
+        quotedPrice: contact.customField?.final_price || contact.customField?.quote_to_client || null,
+        sessionEstimate: contact.customField?.session_estimate || null,
+        tattooSize: contact.customField?.tattoo_size || null,
+        tattooStyle: contact.customField?.tattoo_style || null,
+      },
+    };
+  } catch (err) {
+    // 404 means no duplicate found — not an error
+    if (err.statusCode === 404 || err.response?.statusCode === 404) {
+      return { exists: false, contact: null };
+    }
+    console.error("⚠️ Phone check error:", err.message);
+    return { exists: false, contact: null };
+  }
+}
+
 module.exports = {
   sendConsentForm,
   getConsentFormByToken,
@@ -1162,5 +1234,6 @@ module.exports = {
   getAmendmentByToken,
   submitAmendment,
   getConsentFormDetails,
+  checkPhoneForExistingContact,
   GHL_FIELD_IDS,
 };

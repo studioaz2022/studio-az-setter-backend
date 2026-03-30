@@ -6755,7 +6755,23 @@ function createApp() {
     getAmendmentByToken,
     submitAmendment,
     getConsentFormDetails,
+    checkPhoneForExistingContact,
   } = require("../consentForm/consentFormService");
+
+  // Check if a phone number belongs to an existing GHL contact (called from iOS before creating new contact)
+  app.post("/api/consent-form/check-phone", async (req, res) => {
+    try {
+      const { phone } = req.body;
+      if (!phone) {
+        return res.status(400).json({ success: false, error: "phone is required" });
+      }
+      const result = await checkPhoneForExistingContact(phone);
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/check-phone error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   // Send consent form SMS to a contact (called from iOS app)
   // Accepts either contactId (existing) or newContact { firstName, lastName, phone } (new)
