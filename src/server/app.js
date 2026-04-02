@@ -4545,6 +4545,7 @@ function createApp() {
   } = require("../clients/appointmentWebhooks");
 
   const apnsService = require("../services/apnsService");
+  const { sendTaskAssignedNotification, sendTaskCompletedNotification, sendTaskOverdueNotification, sendTaskUrgentNotification } = require("../services/taskNotifications");
   const { TASK_TYPES, createCommandCenterTask } = require("../clients/commandCenter");
   const { generateVenmoDescription } = require("../clients/financialTracking");
   const { GHL_USER_IDS: GHL_IDS } = require("../config/constants");
@@ -4798,6 +4799,97 @@ function createApp() {
       res.json({ success: result.success, result });
     } catch (error) {
       console.error("❌ Error sending test notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══ TASK PUSH NOTIFICATIONS ═══
+
+  app.post("/api/notifications/task-assigned", async (req, res) => {
+    try {
+      const { assigneeGhlUserId, creatorGhlUserId, creatorName, contactName, taskNote, taskId } = req.body;
+
+      if (!assigneeGhlUserId || !creatorGhlUserId) {
+        return res.status(400).json({ success: false, error: "assigneeGhlUserId and creatorGhlUserId are required" });
+      }
+
+      const result = await sendTaskAssignedNotification({
+        assigneeGhlUserId,
+        creatorGhlUserId,
+        creatorName: creatorName || "Someone",
+        contactName: contactName || "a contact",
+        taskNote,
+        taskId,
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("❌ Error sending task-assigned notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/notifications/task-completed", async (req, res) => {
+    try {
+      const { creatorGhlUserId, completerGhlUserId, completerName, contactName, taskId } = req.body;
+
+      if (!creatorGhlUserId || !completerGhlUserId) {
+        return res.status(400).json({ success: false, error: "creatorGhlUserId and completerGhlUserId are required" });
+      }
+
+      const result = await sendTaskCompletedNotification({
+        creatorGhlUserId,
+        completerGhlUserId,
+        completerName: completerName || "Someone",
+        contactName: contactName || "a contact",
+        taskId,
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("❌ Error sending task-completed notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/notifications/task-overdue", async (req, res) => {
+    try {
+      const { assigneeGhlUserId, contactName, taskId } = req.body;
+
+      if (!assigneeGhlUserId) {
+        return res.status(400).json({ success: false, error: "assigneeGhlUserId is required" });
+      }
+
+      const result = await sendTaskOverdueNotification({
+        assigneeGhlUserId,
+        contactName: contactName || "a contact",
+        taskId,
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("❌ Error sending task-overdue notification:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  app.post("/api/notifications/task-urgent", async (req, res) => {
+    try {
+      const { assigneeGhlUserId, contactName, taskId } = req.body;
+
+      if (!assigneeGhlUserId) {
+        return res.status(400).json({ success: false, error: "assigneeGhlUserId is required" });
+      }
+
+      const result = await sendTaskUrgentNotification({
+        assigneeGhlUserId,
+        contactName: contactName || "a contact",
+        taskId,
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("❌ Error sending task-urgent notification:", error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
