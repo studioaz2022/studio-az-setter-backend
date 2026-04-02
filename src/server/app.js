@@ -6512,11 +6512,13 @@ function createApp() {
   });
 
   /**
-   * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard&days=0
-   * Tiered real-time availability for all barbers, grouped per barber.
+   * GET /api/kiosk/walk-in-slots?service=haircut|haircut_beard|beard_trim&days=0
+   * Computes real-time walk-in availability per barber by fetching actual
+   * appointments + blocked slots + open hours, then finding gaps.
+   * Bypasses GHL's getSlots API (and its scheduling-notice penalty).
    *
    * Query params:
-   *   service — "haircut" or "haircut_beard"
+   *   service — "haircut", "haircut_beard", or "beard_trim"
    *   days    — 0 = today only (default), 1-7 = today + next N days
    *
    * When days=0, slots are classified into tiers: now, 5-10, 10-20, later
@@ -6535,47 +6537,78 @@ function createApp() {
     const days = Math.min(Math.max(parseInt(daysParam) || 0, 0), 7);
 
     try {
-      const { BARBER_DATA } = require("../config/kioskConfig");
-      const { getCalendarFreeSlots } = require("../clients/ghlCalendarClient");
+      const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
+      const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 
       const now = new Date();
 
-      // Compute end-of-day in the shop's local timezone (America/Chicago).
-      // On Render the server runs in UTC, so setHours(23,59,59) gives UTC midnight
-      // which is 6-7pm Central, bleeding into tomorrow's slots.
+      // Round "now" up to next 5-minute mark for clean slot start times
+      const roundedNow = new Date(now);
+      const mins = roundedNow.getMinutes();
+      const remainder = mins % 5;
+      if (remainder !== 0) {
+        roundedNow.setMinutes(mins + (5 - remainder), 0, 0);
+      } else {
+        roundedNow.setSeconds(0, 0);
+      }
+
+      // Compute start-of-day and end-of-day in Central time
       const shopTZ = "America/Chicago";
-      const todayCT = now.toLocaleDateString("en-CA", { timeZone: shopTZ }); // "YYYY-MM-DD"
+      const todayCT = now.toLocaleDateString("en-CA", { timeZone: shopTZ });
       const [yr, mo, dy] = todayCT.split("-").map(Number);
+
+      // Build date range: from start of today to end of target day
+      const startOfToday = new Date(`${todayCT}T00:00:00`);
+      // Adjust to Central offset
+      const probeStart = new Date(`${todayCT}T12:00:00Z`);
+      const startParts = new Intl.DateTimeFormat('en-US', { timeZone: shopTZ, timeZoneName: 'shortOffset' }).formatToParts(probeStart);
+      const startOffsetMatch = startParts.find(p => p.type === 'timeZoneName')?.value.match(/GMT([+-]?\d+)/);
+      const offsetHours = startOffsetMatch ? parseInt(startOffsetMatch[1], 10) : -6;
+      const offsetStr = `${offsetHours < 0 ? '-' : '+'}${String(Math.abs(offsetHours)).padStart(2, '0')}:00`;
+
+      const rangeStart = new Date(`${todayCT}T00:00:00${offsetStr}`);
       const targetDay = new Date(yr, mo - 1, dy + days);
       const targetDateStr = `${targetDay.getFullYear()}-${String(targetDay.getMonth() + 1).padStart(2, '0')}-${String(targetDay.getDate()).padStart(2, '0')}`;
-      // Get the UTC offset at end-of-day Central (probe at 23:00 UTC = afternoon Central)
-      const probeEnd = new Date(`${targetDateStr}T23:00:00Z`);
-      const endParts = new Intl.DateTimeFormat('en-US', { timeZone: shopTZ, timeZoneName: 'shortOffset' }).formatToParts(probeEnd);
-      const endOffsetMatch = endParts.find(p => p.type === 'timeZoneName')?.value.match(/GMT([+-]?\d+)/);
-      const endOffsetHours = endOffsetMatch ? parseInt(endOffsetMatch[1], 10) : -6;
-      const endOffsetStr = `${endOffsetHours < 0 ? '-' : '+'}${String(Math.abs(endOffsetHours)).padStart(2, '0')}:00`;
-      const endDate = new Date(`${targetDateStr}T23:59:59.999${endOffsetStr}`);
-      console.log(`[KIOSK walk-in] date range: ${now.toISOString()} → ${endDate.toISOString()} (today in CT: ${todayCT}, days=${days})`);
+      const rangeEnd = new Date(`${targetDateStr}T23:59:59.999${offsetStr}`);
 
-      // Fetch slots + calendar duration for all barbers in parallel
+      console.log(`[KIOSK walk-in] computing availability: ${roundedNow.toISOString()} → ${rangeEnd.toISOString()} (today in CT: ${todayCT}, days=${days})`);
+
+      // Fetch availability for all barbers in parallel
       const promises = BARBER_DATA.map(async (barber) => {
         const calendarId = barber.calendars[service];
         if (!calendarId) return null;
 
         try {
-          // Fetch free slots and calendar config in parallel
-          const [slots, calendarInfo] = await Promise.all([
-            getCalendarFreeSlots(calendarId, now, endDate, ghlBarber),
+          // Fetch calendar config, appointments (by userId), and blocked slots in parallel
+          const [calendarInfo, events, blockedSlots] = await Promise.all([
             ghlBarber.calendars.getCalendar({ calendarId }).catch((err) => {
               console.warn(`⚠️ [KIOSK] Calendar info fetch failed for ${barber.name}:`, err.message);
               return null;
             }),
+            fetchAppointmentsForDateRange({
+              locationId: BARBER_LOCATION_ID,
+              startTime: rangeStart.toISOString(),
+              endTime: rangeEnd.toISOString(),
+              userId: barber.ghlUserId,
+              sdkInstance: ghlBarber,
+            }).catch((err) => {
+              console.warn(`⚠️ [KIOSK] Events fetch failed for ${barber.name}:`, err.message);
+              return [];
+            }),
+            ghlBarber.calendars.getBlockedSlots({
+              locationId: BARBER_LOCATION_ID,
+              userId: barber.ghlUserId,
+              startTime: String(rangeStart.getTime()),
+              endTime: String(rangeEnd.getTime()),
+            }).catch((err) => {
+              console.warn(`���️ [KIOSK] Blocked slots fetch failed for ${barber.name}:`, err.message);
+              return { events: [] };
+            }),
           ]);
-
-          if (!slots || slots.length === 0) return null;
 
           // Extract slot duration from calendar config (default 30 min)
           let slotDurationMinutes = 30;
+          let openHours = [];
           if (calendarInfo) {
             const cal = calendarInfo.calendar || calendarInfo;
             if (cal.slotDuration) {
@@ -6586,35 +6619,116 @@ function createApp() {
                 slotDurationMinutes = cal.slotDuration;
               }
             }
+            openHours = cal.openHours || [];
           }
 
+          // Build occupied intervals from appointments + blocked slots
+          const occupied = [];
+
+          // Add appointments (skip cancelled/noshow)
+          for (const evt of events) {
+            if (evt.appointmentStatus === "cancelled" || evt.appointmentStatus === "noshow") continue;
+            occupied.push({
+              start: new Date(evt.startTime).getTime(),
+              end: new Date(evt.endTime).getTime(),
+            });
+          }
+
+          // Add blocked slots
+          const blocks = blockedSlots?.events || [];
+          for (const block of blocks) {
+            if (block.deleted) continue;
+            occupied.push({
+              start: new Date(block.startTime).getTime(),
+              end: new Date(block.endTime).getTime(),
+            });
+          }
+
+          // Sort occupied intervals by start time
+          occupied.sort((a, b) => a.start - b.start);
+
+          // GHL openHours uses daysOfTheWeek (0=Sun, 1=Mon, ... 6=Sat)
+          // Iterate each day in range and find gaps
+          const slotDurationMs = slotDurationMinutes * 60 * 1000;
+          const allSlots = [];
+
+          for (let d = 0; d <= days; d++) {
+            const dayDate = new Date(yr, mo - 1, dy + d);
+            const dayStr = `${dayDate.getFullYear()}-${String(dayDate.getMonth() + 1).padStart(2, '0')}-${String(dayDate.getDate()).padStart(2, '0')}`;
+            const jsDay = dayDate.getDay(); // 0=Sun, 1=Mon, ...
+
+            // Find open hours for this day of week
+            const dayOpenHours = openHours.find((oh) =>
+              oh.daysOfTheWeek && oh.daysOfTheWeek.includes(jsDay)
+            );
+            if (!dayOpenHours || !dayOpenHours.hours || dayOpenHours.hours.length === 0) continue;
+
+            for (const hours of dayOpenHours.hours) {
+              const windowStart = new Date(`${dayStr}T${String(hours.openHour).padStart(2, '0')}:${String(hours.openMinute).padStart(2, '0')}:00${offsetStr}`).getTime();
+              const windowEnd = new Date(`${dayStr}T${String(hours.closeHour).padStart(2, '0')}:${String(hours.closeMinute).padStart(2, '0')}:00${offsetStr}`).getTime();
+
+              // Get occupied intervals that overlap this window
+              const windowOccupied = occupied.filter(
+                (o) => o.start < windowEnd && o.end > windowStart
+              );
+
+              // Walk through the window finding gaps
+              let cursor = windowStart;
+
+              for (const occ of windowOccupied) {
+                // Gap before this occupied interval
+                if (cursor < occ.start) {
+                  // Generate slots in this gap
+                  let slotStart = cursor;
+                  while (slotStart + slotDurationMs <= occ.start) {
+                    // Skip slots in the past
+                    if (slotStart >= roundedNow.getTime()) {
+                      allSlots.push({
+                        startTime: new Date(slotStart).toISOString(),
+                        endTime: new Date(slotStart + slotDurationMs).toISOString(),
+                      });
+                    }
+                    slotStart += 5 * 60 * 1000; // 5-min increments for walk-in flexibility
+                  }
+                }
+                // Move cursor past this occupied interval
+                if (occ.end > cursor) cursor = occ.end;
+              }
+
+              // Gap after last occupied interval to window end
+              if (cursor < windowEnd) {
+                let slotStart = cursor;
+                while (slotStart + slotDurationMs <= windowEnd) {
+                  if (slotStart >= roundedNow.getTime()) {
+                    allSlots.push({
+                      startTime: new Date(slotStart).toISOString(),
+                      endTime: new Date(slotStart + slotDurationMs).toISOString(),
+                    });
+                  }
+                  slotStart += 5 * 60 * 1000;
+                }
+              }
+            }
+          }
+
+          if (allSlots.length === 0) return null;
+
           // Classify each slot into a tier
-          const classifiedSlots = slots.map((slot) => {
+          const classifiedSlots = allSlots.map((slot) => {
             const startTime = new Date(slot.startTime);
-            const diffMs = startTime.getTime() - now.getTime();
-            const diffMin = diffMs / 60000;
+            const diffMin = (startTime.getTime() - now.getTime()) / 60000;
 
             let tier;
             if (days > 0) {
-              // Multi-day mode: all slots are "later" with actual times
               tier = "later";
             } else {
-              // Today-only mode: classify into proximity tiers
               if (diffMin <= 2) tier = "now";
               else if (diffMin <= 10) tier = "5-10";
               else if (diffMin <= 20) tier = "10-20";
               else tier = "later";
             }
 
-            // Recompute endTime using actual calendar duration
-            const endTime = new Date(startTime);
-            endTime.setMinutes(endTime.getMinutes() + slotDurationMinutes);
-
-            return {
-              startTime: slot.startTime,
-              endTime: endTime.toISOString(),
-              tier,
-            };
+            return { startTime: slot.startTime, endTime: slot.endTime, tier };
           });
 
           // Determine the barber's best (earliest) tier
@@ -6634,7 +6748,7 @@ function createApp() {
             slots: classifiedSlots,
           };
         } catch (err) {
-          console.error(`⚠️ [KIOSK] Slot fetch failed for ${barber.name}:`, err.message);
+          console.error(`⚠️ [KIOSK] Availability compute failed for ${barber.name}:`, err.message);
           return null;
         }
       });
@@ -6662,7 +6776,6 @@ function createApp() {
       barbers.sort((a, b) => {
         const tierDiff = tierOrder[a.tier] - tierOrder[b.tier];
         if (tierDiff !== 0) return tierDiff;
-        // Within same tier, sort by earliest slot
         const aFirst = new Date(a.slots[0]?.startTime || "9999");
         const bFirst = new Date(b.slots[0]?.startTime || "9999");
         return aFirst - bFirst;
@@ -6773,7 +6886,7 @@ function createApp() {
           locationId: BARBER_LOCATION_ID,
           startTime,
           endTime,
-          title: `Walk-in: ${customerName}`,
+          title: `Walk-in ${serviceLabel}: ${customerName}`,
           appointmentStatus: "confirmed",
           assignedUserId: barberGhlUserId,
           toNotify: false,
