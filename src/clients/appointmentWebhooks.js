@@ -96,13 +96,6 @@ async function ensureGoogleMeetForConsultation(rawAppt) {
     return;
   }
 
-  // Skip translator-only appointments (they'll share the artist's Meet link)
-  const isTranslatorCalendar = Object.values(TRANSLATOR_CALENDARS).includes(calendarId);
-  if (isTranslatorCalendar) {
-    console.log('📹 Skipping Google Meet for translator appointment (shares artist link)');
-    return;
-  }
-
   // Skip if already has a Google Meet link (AI setter already handled it)
   if (existingAddress && existingAddress.includes('meet.google.com')) {
     console.log('📹 Appointment already has Google Meet link — skipping');
