@@ -6649,12 +6649,18 @@ function createApp() {
         return res.status(500).json({ success: false, error: "Could not find or create contact" });
       }
 
-      // If contact already existed, update with walk-in service field + assign barber
+      // If contact already existed, upsert name + walk-in service field + assign barber
       if (isExistingContact) {
         try {
+          const nameParts = customerName.trim().split(/\s+/);
+          const firstName = nameParts[0];
+          const lastName = nameParts.slice(1).join(" ") || undefined;
+
           await ghlBarber.contacts.updateContact(
             { contactId },
             {
+              firstName,
+              lastName,
               assignedTo: barberGhlUserId,
               customFields: [
                 { id: WALK_IN_SERVICE_FIELD_ID, field_value: serviceLabel },
