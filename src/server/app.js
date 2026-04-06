@@ -5246,7 +5246,7 @@ function createApp() {
     try {
       const BARBER_LOC = process.env.GHL_BARBER_LOCATION_ID;
       const isBarberLocation = locationId === BARBER_LOC;
-      const sdk = isBarberLocation && ghlBarber ? ghlBarber : null;
+      const sdk = isBarberLocation && ghlBarber ? ghlBarber : require("../clients/ghlSdk").ghl;
 
       if (!sdk) {
         return res.status(400).json({ success: false, error: "No SDK available for this location" });
