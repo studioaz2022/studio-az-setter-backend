@@ -3389,7 +3389,7 @@ function createApp() {
 
         console.log(`💳 Stripe payment completed: contact=${contactId} $${amountCents / 100} via ${paymentMethod}`);
 
-        // Update Supabase record
+        // Update Supabase stripe_checkout_sessions record
         const { createClient } = require("@supabase/supabase-js");
         const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
@@ -3410,6 +3410,31 @@ function createApp() {
           console.log(`💳 GHL contact ${contactId} updated: deposit_paid=true`);
         } catch (ghlErr) {
           console.error("⚠️ Failed to update GHL contact after Stripe payment:", ghlErr.message);
+        }
+
+        // Record in transactions table for Finances + Projects tab
+        try {
+          const contactName = session.metadata?.contactName || "Unknown Client";
+          const resolvedArtistId = (artistId && artistId !== "") ? artistId : "unknown";
+
+          await recordTransaction({
+            contactId,
+            contactName,
+            appointmentId: null,
+            artistId: resolvedArtistId,
+            transactionType: "session_payment",
+            paymentMethod: `stripe_${paymentMethod}`, // e.g. 'stripe_affirm', 'stripe_klarna', 'stripe_card'
+            paymentRecipient: "shop",
+            grossAmount: amountCents / 100,
+            sessionDate: new Date(),
+            squarePaymentId: null,
+            locationId: process.env.GHL_LOCATION_ID || "studio_az_tattoo",
+            notes: `Stripe financing — ${paymentMethod} — session ${session.id}`,
+          });
+          console.log(`💳 Transaction recorded for contact=${contactId} artist=${resolvedArtistId} $${amountCents / 100}`);
+        } catch (txErr) {
+          console.error("⚠️ Failed to record Stripe transaction:", txErr.message);
+          // Non-fatal — payment already processed, don't fail the webhook
         }
 
       } else if (event.type === "checkout.session.expired") {
