@@ -59,11 +59,29 @@ async function createDepositLinkForContact({
     );
   }
 
+  // Catalog variation IDs for rich checkout pages (created via /api/square/setup-catalog)
+  const CATALOG_DEPOSIT_100 = "KPXHQ2L3UM4QN7FOFZYQT225";
+  const CATALOG_CONSULT_50 = "EWQPQPQS2P6U5TWIEDQFYDMT";
+
+  // Use catalog item for $100/$50 deposits to get rich description on checkout
+  const catalogVariationId =
+    amountCents === 10000 ? CATALOG_DEPOSIT_100 :
+    amountCents === 5000 ? CATALOG_CONSULT_50 :
+    null;
+
   const idempotencyKey = `${contactId}-${Date.now()}`;
+
+  // Build line item: catalog reference for $100/$50, ad-hoc for custom amounts
+  const lineItem = catalogVariationId
+    ? { catalog_object_id: catalogVariationId, quantity: "1" }
+    : {
+        name: description,
+        quantity: "1",
+        base_price_money: { amount: amountCents, currency },
+      };
 
   const body = {
     idempotency_key: idempotencyKey,
-    // Optional: keep checkout options if you want to control methods, etc.
     checkout_options: {
       accepted_payment_methods: {
         afterpay_clearpay: true,
@@ -72,28 +90,17 @@ async function createDepositLinkForContact({
         google_pay: true,
       },
     },
-    // Use an explicit order and attach the GHL contactId as reference_id
     order: {
       location_id: SQUARE_LOCATION_ID,
-      reference_id: contactId, // 🔥 this is what we read back in getContactIdFromOrder
-      // Hidden metadata — not visible to the client, used for internal routing
+      reference_id: contactId,
       metadata: {
-        business,        // "tattoo" or "barbershop"
-        payment_type: paymentType, // "deposit", "session_payment", "payment_plan"
+        business,
+        payment_type: paymentType,
         contact_id: contactId,
         ...(artistId && { artist_id: artistId }),
         ...(artistName && { artist_name: artistName }),
       },
-      line_items: [
-        {
-          name: description,
-          quantity: "1",
-          base_price_money: {
-            amount: amountCents, // integer cents, e.g. 5000 = $50.00
-            currency,
-          },
-        },
-      ],
+      line_items: [lineItem],
     },
   };
 

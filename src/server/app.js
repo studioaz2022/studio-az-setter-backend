@@ -24,7 +24,7 @@ const {
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
-const { getContactIdFromOrder, createDepositLinkForContact, createDepositCatalogItems } = require("../payments/squareClient");
+const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
 const {
   buildOAuthUrl,
   exchangeCodeForToken,
@@ -3285,17 +3285,6 @@ function createApp() {
         success: false,
         error: error.message || "Failed to generate payment link",
       });
-    }
-  });
-
-  // POST /api/square/setup-catalog - One-time setup for deposit catalog items
-  app.post("/api/square/setup-catalog", async (req, res) => {
-    try {
-      const result = await createDepositCatalogItems();
-      res.json({ success: true, ...result });
-    } catch (error) {
-      console.error("[API] Error creating catalog items:", error.response?.data || error.message);
-      res.status(500).json({ success: false, error: error.message });
     }
   });
 
