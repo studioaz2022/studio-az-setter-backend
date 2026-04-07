@@ -1,8 +1,10 @@
 // squareClient.js
 // Direct HTTP client for Square payment links + orders using axios.
-// We skip the Node SDK and talk to the Square REST API directly.
+// Uses CHECKOUT_LINK catalog objects for rich checkout pages (logo, description).
+// Maps checkout links → contacts via Supabase for webhook tracing.
 
 const axios = require("axios");
+const { createClient } = require("@supabase/supabase-js");
 const { COMPACT_MODE, logSquareEvent, shortId } = require("../utils/logger");
 
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
@@ -14,6 +16,30 @@ const isProd = SQUARE_ENVIRONMENT === "production";
 const SQUARE_BASE_URL = isProd
   ? "https://connect.squareup.com"
   : "https://connect.squareupsandbox.com";
+
+const supabase = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
+
+// Studio AZ logo image ID in Square catalog
+const LOGO_IMAGE_ID = "RK4P3O5ONUIHXYETBDEVQNCU";
+
+// Rich descriptions for deposit tiers
+const DEPOSIT_100_DESCRIPTION =
+  "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
+  "\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back\n" +
+  "\ud83d\udcf8 Pro Photo Set (Optional)\n\n" +
+  "PLUS:\n" +
+  "\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process\n" +
+  "\ud83c\udf10 Live Translator for seamless communication (Optional)\n" +
+  "\u23f1\ufe0f Priority Scheduling\n" +
+  "\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best";
+
+const CONSULT_50_DESCRIPTION =
+  "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
+  "\ud83d\udcb5 Applied to Your Tattoo Total Fee\n" +
+  "\ud83d\udcaf or Fully Refundable";
 
 if (!SQUARE_ACCESS_TOKEN) {
   console.warn(
@@ -28,12 +54,9 @@ if (!SQUARE_LOCATION_ID) {
 }
 
 /**
- * Create a Square payment link for a specific contact.
- * - contactId: GHL contact id (for your internal reference / future metadata use)
- * - amountCents: integer in cents, e.g. 5000 = $50.00
- * - business: "tattoo" or "barbershop" — used to route payments in the sync
- * - paymentType: "deposit", "session_payment", "payment_plan", etc.
- * - description: client-facing line item name (e.g. "Tattoo Consultation")
+ * Create a Square checkout link for a specific contact.
+ * Uses CHECKOUT_LINK catalog objects for rich checkout pages with logo + description.
+ * Stores the mapping in Supabase for webhook tracing.
  */
 async function createDepositLinkForContact({
   contactId,
@@ -44,6 +67,7 @@ async function createDepositLinkForContact({
   paymentType = "deposit",
   artistId = null,
   artistName = null,
+  contactName = null,
 }) {
   if (!contactId) {
     throw new Error("contactId is required for createDepositLinkForContact");
@@ -59,102 +83,118 @@ async function createDepositLinkForContact({
     );
   }
 
-  // Catalog variation IDs for rich checkout pages (created via /api/square/setup-catalog)
-  const CATALOG_DEPOSIT_100 = "KPXHQ2L3UM4QN7FOFZYQT225";
-  const CATALOG_CONSULT_50 = "EWQPQPQS2P6U5TWIEDQFYDMT";
+  // Pick the right description based on amount
+  const checkoutDescription =
+    amountCents === 10000 ? DEPOSIT_100_DESCRIPTION :
+    amountCents === 5000 ? CONSULT_50_DESCRIPTION :
+    null; // Custom amounts get no description
 
-  // Use catalog item for $100/$50 deposits to get rich description on checkout
-  const catalogVariationId =
-    amountCents === 10000 ? CATALOG_DEPOSIT_100 :
-    amountCents === 5000 ? CATALOG_CONSULT_50 :
-    null;
-
-  const idempotencyKey = `${contactId}-${Date.now()}`;
-
-  // Build line item: catalog reference for $100/$50, ad-hoc for custom amounts
-  const lineItem = catalogVariationId
-    ? { catalog_object_id: catalogVariationId, quantity: "1" }
-    : {
-        name: description,
-        quantity: "1",
-        base_price_money: { amount: amountCents, currency },
-      };
-
-  const body = {
-    idempotency_key: idempotencyKey,
-    checkout_options: {
-      accepted_payment_methods: {
-        afterpay_clearpay: true,
-        apple_pay: true,
-        cash_app_pay: true,
-        google_pay: true,
-      },
-    },
-    order: {
-      location_id: SQUARE_LOCATION_ID,
-      reference_id: contactId,
-      metadata: {
-        business,
-        payment_type: paymentType,
-        contact_id: contactId,
-        ...(artistId && { artist_id: artistId }),
-        ...(artistName && { artist_name: artistName }),
-      },
-      line_items: [lineItem],
-    },
-  };
+  const checkoutName =
+    amountCents === 10000 ? "Tattoo Deposit" :
+    amountCents === 5000 ? "Tattoo Consultation Fee" :
+    description;
 
   if (!COMPACT_MODE) {
-    console.log("[Square] Creating payment link (HTTP) with body:", {
+    console.log("[Square] Creating checkout link:", {
       contactId,
       amountCents,
       currency,
+      checkoutName,
       env: isProd ? "production" : "sandbox",
     });
   }
 
   try {
-    const url = `${SQUARE_BASE_URL}/v2/online-checkout/payment-links`;
+    const url = `${SQUARE_BASE_URL}/v2/catalog/object`;
 
-    const response = await axios.post(url, body, {
+    const catalogBody = {
+      idempotency_key: `${contactId}-${Date.now()}`,
+      object: {
+        type: "CHECKOUT_LINK",
+        id: `#checkout-${contactId}-${Date.now()}`,
+        present_at_location_ids: [SQUARE_LOCATION_ID],
+        checkout_link_data: {
+          name: checkoutName,
+          ...(checkoutDescription && { description: checkoutDescription }),
+          link_type: "PAYMENT_LINK",
+          enabled: true,
+          order_details: {
+            line_items: [
+              {
+                ordinal: 0,
+                quantity: { quantity: 1 },
+                name: checkoutName,
+                price_money: { amount: amountCents, currency },
+              },
+            ],
+          },
+          allow_tipping: false,
+          image_ids: [LOGO_IMAGE_ID],
+        },
+      },
+    };
+
+    const response = await axios.post(url, catalogBody, {
       headers: {
         Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
-        // Square-Version header is optional; we can rely on app default
+        "Square-Version": "2049-01-03",
       },
     });
 
-    const data = response.data || {};
-    const paymentLink = data.payment_link;
+    const catalogObject = response.data?.catalog_object;
+    const checkoutData = catalogObject?.checkout_link_data;
 
-    if (!paymentLink || !paymentLink.url) {
+    if (!checkoutData?.url) {
       console.error(
-        "[Square] No payment_link.url in HTTP response:",
-        JSON.stringify(data, null, 2)
+        "[Square] No checkout URL in response:",
+        JSON.stringify(response.data, null, 2)
       );
-      throw new Error("No payment link URL returned from Square");
+      throw new Error("No checkout URL returned from Square");
+    }
+
+    const checkoutLinkId = catalogObject.id;
+    const checkoutUrl = checkoutData.url;
+
+    // Store mapping in Supabase for webhook tracing
+    const { error: dbError } = await supabase
+      .from("square_checkout_links")
+      .insert({
+        checkout_link_id: checkoutLinkId,
+        checkout_url: checkoutUrl,
+        contact_id: contactId,
+        contact_name: contactName,
+        artist_id: artistId,
+        artist_name: artistName,
+        business,
+        payment_type: paymentType,
+        amount_cents: amountCents,
+      });
+
+    if (dbError) {
+      console.error("[Square] Failed to store checkout link mapping:", dbError.message);
+      // Don't fail — the link was created, just webhook tracing may not work
     }
 
     if (COMPACT_MODE) {
-      console.log(`💳 SQUARE: link created contact=${shortId(contactId)} $${amountCents / 100}`);
+      console.log(`\ud83d\udcb3 SQUARE: checkout link created contact=${shortId(contactId)} $${amountCents / 100}`);
     } else {
-      console.log("💳 Square payment link created (HTTP):", {
+      console.log("\ud83d\udcb3 Square checkout link created:", {
         contactId,
-        paymentLinkId: paymentLink.id,
-        url: paymentLink.url,
+        checkoutLinkId,
+        url: checkoutUrl,
       });
     }
 
     return {
-      url: paymentLink.url,
-      paymentLinkId: paymentLink.id,
-      // Some responses also include order_id – plumb it through if present
-      orderId: paymentLink.order_id || null,
+      url: checkoutUrl,
+      paymentLinkId: checkoutLinkId,
+      orderId: null, // CHECKOUT_LINKs don't pre-create orders
     };
   } catch (err) {
     if (err.response) {
       console.error(
-        "[Square] HTTP error creating payment link:",
+        "[Square] HTTP error creating checkout link:",
         err.response.status,
         JSON.stringify(err.response.data, null, 2)
       );
@@ -164,17 +204,19 @@ async function createDepositLinkForContact({
           JSON.stringify(err.response.data)
         }`
       );
+    } else if (err.message?.includes("Square HTTP error")) {
+      throw err;
     } else {
-      console.error("[Square] Unexpected error creating payment link:", err);
+      console.error("[Square] Unexpected error creating checkout link:", err);
       throw err;
     }
   }
 }
 
 /**
- * Given an orderId from a webhook (payment.created/payment.updated),
- * fetch the order and return its reference_id (intended for future use
- * to map order → GHL contactId). For now, this will just try and log.
+ * Given an orderId from a webhook, fetch the order and try to resolve the contactId.
+ * First checks order.reference_id (Payment Links API orders), then falls back to
+ * looking up the checkout link mapping in Supabase (CHECKOUT_LINK orders).
  */
 async function getContactIdFromOrder(orderId) {
   if (!orderId) return null;
@@ -197,13 +239,29 @@ async function getContactIdFromOrder(orderId) {
       return null;
     }
 
-    const contactId = order.reference_id || null;
+    // Try reference_id first (Payment Links API orders have this)
+    let contactId = order.reference_id || null;
     const amount = order.total_money?.amount || 0;
 
+    // If no reference_id, try matching by amount + recent checkout link in Supabase
+    if (!contactId) {
+      const mapping = await lookupCheckoutLinkMapping(amount, order);
+      if (mapping) {
+        contactId = mapping.contact_id;
+        if (COMPACT_MODE) {
+          console.log(`\ud83d\udcb3 SQUARE: checkout link match → contact=${shortId(contactId)}`);
+        } else {
+          console.log("[Square] Resolved contact via checkout link mapping:", {
+            checkoutLinkId: mapping.checkout_link_id,
+            contactId,
+          });
+        }
+      }
+    }
+
     if (COMPACT_MODE) {
-      console.log(`💳 SQUARE: order=${shortId(orderId)} → contact=${shortId(contactId)} $${amount / 100}`);
+      console.log(`\ud83d\udcb3 SQUARE: order=${shortId(orderId)} → contact=${shortId(contactId)} $${amount / 100}`);
     } else {
-      console.log("[Square] Raw order from getContactIdFromOrder:", JSON.stringify(order, null, 2));
       console.log("[Square] Resolved order → contact mapping:", { orderId, contactId });
     }
 
@@ -223,103 +281,35 @@ async function getContactIdFromOrder(orderId) {
 }
 
 /**
- * One-time setup: Create catalog items for $100 and $50 tattoo deposits.
- * These items include rich descriptions that render on the Square checkout page.
- * Call once, then store the returned variation IDs in env vars.
+ * Look up a checkout link mapping in Supabase by matching the order amount
+ * against recent unclaimed checkout links.
  */
-async function createDepositCatalogItems() {
-  const url = `${SQUARE_BASE_URL}/v2/catalog/batch-upsert`;
+async function lookupCheckoutLinkMapping(amountCents, order) {
+  try {
+    // Look for checkout links matching this amount created in the last 30 days
+    const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
-  const body = {
-    idempotency_key: `catalog-setup-${Date.now()}`,
-    batches: [
-      {
-        objects: [
-          {
-            type: "ITEM",
-            id: "#tattoo-deposit-100",
-            item_data: {
-              name: "Tattoo Deposit",
-              description_html:
-                "<p>\ud83c\udfa8 Design Consult + Concept Sketch</p>" +
-                "<p>\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back</p>" +
-                "<p>\ud83d\udcf8 Pro Photo Set (Optional)</p>" +
-                "<br><p>PLUS:</p>" +
-                "<p>\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process</p>" +
-                "<p>\ud83c\udf10 Live Translator for seamless communication (Optional)</p>" +
-                "<p>\u23f1\ufe0f Priority Scheduling</p>" +
-                "<p>\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best</p>",
-              variations: [
-                {
-                  type: "ITEM_VARIATION",
-                  id: "#tattoo-deposit-100-var",
-                  item_variation_data: {
-                    name: "Regular",
-                    pricing_type: "FIXED_PRICING",
-                    price_money: { amount: 10000, currency: "USD" },
-                  },
-                },
-              ],
-            },
-          },
-          {
-            type: "ITEM",
-            id: "#tattoo-consult-50",
-            item_data: {
-              name: "Tattoo Consultation Fee",
-              description_html:
-                "<p>\ud83c\udfa8 Design Consult + Concept Sketch</p>" +
-                "<p>\ud83d\udcb5 Applied to Your Tattoo Total Fee</p>" +
-                "<p>\ud83d\udcaf or Fully Refundable</p>",
-              variations: [
-                {
-                  type: "ITEM_VARIATION",
-                  id: "#tattoo-consult-50-var",
-                  item_variation_data: {
-                    name: "Regular",
-                    pricing_type: "FIXED_PRICING",
-                    price_money: { amount: 5000, currency: "USD" },
-                  },
-                },
-              ],
-            },
-          },
-        ],
-      },
-    ],
-  };
+    const { data, error } = await supabase
+      .from("square_checkout_links")
+      .select("*")
+      .eq("amount_cents", amountCents)
+      .gte("created_at", thirtyDaysAgo)
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-  const response = await axios.post(url, body, {
-    headers: {
-      Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  const objects = response.data?.objects || [];
-  const result = {};
-
-  for (const obj of objects) {
-    if (obj.type === "ITEM") {
-      const variations = obj.item_data?.variations || [];
-      for (const v of variations) {
-        if (v.item_variation_data?.price_money?.amount === 10000) {
-          result.deposit100VariationId = v.id;
-          result.deposit100ItemId = obj.id;
-        } else if (v.item_variation_data?.price_money?.amount === 5000) {
-          result.consult50VariationId = v.id;
-          result.consult50ItemId = obj.id;
-        }
-      }
+    if (error) {
+      console.error("[Square] Supabase lookup error:", error.message);
+      return null;
     }
-  }
 
-  console.log("[Square] Catalog items created:", result);
-  return result;
+    return data?.[0] || null;
+  } catch (err) {
+    console.error("[Square] Error looking up checkout link mapping:", err.message);
+    return null;
+  }
 }
 
 module.exports = {
   createDepositLinkForContact,
   getContactIdFromOrder,
-  createDepositCatalogItems,
 };

@@ -3243,7 +3243,7 @@ function createApp() {
   // POST /api/generate-payment-link - Generate a Square payment link for a contact
   app.post("/api/generate-payment-link", async (req, res) => {
     try {
-      const { contactId, amountCents, description, artistId, artistName } = req.body;
+      const { contactId, amountCents, description, artistId, artistName, contactName } = req.body;
 
       if (!contactId) {
         return res.status(400).json({
@@ -3267,6 +3267,7 @@ function createApp() {
         description: description || "Studio AZ Tattoo Payment",
         artistId: artistId || null,
         artistName: artistName || null,
+        contactName: contactName || null,
       });
 
       console.log(`[API] Payment link generated: ${paymentLink.url}`);
