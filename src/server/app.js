@@ -1149,9 +1149,7 @@ function createApp() {
       }
 
       const orderId = payment.order_id || payment.orderId || null;
-      const paymentId = payment.id || null;
       let contactId = payment.reference_id || payment.referenceId || null;
-      let checkoutMapping = null;
 
       // Debug: Log payment structure to understand what we're receiving
       if (!COMPACT_MODE) {
@@ -1163,9 +1161,7 @@ function createApp() {
 
       if (!contactId && orderId) {
         console.log("💳 [DEBUG] No reference_id on payment, fetching from order:", orderId);
-        const result = await getContactIdFromOrder(orderId, paymentId);
-        contactId = result.contactId;
-        checkoutMapping = result.mapping;
+        contactId = await getContactIdFromOrder(orderId);
         console.log("💳 [DEBUG] Contact ID from order:", contactId);
       }
 
