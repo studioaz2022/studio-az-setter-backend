@@ -217,9 +217,12 @@ async function createDepositLinkForContact({
  * Given an orderId from a webhook, fetch the order and try to resolve the contactId.
  * First checks order.reference_id (Payment Links API orders), then falls back to
  * looking up the checkout link mapping in Supabase (CHECKOUT_LINK orders).
+ *
+ * Returns { contactId, mapping } where mapping contains artist/business info
+ * from the checkout link (null if resolved via reference_id).
  */
-async function getContactIdFromOrder(orderId) {
-  if (!orderId) return null;
+async function getContactIdFromOrder(orderId, paymentId) {
+  if (!orderId) return { contactId: null, mapping: null };
 
   try {
     const url = `${SQUARE_BASE_URL}/v2/orders/${orderId}`;
@@ -236,24 +239,26 @@ async function getContactIdFromOrder(orderId) {
 
     if (!order) {
       console.warn("[Square] No order found for id:", orderId);
-      return null;
+      return { contactId: null, mapping: null };
     }
 
     // Try reference_id first (Payment Links API orders have this)
     let contactId = order.reference_id || null;
+    let mapping = null;
     const amount = order.total_money?.amount || 0;
 
-    // If no reference_id, try matching by amount + recent checkout link in Supabase
+    // If no reference_id, match against unclaimed checkout links in Supabase
     if (!contactId) {
-      const mapping = await lookupCheckoutLinkMapping(amount, order);
+      mapping = await claimCheckoutLink(amount, orderId, paymentId);
       if (mapping) {
         contactId = mapping.contact_id;
         if (COMPACT_MODE) {
-          console.log(`\ud83d\udcb3 SQUARE: checkout link match → contact=${shortId(contactId)}`);
+          console.log(`\ud83d\udcb3 SQUARE: checkout link claimed → contact=${shortId(contactId)} link=${shortId(mapping.checkout_link_id)}`);
         } else {
-          console.log("[Square] Resolved contact via checkout link mapping:", {
+          console.log("[Square] Claimed checkout link mapping:", {
             checkoutLinkId: mapping.checkout_link_id,
             contactId,
+            artistName: mapping.artist_name,
           });
         }
       }
@@ -265,7 +270,7 @@ async function getContactIdFromOrder(orderId) {
       console.log("[Square] Resolved order → contact mapping:", { orderId, contactId });
     }
 
-    return contactId;
+    return { contactId, mapping };
   } catch (err) {
     if (err.response) {
       console.error(
@@ -276,25 +281,27 @@ async function getContactIdFromOrder(orderId) {
     } else {
       console.error("[Square] Unexpected error reading order:", err);
     }
-    return null;
+    return { contactId: null, mapping: null };
   }
 }
 
 /**
- * Look up a checkout link mapping in Supabase by matching the order amount
- * against recent unclaimed checkout links.
+ * Find the oldest unclaimed checkout link matching this amount, claim it
+ * by setting order_id/payment_id/claimed_at, and return the full mapping.
+ * FIFO order ensures the first link created is matched to the first payment.
  */
-async function lookupCheckoutLinkMapping(amountCents, order) {
+async function claimCheckoutLink(amountCents, orderId, paymentId) {
   try {
-    // Look for checkout links matching this amount created in the last 30 days
     const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
 
+    // Find oldest unclaimed link matching this amount
     const { data, error } = await supabase
       .from("square_checkout_links")
       .select("*")
       .eq("amount_cents", amountCents)
+      .is("claimed_at", null)
       .gte("created_at", thirtyDaysAgo)
-      .order("created_at", { ascending: false })
+      .order("created_at", { ascending: true })
       .limit(1);
 
     if (error) {
@@ -302,9 +309,27 @@ async function lookupCheckoutLinkMapping(amountCents, order) {
       return null;
     }
 
-    return data?.[0] || null;
+    const match = data?.[0];
+    if (!match) return null;
+
+    // Claim it — mark as used so it's never matched again
+    const { error: updateError } = await supabase
+      .from("square_checkout_links")
+      .update({
+        claimed_at: new Date().toISOString(),
+        order_id: orderId,
+        payment_id: paymentId,
+      })
+      .eq("id", match.id)
+      .is("claimed_at", null); // Double-check still unclaimed (race condition guard)
+
+    if (updateError) {
+      console.error("[Square] Failed to claim checkout link:", updateError.message);
+    }
+
+    return match;
   } catch (err) {
-    console.error("[Square] Error looking up checkout link mapping:", err.message);
+    console.error("[Square] Error claiming checkout link:", err.message);
     return null;
   }
 }
