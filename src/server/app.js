@@ -43,6 +43,7 @@ const {
   recordWalkIn,
 } = require("../payments/squareTransactionSync");
 const { getServicePriceMap } = require("../config/barberServicePrices");
+const { processArtistInquiry, ARTIST_USER_IDS } = require("../services/tattooInquiryService");
 const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
@@ -3298,6 +3299,44 @@ function createApp() {
       res.status(500).json({
         success: false,
         error: error.message || "Failed to generate payment link",
+      });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TATTOO ARTIST SOCIAL LANDING PAGE INQUIRY
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // POST /api/tattoo/inquiry — Form submission from artist bio link landing pages
+  // Creates/upserts GHL contact, assigns artist as owner, posts inbound SMS
+  app.post("/api/tattoo/inquiry", async (req, res) => {
+    try {
+      const { firstName, lastName, phone, message, artistSlug } = req.body;
+
+      if (!firstName || !lastName || !phone || !message || !artistSlug) {
+        return res.status(400).json({
+          success: false,
+          error: "Missing required fields: firstName, lastName, phone, message, artistSlug",
+        });
+      }
+
+      if (!ARTIST_USER_IDS[artistSlug]) {
+        return res.status(400).json({
+          success: false,
+          error: `Unknown artist: ${artistSlug}`,
+        });
+      }
+
+      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone})`);
+
+      const result = await processArtistInquiry({ firstName, lastName, phone, message, artistSlug });
+
+      res.json(result);
+    } catch (error) {
+      console.error("[Inquiry] Error processing artist inquiry:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to process inquiry",
       });
     }
   });
