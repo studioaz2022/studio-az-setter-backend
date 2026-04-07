@@ -25,6 +25,7 @@ const {
 const { handleInboundMessage } = require("../ai/controller");
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
+const { createFinancingLinkForContact } = require("../payments/stripeClient");
 const {
   buildOAuthUrl,
   exchangeCodeForToken,
@@ -476,7 +477,7 @@ function createApp() {
 
   // Use JSON body parsing for all routes except webhooks that need raw body for signature verification
   app.use((req, res, next) => {
-    if (req.path === "/square/webhook" || req.path === "/fireflies/webhook") {
+    if (req.path === "/square/webhook" || req.path === "/fireflies/webhook" || req.path === "/stripe/webhook") {
       return next();
     }
     return express.json({ limit: "1mb" })(req, res, next);
@@ -487,6 +488,18 @@ function createApp() {
     "/square/webhook",
     express.raw({
       type: "*/*",
+      limit: "1mb",
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
+
+  // Raw body for Stripe webhook signature verification
+  app.use(
+    "/stripe/webhook",
+    express.raw({
+      type: "application/json",
       limit: "1mb",
       verify: (req, _res, buf) => {
         req.rawBody = buf;
@@ -3286,6 +3299,138 @@ function createApp() {
         success: false,
         error: error.message || "Failed to generate payment link",
       });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // STRIPE FINANCING LINKS + WEBHOOK
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // POST /api/generate-financing-link — Create a Stripe Checkout Session for financing
+  app.post("/api/generate-financing-link", async (req, res) => {
+    try {
+      const { contactId, amountCents, description, artistId, artistName, contactName } = req.body;
+
+      if (!contactId) {
+        return res.status(400).json({ success: false, error: "Missing required field: contactId" });
+      }
+      if (!amountCents || typeof amountCents !== "number" || amountCents <= 0) {
+        return res.status(400).json({ success: false, error: "Missing or invalid required field: amountCents (must be a positive number)" });
+      }
+
+      console.log(`[Stripe] Generating financing link for contact ${contactId} — $${amountCents / 100}${artistName ? ` (artist: ${artistName})` : ""}`);
+
+      const result = await createFinancingLinkForContact({
+        contactId,
+        amountCents,
+        description: description || "Tattoo Session",
+        artistId: artistId || null,
+        artistName: artistName || null,
+        contactName: contactName || null,
+      });
+
+      console.log(`[Stripe] Financing link generated: ${result.url}`);
+
+      res.json({
+        success: true,
+        financingLink: {
+          url: result.url,
+          sessionId: result.sessionId,
+        },
+      });
+    } catch (error) {
+      console.error("[Stripe] Error generating financing link:", error);
+      res.status(500).json({
+        success: false,
+        error: error.message || "Failed to generate financing link",
+      });
+    }
+  });
+
+  // POST /stripe/webhook — Handle Stripe payment events
+  app.post("/stripe/webhook", async (req, res) => {
+    const sig = req.headers["stripe-signature"];
+    const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
+
+    if (!webhookSecret) {
+      console.warn("⚠️ Missing STRIPE_WEBHOOK_SECRET");
+      return res.status(401).send("missing secret");
+    }
+
+    let event;
+    try {
+      const Stripe = require("stripe");
+      const stripeInstance = Stripe(process.env.STRIPE_SECRET_KEY);
+      event = stripeInstance.webhooks.constructEvent(req.rawBody || Buffer.from(""), sig, webhookSecret);
+    } catch (err) {
+      console.error("❌ Stripe webhook signature verification failed:", err.message);
+      return res.status(400).send(`Webhook error: ${err.message}`);
+    }
+
+    try {
+      if (!COMPACT_MODE) {
+        console.log("\n💳 ════════════════════════════════════════════════════════");
+        console.log(`💳 STRIPE WEBHOOK: ${event.type}`);
+        console.log("💳 ════════════════════════════════════════════════════════");
+      }
+
+      if (event.type === "checkout.session.completed") {
+        const session = event.data.object;
+        const contactId = session.metadata?.contactId;
+        const artistId = session.metadata?.artistId || null;
+        const artistName = session.metadata?.artistName || null;
+        const amountCents = session.amount_total;
+        const paymentMethod = session.payment_method_types?.[0] || "unknown";
+
+        if (!contactId) {
+          console.warn("⚠️ Stripe webhook: checkout.session.completed missing contactId in metadata", session.id);
+          return res.json({ received: true, warning: "no contactId in metadata" });
+        }
+
+        console.log(`💳 Stripe payment completed: contact=${contactId} $${amountCents / 100} via ${paymentMethod}`);
+
+        // Update Supabase record
+        const { createClient } = require("@supabase/supabase-js");
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+        await supabase
+          .from("stripe_checkout_sessions")
+          .update({
+            status: "paid",
+            payment_method_used: paymentMethod,
+            paid_at: new Date().toISOString(),
+          })
+          .eq("session_id", session.id);
+
+        // Update GHL contact — mark financing as paid
+        try {
+          await updateSystemFields(contactId, {
+            deposit_paid: "true",
+          });
+          console.log(`💳 GHL contact ${contactId} updated: deposit_paid=true`);
+        } catch (ghlErr) {
+          console.error("⚠️ Failed to update GHL contact after Stripe payment:", ghlErr.message);
+        }
+
+      } else if (event.type === "checkout.session.expired") {
+        const session = event.data.object;
+        const { createClient } = require("@supabase/supabase-js");
+        const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+        await supabase
+          .from("stripe_checkout_sessions")
+          .update({ status: "expired" })
+          .eq("session_id", session.id);
+        console.log(`💳 Stripe session expired: ${session.id}`);
+
+      } else if (event.type === "payment_intent.payment_failed") {
+        const pi = event.data.object;
+        console.warn(`⚠️ Stripe payment failed: ${pi.id} — ${pi.last_payment_error?.message || "unknown reason"}`);
+      }
+
+      res.json({ received: true });
+    } catch (err) {
+      console.error("❌ /stripe/webhook processing error:", err.message || err);
+      res.status(500).json({ error: "webhook processing failed" });
     }
   });
 

@@ -24,7 +24,8 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "openai": "^6.9.1",
-    "square": "^43.2.1"
+    "square": "^43.2.1",
+    "stripe": "^22.0.0"
   },
   "devDependencies": {
     "@jest/test-sequencer": "^30.2.0",
