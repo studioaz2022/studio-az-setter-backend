@@ -25,7 +25,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const IS_PROD = process.env.SQUARE_ENVIRONMENT === "production";
+const SYNC_ENV = process.env.SQUARE_SYNC_ENVIRONMENT || process.env.SQUARE_ENVIRONMENT || "sandbox";
+const IS_PROD = SYNC_ENV === "production";
 const SQUARE_BASE_URL = IS_PROD
   ? "https://connect.squareup.com"
   : "https://connect.squareupsandbox.com";

@@ -11,7 +11,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-const IS_PROD = process.env.SQUARE_ENVIRONMENT === "production";
+const SYNC_ENV = process.env.SQUARE_SYNC_ENVIRONMENT || process.env.SQUARE_ENVIRONMENT || "sandbox";
+const IS_PROD = SYNC_ENV === "production";
 
 const APP_ID = IS_PROD
   ? process.env.SQUARE_APPLICATION_ID
