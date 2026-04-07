@@ -73,13 +73,9 @@ async function createFinancingLinkForContact({
       artistName: artistName || "",
       contactName: contactName || "",
     },
-    // After payment, show Stripe's built-in confirmation page
-    after_completion: {
-      type: "redirect",
-      redirect: {
-        url: "https://studioaztattoo.com",
-      },
-    },
+    // After payment, redirect to studio website
+    success_url: "https://studioaztattoo.com",
+    cancel_url: "https://studioaztattoo.com",
     // Session expires after 24 hours
     expires_at: Math.floor(Date.now() / 1000) + 86400,
   });
