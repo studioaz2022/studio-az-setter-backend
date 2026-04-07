@@ -215,7 +215,104 @@ async function getContactIdFromOrder(orderId) {
   }
 }
 
+/**
+ * One-time setup: Create catalog items for $100 and $50 tattoo deposits.
+ * These items include rich descriptions that render on the Square checkout page.
+ * Call once, then store the returned variation IDs in env vars.
+ */
+async function createDepositCatalogItems() {
+  const url = `${SQUARE_BASE_URL}/v2/catalog/batch-upsert`;
+
+  const body = {
+    idempotency_key: `catalog-setup-${Date.now()}`,
+    batches: [
+      {
+        objects: [
+          {
+            type: "ITEM",
+            id: "#tattoo-deposit-100",
+            item_data: {
+              name: "Tattoo Deposit",
+              description_html:
+                "<p>\ud83c\udfa8 Design Consult + Concept Sketch</p>" +
+                "<p>\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back</p>" +
+                "<p>\ud83d\udcf8 Pro Photo Set (Optional)</p>" +
+                "<br><p>PLUS:</p>" +
+                "<p>\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process</p>" +
+                "<p>\ud83c\udf10 Live Translator for seamless communication (Optional)</p>" +
+                "<p>\u23f1\ufe0f Priority Scheduling</p>" +
+                "<p>\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best</p>",
+              variations: [
+                {
+                  type: "ITEM_VARIATION",
+                  id: "#tattoo-deposit-100-var",
+                  item_variation_data: {
+                    name: "Regular",
+                    pricing_type: "FIXED_PRICING",
+                    price_money: { amount: 10000, currency: "USD" },
+                  },
+                },
+              ],
+            },
+          },
+          {
+            type: "ITEM",
+            id: "#tattoo-consult-50",
+            item_data: {
+              name: "Tattoo Consultation Fee",
+              description_html:
+                "<p>\ud83c\udfa8 Design Consult + Concept Sketch</p>" +
+                "<p>\ud83d\udcb5 Applied to Your Tattoo Total Fee</p>" +
+                "<p>\ud83d\udcaf or Fully Refundable</p>",
+              variations: [
+                {
+                  type: "ITEM_VARIATION",
+                  id: "#tattoo-consult-50-var",
+                  item_variation_data: {
+                    name: "Regular",
+                    pricing_type: "FIXED_PRICING",
+                    price_money: { amount: 5000, currency: "USD" },
+                  },
+                },
+              ],
+            },
+          },
+        ],
+      },
+    ],
+  };
+
+  const response = await axios.post(url, body, {
+    headers: {
+      Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+  });
+
+  const objects = response.data?.objects || [];
+  const result = {};
+
+  for (const obj of objects) {
+    if (obj.type === "ITEM") {
+      const variations = obj.item_data?.variations || [];
+      for (const v of variations) {
+        if (v.item_variation_data?.price_money?.amount === 10000) {
+          result.deposit100VariationId = v.id;
+          result.deposit100ItemId = obj.id;
+        } else if (v.item_variation_data?.price_money?.amount === 5000) {
+          result.consult50VariationId = v.id;
+          result.consult50ItemId = obj.id;
+        }
+      }
+    }
+  }
+
+  console.log("[Square] Catalog items created:", result);
+  return result;
+}
+
 module.exports = {
   createDepositLinkForContact,
   getContactIdFromOrder,
+  createDepositCatalogItems,
 };
