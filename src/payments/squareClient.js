@@ -42,6 +42,8 @@ async function createDepositLinkForContact({
   description = "Studio AZ Tattoo Deposit",
   business = "tattoo",
   paymentType = "deposit",
+  artistId = null,
+  artistName = null,
 }) {
   if (!contactId) {
     throw new Error("contactId is required for createDepositLinkForContact");
@@ -79,6 +81,8 @@ async function createDepositLinkForContact({
         business,        // "tattoo" or "barbershop"
         payment_type: paymentType, // "deposit", "session_payment", "payment_plan"
         contact_id: contactId,
+        ...(artistId && { artist_id: artistId }),
+        ...(artistName && { artist_name: artistName }),
       },
       line_items: [
         {
