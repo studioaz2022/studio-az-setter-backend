@@ -1,6 +1,6 @@
 // tattooInquiryService.js
 // Handles social landing page form submissions from tattoo artist bio links.
-// Flow: upsert GHL contact → assign artist → get/create conversation → post inbound SMS
+// Flow: upsert GHL contact → assign artist → send SMS with lead's message → add note → mark unread
 
 const {
   lookupContactIdByEmailOrPhone,
@@ -12,20 +12,28 @@ const { ghl: ghlSdk } = require("../clients/ghlSdk");
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
-// Map artist slug → GHL user ID
+// Map artist slug → GHL user ID + first name
 const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
+};
+
+const ARTIST_NAMES = {
+  joan: "Joan",
+  andrew: "Andrew",
 };
 
 /**
  * Process an inquiry from the artist social landing page.
  * 1. Upsert contact with artist as owner
  * 2. Find or create SMS conversation
- * 3. Post lead's message as an inbound SMS so it appears as an unread message in the iOS app
+ * 3. Send the lead's message as an SMS (appears in conversation thread)
+ * 4. Add a contact note with the original inquiry
+ * 5. Mark conversation as unread so artist gets notified
  */
 async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
+  const artistName = ARTIST_NAMES[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
   }
@@ -80,24 +88,39 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Send an SMS to the lead confirming receipt.
-  // This creates the conversation thread so the artist sees it in the iOS app,
-  // and the lead's original message is stored as a contact note.
-  const confirmMessage = `Thanks for reaching out to ${artistSlug === "joan" ? "Joan" : "Andrew"} at Studio AZ Tattoo! Your message has been received — expect a reply soon.`;
+  // 4. Send the lead's actual message as an SMS to the lead.
+  // The lead receives it on their phone and can reply directly.
+  // The artist sees it in the conversation thread in the iOS app.
+  const smsMessage = `Hi ${firstName}, thanks for reaching out to ${artistName} at Studio AZ Tattoo! Here's a copy of your message:\n\n"${message}"\n\n${artistName} will get back to you shortly.`;
 
   const sendResult = await ghlSdk.conversations.sendANewMessage({
     type: "SMS",
-    message: confirmMessage,
+    message: smsMessage,
     contactId,
   });
 
-  console.log(`✅ Confirmation SMS sent to contact ${contactId}`, {
-    conversationId,
-    messageId: sendResult?.messageId,
+  const sentMessageId = sendResult?.messageId;
+
+  console.log(`✅ SMS sent to contact ${contactId}`, {
+    conversationId: sendResult?.conversationId || conversationId,
+    messageId: sentMessageId,
   });
 
-  // 5. Add the lead's original message as a note on the contact
-  // so the artist can see exactly what was submitted from the landing page.
+  // Use the conversationId from the send result if available
+  conversationId = sendResult?.conversationId || conversationId;
+
+  // 5. Mark conversation as unread so the artist gets the notification badge
+  try {
+    await ghlSdk.conversations.updateConversation(
+      { conversationId },
+      { locationId: GHL_LOCATION_ID, unreadCount: 1 }
+    );
+    console.log(`🔔 Conversation ${conversationId} marked as unread`);
+  } catch (unreadErr) {
+    console.warn(`⚠️ Could not mark conversation as unread:`, unreadErr.message);
+  }
+
+  // 6. Add the lead's original message as a note on the contact
   try {
     await ghlSdk.contacts.createNote(
       { contactId },
