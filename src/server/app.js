@@ -1163,13 +1163,19 @@ function createApp() {
       }
 
       const orderId = payment.order_id || payment.orderId || null;
-      let contactId = payment.reference_id || payment.referenceId || null;
+      const rawReferenceId = payment.reference_id || payment.referenceId || null;
+
+      // Square sometimes injects its own customer_id (24-char lowercase hex) into
+      // reference_id — that is NOT a GHL contact ID. GHL IDs are mixed-case alphanumeric
+      // ~20 chars. Reject pure hex strings so we fall through to order-based lookup.
+      const isSquareCustomerId = rawReferenceId && /^[0-9a-f]{24}$/.test(rawReferenceId);
+      let contactId = isSquareCustomerId ? null : rawReferenceId;
 
       // Debug: Log payment structure to understand what we're receiving
       if (!COMPACT_MODE) {
         console.log("💳 [DEBUG] Payment object keys:", Object.keys(payment));
         console.log("💳 [DEBUG] Order ID:", orderId);
-        console.log("💳 [DEBUG] Reference ID from payment:", contactId);
+        console.log("💳 [DEBUG] Reference ID from payment:", rawReferenceId, isSquareCustomerId ? "(Square customer ID — ignored)" : "");
         console.log("💳 [DEBUG] Payment Status:", paymentStatus);
       }
 
