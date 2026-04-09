@@ -3342,6 +3342,48 @@ function createApp() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.get("/pay/:code", async (req, res) => {
+    const { code } = req.params;
+
+    // Validate: 6 alphanumeric chars only
+    if (!/^[a-z0-9]{6}$/.test(code)) {
+      return res.status(404).send("Not found");
+    }
+
+    try {
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
+
+      const { data, error } = await supabase
+        .from("short_links")
+        .select("destination_url, click_count")
+        .eq("code", code)
+        .single();
+
+      if (error || !data) {
+        console.warn(`[ShortLink] Code not found: ${code}`);
+        return res.status(404).send("Link not found or expired");
+      }
+
+      // Increment click count (fire and forget — non-fatal if fails)
+      supabase
+        .from("short_links")
+        .update({ click_count: (data.click_count || 0) + 1 })
+        .eq("code", code)
+        .then(() => {});
+
+      console.log(`[ShortLink] ${code} → ${data.destination_url.substring(0, 60)}...`);
+      return res.redirect(302, data.destination_url);
+    } catch (err) {
+      console.error(`[ShortLink] Error resolving code ${code}:`, err.message);
+      return res.status(500).send("Server error");
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // STRIPE FINANCING LINKS + WEBHOOK
   // ═══════════════════════════════════════════════════════════════════════════
 
