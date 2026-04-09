@@ -82,7 +82,7 @@ async function handleAppointmentCreated(payload) {
  * This catches manually-booked consultations from the iOS app or GHL UI
  * that bypass the AI setter's bookingController.
  */
-async function ensureGoogleMeetForConsultation(rawAppt) {
+async function ensureGoogleMeetForConsultation(rawAppt, { forceNew = false } = {}) {
   const calendarId = rawAppt.calendarId;
   const contactId = rawAppt.contactId;
   const title = rawAppt.title || 'Consultation';
@@ -97,7 +97,8 @@ async function ensureGoogleMeetForConsultation(rawAppt) {
   }
 
   // Skip if already has a Google Meet link (AI setter already handled it)
-  if (existingAddress && existingAddress.includes('meet.google.com')) {
+  // Unless forceNew is true (e.g., reschedule — need a fresh Meet for the new time)
+  if (!forceNew && existingAddress && existingAddress.includes('meet.google.com')) {
     console.log('📹 Appointment already has Google Meet link — skipping');
     return;
   }
@@ -297,6 +298,11 @@ async function handleAppointmentUpdated(payload) {
   if (isCancelled) eventType = 'cancelled';
   else if (isRescheduled) eventType = 'rescheduled';
   await sendAppointmentPushNotification(rawAppointment, eventType);
+
+  // Re-create Google Meet + Fireflies for rescheduled online consultations
+  if (isRescheduled) {
+    await ensureGoogleMeetForConsultation(rawAppointment, { forceNew: true });
+  }
 }
 
 /**
