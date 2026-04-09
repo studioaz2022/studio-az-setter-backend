@@ -85,8 +85,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // and the lead's original message is stored as a contact note.
   const confirmMessage = `Thanks for reaching out to ${artistSlug === "joan" ? "Joan" : "Andrew"} at Studio AZ Tattoo! Your message has been received — expect a reply soon.`;
 
-  const sendResult = await ghlSdk.conversations.createMessage({
-    conversationId,
+  const sendResult = await ghlSdk.conversations.sendANewMessage({
     type: "SMS",
     message: confirmMessage,
     contactId,
@@ -100,11 +99,13 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // 5. Add the lead's original message as a note on the contact
   // so the artist can see exactly what was submitted from the landing page.
   try {
-    await ghlSdk.contacts.createNote({
-      contactId,
-      body: `📩 Landing page inquiry:\n\n"${message}"\n\nSubmitted from studioaztattoo.com/${artistSlug}`,
-      userId: artistUserId,
-    });
+    await ghlSdk.contacts.createNote(
+      { contactId },
+      {
+        body: `📩 Landing page inquiry:\n\n"${message}"\n\nSubmitted from studioaztattoo.com/${artistSlug}`,
+        userId: artistUserId,
+      }
+    );
     console.log(`📝 Note added to contact ${contactId}`);
   } catch (noteErr) {
     console.warn(`⚠️ Failed to add note to contact ${contactId}:`, noteErr.message);
