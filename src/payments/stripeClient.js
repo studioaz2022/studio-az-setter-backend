@@ -68,9 +68,6 @@ async function createFinancingLinkForContact({
   if (typeof amountCents !== "number" || amountCents <= 0) {
     throw new Error("amountCents (positive number) is required for createFinancingLinkForContact");
   }
-  if (amountCents < 50000) {
-    throw new Error("Financing links require a minimum of $500. Use a deposit link for smaller amounts.");
-  }
 
   if (!COMPACT_MODE) {
     console.log("[Stripe] Creating financing session:", {
