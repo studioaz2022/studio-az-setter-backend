@@ -80,21 +80,35 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Post the lead's message as an inbound SMS
-  // direction: "inbound" makes it appear as a received message in the iOS app,
-  // triggering the unread badge so the artist sees it like a normal incoming text.
-  const inboundResult = await ghlSdk.conversations.addAnInboundMessage({
+  // 4. Send an SMS to the lead confirming receipt.
+  // This creates the conversation thread so the artist sees it in the iOS app,
+  // and the lead's original message is stored as a contact note.
+  const confirmMessage = `Thanks for reaching out to ${artistSlug === "joan" ? "Joan" : "Andrew"} at Studio AZ Tattoo! Your message has been received — expect a reply soon.`;
+
+  const sendResult = await ghlSdk.conversations.createMessage({
     conversationId,
     type: "SMS",
-    message,
-    conversationProviderId: "twilio-sms",
-    direction: "inbound",
+    message: confirmMessage,
+    contactId,
   });
 
-  console.log(`✅ Inbound SMS posted for contact ${contactId}`, {
+  console.log(`✅ Confirmation SMS sent to contact ${contactId}`, {
     conversationId,
-    messageId: inboundResult?.messageId,
+    messageId: sendResult?.messageId,
   });
+
+  // 5. Add the lead's original message as a note on the contact
+  // so the artist can see exactly what was submitted from the landing page.
+  try {
+    await ghlSdk.contacts.createNote({
+      contactId,
+      body: `📩 Landing page inquiry:\n\n"${message}"\n\nSubmitted from studioaztattoo.com/${artistSlug}`,
+      userId: artistUserId,
+    });
+    console.log(`📝 Note added to contact ${contactId}`);
+  } catch (noteErr) {
+    console.warn(`⚠️ Failed to add note to contact ${contactId}:`, noteErr.message);
+  }
 
   return { success: true, contactId, conversationId };
 }
