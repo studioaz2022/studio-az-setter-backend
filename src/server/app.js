@@ -3345,13 +3345,8 @@ function createApp() {
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
   // ═══════════════════════════════════════════════════════════════════════════
 
-  app.get("/pay/:code", async (req, res) => {
+  app.get("/:code([a-z0-9]{6})", async (req, res) => {
     const { code } = req.params;
-
-    // Validate: 6 alphanumeric chars only
-    if (!/^[a-z0-9]{6}$/.test(code)) {
-      return res.status(404).send("Not found");
-    }
 
     try {
       const { createClient } = require("@supabase/supabase-js");
