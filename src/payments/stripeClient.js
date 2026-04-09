@@ -26,6 +26,7 @@ if (!process.env.STRIPE_SECRET_KEY) {
 async function createFinancingLinkForContact({
   contactId,
   amountCents,
+  originalQuoteAmountCents = null,
   currency = "usd",
   description = "Tattoo Session",
   artistId = null,
@@ -72,6 +73,13 @@ async function createFinancingLinkForContact({
       artistId: artistId || "",
       artistName: artistName || "",
       contactName: contactName || "",
+      // originalQuoteAmountCents = artist commission base (before 6% gross-up)
+      // amountCents = what the client actually pays
+      originalQuoteAmountCents: String(originalQuoteAmountCents || amountCents),
+    },
+    // Suppress Link wallet (Stripe-saved cards) — we only want Affirm, Klarna, card
+    wallet_options: {
+      link: { display: "never" },
     },
     // After payment, redirect to studio website
     success_url: "https://studioaztattoo.com",
@@ -91,6 +99,7 @@ async function createFinancingLinkForContact({
       artist_id: artistId,
       artist_name: artistName,
       amount_cents: amountCents,
+      original_quote_amount_cents: originalQuoteAmountCents || amountCents,
       status: "pending",
     });
 

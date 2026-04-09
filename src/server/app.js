@@ -3348,7 +3348,7 @@ function createApp() {
   // POST /api/generate-financing-link — Create a Stripe Checkout Session for financing
   app.post("/api/generate-financing-link", async (req, res) => {
     try {
-      const { contactId, amountCents, description, artistId, artistName, contactName } = req.body;
+      const { contactId, amountCents, originalQuoteAmountCents, description, artistId, artistName, contactName } = req.body;
 
       if (!contactId) {
         return res.status(400).json({ success: false, error: "Missing required field: contactId" });
@@ -3357,11 +3357,12 @@ function createApp() {
         return res.status(400).json({ success: false, error: "Missing or invalid required field: amountCents (must be a positive number)" });
       }
 
-      console.log(`[Stripe] Generating financing link for contact ${contactId} — $${amountCents / 100}${artistName ? ` (artist: ${artistName})` : ""}`);
+      console.log(`[Stripe] Generating financing link for contact ${contactId} — $${amountCents / 100}${originalQuoteAmountCents ? ` (quote: $${originalQuoteAmountCents / 100})` : ""}${artistName ? ` (artist: ${artistName})` : ""}`);
 
       const result = await createFinancingLinkForContact({
         contactId,
         amountCents,
+        originalQuoteAmountCents: originalQuoteAmountCents || amountCents,
         description: description || "Tattoo Session",
         artistId: artistId || null,
         artistName: artistName || null,
@@ -3456,6 +3457,14 @@ function createApp() {
           const contactName = session.metadata?.contactName || "Unknown Client";
           const resolvedArtistId = (artistId && artistId !== "") ? artistId : "unknown";
 
+          // originalQuoteAmountCents = artist commission base (before 6% merchant fee gross-up)
+          // Use it for grossAmount so commission splits are calculated on the correct base.
+          // The actual collected amount (amountCents) is stored in the notes for shop bookkeeping.
+          const originalQuoteAmountCents = parseInt(session.metadata?.originalQuoteAmountCents || amountCents, 10);
+          const collectedAmount = amountCents / 100;
+          const quoteAmount = originalQuoteAmountCents / 100;
+          const shopFee = parseFloat((collectedAmount - quoteAmount).toFixed(2));
+
           await recordTransaction({
             contactId,
             contactName,
@@ -3464,13 +3473,13 @@ function createApp() {
             transactionType: "session_payment",
             paymentMethod: `stripe_${paymentMethod}`, // e.g. 'stripe_affirm', 'stripe_klarna', 'stripe_card'
             paymentRecipient: "shop",
-            grossAmount: amountCents / 100,
+            grossAmount: quoteAmount, // commission base — what artist is paid on
             sessionDate: new Date(),
             squarePaymentId: null,
             locationId: process.env.GHL_LOCATION_ID || "studio_az_tattoo",
-            notes: `Stripe financing — ${paymentMethod} — session ${session.id}`,
+            notes: `Stripe financing — ${paymentMethod} — session ${session.id} — collected $${collectedAmount}${shopFee > 0 ? ` (incl. $${shopFee} financing fee → shop)` : ""}`,
           });
-          console.log(`💳 Transaction recorded for contact=${contactId} artist=${resolvedArtistId} $${amountCents / 100}`);
+          console.log(`💳 Transaction recorded: contact=${contactId} artist=${resolvedArtistId} quote=$${quoteAmount} collected=$${collectedAmount}`);
         } catch (txErr) {
           console.error("⚠️ Failed to record Stripe transaction:", txErr.message);
           // Non-fatal — payment already processed, don't fail the webhook
