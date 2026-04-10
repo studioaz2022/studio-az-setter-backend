@@ -1276,6 +1276,21 @@ function createApp() {
           consultationType,
         });
 
+        // === PUSH NOTIFICATION: Deposit paid ===
+        try {
+          const { sendPaymentReceivedNotification } = require("../services/paymentNotifications");
+          const contactDisplayName = contact?.contactName || contact?.firstName || "Client";
+          await sendPaymentReceivedNotification({
+            artistGhlUserId: assignedArtist,
+            contactName: contactDisplayName,
+            amount: amount / 100,
+            paymentMethod: "square",
+            contactId,
+          });
+        } catch (pushErr) {
+          console.warn("⚠️ Deposit push notification failed (non-fatal):", pushErr.message);
+        }
+
         // === NOTIFY iOS APP: Lead qualified event ===
         await notifyLeadQualified(contactId, {
           assignedArtist,
@@ -3351,9 +3366,49 @@ function createApp() {
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
   // ═══════════════════════════════════════════════════════════════════════════
 
-  app.get("/:code", async (req, res) => {
+  const EXPIRED_LINK_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Link Expired — Studio AZ Tattoo</title>
+  <style>
+    *{margin:0;padding:0;box-sizing:border-box}
+    body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+      background:#111;color:#fff;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px}
+    .card{text-align:center;max-width:380px}
+    .icon{font-size:48px;margin-bottom:16px;opacity:.6}
+    h1{font-size:22px;font-weight:700;margin-bottom:8px}
+    p{font-size:15px;color:#999;line-height:1.5;margin-bottom:24px}
+    a{display:inline-block;padding:12px 32px;background:#7B5EA7;color:#fff;
+      text-decoration:none;border-radius:12px;font-weight:600;font-size:15px}
+    a:hover{opacity:.9}
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">⏱</div>
+    <h1>TITLE_PLACEHOLDER</h1>
+    <p>MSG_PLACEHOLDER</p>
+    <a href="https://studioaztattoo.com">Visit Studio AZ</a>
+  </div>
+</body>
+</html>`;
+
+  const NOT_FOUND_HTML = EXPIRED_LINK_HTML
+    .replace("Link Expired", "Not Found")
+    .replace("TITLE_PLACEHOLDER", "Link not found")
+    .replace("MSG_PLACEHOLDER", "This payment link doesn&#39;t exist or may have been removed. Please contact your artist for assistance.")
+    .replace("⏱", "🔗")
+    .replace("#7B5EA7", "#333");
+
+  function expiredPage(title, message) {
+    return EXPIRED_LINK_HTML
+      .replace("TITLE_PLACEHOLDER", title)
+      .replace("MSG_PLACEHOLDER", message);
+  }
+
+  app.get("/:code([a-z0-9]{6})", async (req, res) => {
     const { code } = req.params;
-    if (!/^[a-z0-9]{6}$/.test(code)) return res.status(404).send("Not found");
 
     try {
       const { createClient } = require("@supabase/supabase-js");
@@ -3361,16 +3416,42 @@ function createApp() {
 
       const { data, error } = await supabase
         .from("short_links")
-        .select("destination_url, click_count")
+        .select("destination_url, click_count, session_id")
         .eq("code", code)
         .single();
 
       if (error || !data) {
         console.warn(`[ShortLink] Code not found: ${code}`);
-        return res.status(404).send("Link not found or expired");
+        return res.status(404).send(NOT_FOUND_HTML);
       }
 
-      // Increment click count (fire and forget — non-fatal if fails)
+      // Check if this is a Stripe session — verify it's still active
+      if (data.session_id && data.session_id.startsWith("cs_")) {
+        try {
+          const Stripe = require("stripe");
+          const stripeInstance = Stripe(process.env.STRIPE_SECRET_KEY);
+          const session = await stripeInstance.checkout.sessions.retrieve(data.session_id);
+          if (session.status === "expired") {
+            console.log(`[ShortLink] ${code} → expired Stripe session ${data.session_id}`);
+            return res.status(410).send(expiredPage(
+              "This link has expired",
+              "Payment links expire after 24 hours for your security. Please contact your artist to get a new link."
+            ));
+          }
+          if (session.status === "complete") {
+            console.log(`[ShortLink] ${code} → already paid Stripe session ${data.session_id}`);
+            return res.status(410).send(expiredPage(
+              "This link has already been used",
+              "This payment has already been completed. If you have questions, please contact your artist."
+            ));
+          }
+        } catch (stripeErr) {
+          console.warn(`[ShortLink] Could not check Stripe session status: ${stripeErr.message}`);
+          // Fall through to redirect — let Stripe handle the error
+        }
+      }
+
+      // Increment click count (fire and forget)
       supabase
         .from("short_links")
         .update({ click_count: (data.click_count || 0) + 1 })
@@ -3524,6 +3605,20 @@ function createApp() {
             notes: `Stripe financing — ${paymentMethod} — session ${session.id} — collected $${collectedAmount}${shopFee > 0 ? ` (incl. $${shopFee} financing fee → shop)` : ""}`,
           });
           console.log(`💳 Transaction recorded: contact=${contactId} artist=${resolvedArtistId} quote=$${quoteAmount} collected=$${collectedAmount}`);
+
+          // Push notification to artist
+          try {
+            const { sendPaymentReceivedNotification } = require("../services/paymentNotifications");
+            await sendPaymentReceivedNotification({
+              artistGhlUserId: resolvedArtistId,
+              contactName,
+              amount: collectedAmount,
+              paymentMethod: `stripe_${paymentMethod}`,
+              contactId,
+            });
+          } catch (pushErr) {
+            console.warn("⚠️ Payment push notification failed (non-fatal):", pushErr.message);
+          }
         } catch (txErr) {
           console.error("⚠️ Failed to record Stripe transaction:", txErr.message);
           // Non-fatal — payment already processed, don't fail the webhook

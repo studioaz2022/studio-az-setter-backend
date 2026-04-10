@@ -7,6 +7,7 @@
 const axios = require("axios");
 const { createClient } = require("@supabase/supabase-js");
 const { COMPACT_MODE, logSquareEvent, shortId } = require("../utils/logger");
+const { createShortLink } = require("./shortLinks");
 
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
@@ -182,19 +183,29 @@ async function createDepositLinkForContact({
       console.error("[Square] Failed to store checkout link mapping:", dbError.message);
     }
 
+    // Generate short link: pay.studioaztattoo.com/:code → Square checkout URL
+    let finalUrl = checkoutUrl;
+    try {
+      const result = await createShortLink(checkoutUrl, checkoutLinkId);
+      finalUrl = result.shortUrl;
+    } catch (shortErr) {
+      console.error("[Square] Failed to create short link:", shortErr.message);
+    }
+
     if (COMPACT_MODE) {
-      console.log(`\ud83d\udcb3 SQUARE: link created contact=${shortId(contactId)} #${trackingCode} $${amountCents / 100}`);
+      console.log(`\ud83d\udcb3 SQUARE: link created contact=${shortId(contactId)} #${trackingCode} $${amountCents / 100} → ${finalUrl}`);
     } else {
       console.log("\ud83d\udcb3 Square checkout link created:", {
         contactId,
         trackingCode,
         checkoutLinkId,
-        url: checkoutUrl,
+        shortUrl: finalUrl,
+        fullUrl: checkoutUrl,
       });
     }
 
     return {
-      url: checkoutUrl,
+      url: finalUrl,
       paymentLinkId: checkoutLinkId,
       orderId: null,
     };

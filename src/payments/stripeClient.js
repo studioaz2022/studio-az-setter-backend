@@ -6,35 +6,7 @@
 const Stripe = require("stripe");
 const { createClient } = require("@supabase/supabase-js");
 const { COMPACT_MODE, shortId } = require("../utils/logger");
-
-const SHORT_LINK_BASE_URL = "https://pay.studioaztattoo.com";
-const SHORT_CODE_CHARS = "abcdefghijklmnopqrstuvwxyz0123456789";
-const SHORT_CODE_LENGTH = 6;
-
-function generateShortCode() {
-  let code = "";
-  for (let i = 0; i < SHORT_CODE_LENGTH; i++) {
-    code += SHORT_CODE_CHARS[Math.floor(Math.random() * SHORT_CODE_CHARS.length)];
-  }
-  return code;
-}
-
-async function createShortLink(supabase, destinationUrl, sessionId) {
-  // Retry up to 5 times on collision (extremely unlikely with 36^6 = 2.1B combinations)
-  for (let attempt = 0; attempt < 5; attempt++) {
-    const code = generateShortCode();
-    const { error } = await supabase.from("short_links").insert({
-      code,
-      destination_url: destinationUrl,
-      session_id: sessionId,
-    });
-    if (!error) {
-      return { code, shortUrl: `${SHORT_LINK_BASE_URL}/${code}` };
-    }
-    if (!error.message?.includes("unique")) throw error;
-  }
-  throw new Error("Failed to generate unique short code after 5 attempts");
-}
+const { createShortLink } = require("./shortLinks");
 
 const stripe = Stripe(process.env.STRIPE_SECRET_KEY);
 
@@ -137,7 +109,7 @@ async function createFinancingLinkForContact({
   let shortUrl = session.url; // fallback to full URL if short link fails
   let shortCode = null;
   try {
-    const result = await createShortLink(supabase, session.url, session.id);
+    const result = await createShortLink(session.url, session.id);
     shortUrl = result.shortUrl;
     shortCode = result.code;
   } catch (shortErr) {
