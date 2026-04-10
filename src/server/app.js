@@ -3407,8 +3407,9 @@ function createApp() {
       .replace("MSG_PLACEHOLDER", message);
   }
 
-  app.get("/:code([a-z0-9]{6})", async (req, res) => {
+  app.get("/:code", async (req, res) => {
     const { code } = req.params;
+    if (!/^[a-z0-9]{6}$/.test(code)) return res.status(404).send(NOT_FOUND_HTML);
 
     try {
       const { createClient } = require("@supabase/supabase-js");
