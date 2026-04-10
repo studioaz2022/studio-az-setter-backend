@@ -32,7 +32,7 @@ const ARTIST_USER_IDS = {
  * No SMS is sent — the first text the lead receives is the artist's personal reply.
  * The iOS app reads the custom field and displays it as an inbound bubble.
  */
-async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug }) {
+async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
@@ -70,16 +70,21 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   await assignContactToArtist(contactId, artistUserId);
 
   // 3. Store the lead's message in the landing_page_inquiry custom field
+  // Format: "[source]message" — iOS app parses the source prefix for attribution
+  // source is "instagram", "tiktok", or "bio_link"
+  const trafficSource = source || "bio_link";
+  const fieldValue = `[${trafficSource}]${message}`;
+
   try {
     await ghlSdk.contacts.updateContact(
       { contactId },
       {
         customFields: [
-          { id: LANDING_PAGE_INQUIRY_FIELD_ID, field_value: message },
+          { id: LANDING_PAGE_INQUIRY_FIELD_ID, field_value: fieldValue },
         ],
       }
     );
-    console.log(`📩 Landing page inquiry stored in custom field for contact ${contactId}`);
+    console.log(`📩 Landing page inquiry (${trafficSource}) stored for contact ${contactId}`);
   } catch (cfErr) {
     console.error(`❌ Failed to store inquiry in custom field:`, cfErr.message);
     throw cfErr;

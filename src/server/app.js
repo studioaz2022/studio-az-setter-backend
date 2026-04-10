@@ -3332,7 +3332,7 @@ function createApp() {
   // Creates/upserts GHL contact, assigns artist as owner, posts inbound SMS
   app.post("/api/tattoo/inquiry", async (req, res) => {
     try {
-      const { firstName, lastName, phone, message, artistSlug } = req.body;
+      const { firstName, lastName, phone, message, artistSlug, source } = req.body;
 
       if (!firstName || !lastName || !phone || !message || !artistSlug) {
         return res.status(400).json({
@@ -3348,9 +3348,9 @@ function createApp() {
         });
       }
 
-      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone})`);
+      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone}) via ${source || "unknown"}`);
 
-      const result = await processArtistInquiry({ firstName, lastName, phone, message, artistSlug });
+      const result = await processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source });
 
       res.json(result);
     } catch (error) {
