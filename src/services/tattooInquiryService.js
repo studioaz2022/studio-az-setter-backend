@@ -104,7 +104,20 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 5. Mark conversation as unread so the artist gets the notification badge
+  // 5. Post an internal comment so the conversation preview shows the message.
+  // Internal comments don't send SMS but populate lastInternalComment in GHL.
+  try {
+    await ghlSdk.conversations.sendANewMessage({
+      type: "InternalComment",
+      message: `📩 ${message}`,
+      contactId,
+    });
+    console.log(`💬 Internal comment posted for conversation preview`);
+  } catch (commentErr) {
+    console.warn(`⚠️ Could not post internal comment:`, commentErr.message);
+  }
+
+  // 6. Mark conversation as unread so the artist gets the notification badge
   try {
     await ghlSdk.conversations.updateConversation(
       { conversationId },
