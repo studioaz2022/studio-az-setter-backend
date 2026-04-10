@@ -88,10 +88,10 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Send the lead's actual message as an SMS to the lead.
-  // The lead receives it on their phone and can reply directly.
-  // The artist sees it in the conversation thread in the iOS app.
-  const smsMessage = `Hi ${firstName}, thanks for reaching out to ${artistName} at Studio AZ Tattoo! Here's a copy of your message:\n\n"${message}"\n\n${artistName} will get back to you shortly.`;
+  // 4. Send the lead's message as an SMS with [LP] marker.
+  // The [LP] prefix tells the iOS app to render this as an inbound (left-side) bubble.
+  // The lead receives the SMS on their phone and can reply directly.
+  const smsMessage = `[LP]${message}`;
 
   const sendResult = await ghlSdk.conversations.sendANewMessage({
     type: "SMS",
