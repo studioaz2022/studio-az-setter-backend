@@ -88,14 +88,14 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Send the lead's message as an SMS with [LP] marker prefix.
+  // 4. Post the lead's message as an internal comment with [LP] marker.
+  // Internal comments appear in the conversation thread but do NOT send an SMS to the lead.
   // The [LP] prefix tells the iOS app to render this as an inbound (left-side) bubble.
-  // The lead also receives this SMS — format it as a natural confirmation message
-  // while keeping the marker for iOS detection.
+  // The first real SMS the lead receives will be the artist's personal reply.
   const smsMessage = `[LP]${message}`;
 
   const sendResult = await ghlSdk.conversations.sendANewMessage({
-    type: "SMS",
+    type: "InternalComment",
     message: smsMessage,
     contactId,
   });
