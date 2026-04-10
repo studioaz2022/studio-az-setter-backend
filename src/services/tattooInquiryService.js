@@ -1,6 +1,6 @@
 // tattooInquiryService.js
 // Handles social landing page form submissions from tattoo artist bio links.
-// Flow: upsert GHL contact → assign artist → send SMS with lead's message → add note → mark unread
+// Flow: upsert GHL contact → assign artist → store message in custom field → create conversation → mark unread
 
 const {
   lookupContactIdByEmailOrPhone,
@@ -12,28 +12,28 @@ const { ghl: ghlSdk } = require("../clients/ghlSdk");
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
-// Map artist slug → GHL user ID + first name
+// Custom field ID for "Landing Page Inquiry" — stores the lead's message from the form.
+// The iOS app reads this field and renders it as a synthetic inbound bubble in the conversation.
+const LANDING_PAGE_INQUIRY_FIELD_ID = "kNJrZsTQhDmILbdqJlo0";
+
+// Map artist slug → GHL user ID
 const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
 };
 
-const ARTIST_NAMES = {
-  joan: "Joan",
-  andrew: "Andrew",
-};
-
 /**
  * Process an inquiry from the artist social landing page.
  * 1. Upsert contact with artist as owner
- * 2. Find or create SMS conversation
- * 3. Send the lead's message as an SMS (appears in conversation thread)
- * 4. Add a contact note with the original inquiry
- * 5. Mark conversation as unread so artist gets notified
+ * 2. Store the lead's message in the landing_page_inquiry custom field
+ * 3. Find or create SMS conversation
+ * 4. Mark conversation as unread so artist gets notified
+ *
+ * No SMS is sent — the first text the lead receives is the artist's personal reply.
+ * The iOS app reads the custom field and displays it as an inbound bubble.
  */
 async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
-  const artistName = ARTIST_NAMES[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
   }
@@ -69,7 +69,23 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // 2. Assign the correct artist as contact owner
   await assignContactToArtist(contactId, artistUserId);
 
-  // 3. Find existing SMS conversation or create one
+  // 3. Store the lead's message in the landing_page_inquiry custom field
+  try {
+    await ghlSdk.contacts.updateContact(
+      { contactId },
+      {
+        customFields: [
+          { id: LANDING_PAGE_INQUIRY_FIELD_ID, field_value: message },
+        ],
+      }
+    );
+    console.log(`📩 Landing page inquiry stored in custom field for contact ${contactId}`);
+  } catch (cfErr) {
+    console.error(`❌ Failed to store inquiry in custom field:`, cfErr.message);
+    throw cfErr;
+  }
+
+  // 4. Find existing SMS conversation or create one
   let conversation = await findConversationForContact(contactId, { typeFilter: "SMS" });
   let conversationId = conversation?.id;
 
@@ -88,27 +104,6 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Send the lead's message as an SMS with [LP] marker.
-  // The [LP] prefix tells the iOS app to render this as an inbound (left-side) bubble.
-  // The lead receives a clean confirmation with their message quoted back.
-  const smsMessage = `[LP]${message}`;
-
-  const sendResult = await ghlSdk.conversations.sendANewMessage({
-    type: "SMS",
-    message: smsMessage,
-    contactId,
-  });
-
-  const sentMessageId = sendResult?.messageId;
-
-  console.log(`✅ SMS sent to contact ${contactId}`, {
-    conversationId: sendResult?.conversationId || conversationId,
-    messageId: sentMessageId,
-  });
-
-  // Use the conversationId from the send result if available
-  conversationId = sendResult?.conversationId || conversationId;
-
   // 5. Mark conversation as unread so the artist gets the notification badge
   try {
     await ghlSdk.conversations.updateConversation(
@@ -120,7 +115,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     console.warn(`⚠️ Could not mark conversation as unread:`, unreadErr.message);
   }
 
-  // 6. Add the lead's original message as a note on the contact
+  // 6. Add the lead's original message as a note on the contact (backup)
   try {
     await ghlSdk.contacts.createNote(
       { contactId },
