@@ -88,9 +88,10 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
-  // 4. Send the lead's message as an SMS with [LP] marker.
+  // 4. Send the lead's message as an SMS with [LP] marker prefix.
   // The [LP] prefix tells the iOS app to render this as an inbound (left-side) bubble.
-  // The lead receives the SMS on their phone and can reply directly.
+  // The lead also receives this SMS — format it as a natural confirmation message
+  // while keeping the marker for iOS detection.
   const smsMessage = `[LP]${message}`;
 
   const sendResult = await ghlSdk.conversations.sendANewMessage({
