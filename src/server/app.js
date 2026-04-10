@@ -1869,6 +1869,141 @@ function createApp() {
     }
   });
 
+  // GET /api/contacts/:contactId/payment-history - Full ledger for contact profile
+  // Returns quote amount + all transactions + tips + computed totals
+  app.get("/api/contacts/:contactId/payment-history", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({
+          success: false,
+          error: "Financial tracking not available"
+        });
+      }
+
+      const { contactId } = req.params;
+      if (!contactId) {
+        return res.status(400).json({ success: false, error: "Missing contactId" });
+      }
+
+      // 1. Fetch all transactions for this contact
+      const { data: rawTransactions, error: txError } = await supabase
+        .from("transactions")
+        .select("id, transaction_type, payment_method, gross_amount, tip_amount, session_date, notes")
+        .eq("contact_id", contactId)
+        .order("session_date", { ascending: true });
+
+      if (txError) {
+        console.error(`[PaymentHistory] Error fetching transactions:`, txError);
+        return res.status(500).json({ success: false, error: txError.message });
+      }
+
+      const transactions = rawTransactions || [];
+
+      // 2. Fetch quote amount from GHL contact custom fields
+      let quoteAmount = null;
+      try {
+        const contact = await getContact(contactId);
+        const cf = contact?.customField || {};
+        const rawQuote = cf.tattoo_quote || cf.quote_amount || cf.quoted;
+        if (rawQuote != null && rawQuote !== "") {
+          const parsed = parseFloat(String(rawQuote).replace(/[^0-9.]/g, ""));
+          if (!isNaN(parsed) && parsed > 0) quoteAmount = parsed;
+        }
+      } catch (ghlErr) {
+        console.warn(`[PaymentHistory] Could not fetch GHL quote: ${ghlErr.message}`);
+      }
+
+      // 3. Split into payments vs tips
+      // Tips: any transaction with a non-zero tip_amount
+      // Payments: everything else (including the service_price portion of tipped transactions)
+      const paymentLines = [];
+      const tipLines = [];
+
+      for (const tx of transactions) {
+        const txDate = tx.session_date || new Date().toISOString();
+        const method = tx.payment_method || "unknown";
+        const methodLabel = formatMethodLabel(method);
+        const isRefund = (tx.transaction_type || "").toLowerCase().includes("refund")
+          || (tx.gross_amount || 0) < 0;
+        const gross = Math.abs(tx.gross_amount || 0);
+        const tip = tx.tip_amount || 0;
+        const servicePortion = tip > 0 ? gross - tip : gross;
+
+        // Parse merchant fee from notes (format: "(incl. $64 financing fee → shop)")
+        let merchantFee = 0;
+        const notes = tx.notes || "";
+        const feeMatch = notes.match(/\(incl\. \$?([\d.]+) financing fee/);
+        if (feeMatch) {
+          merchantFee = parseFloat(feeMatch[1]) || 0;
+        }
+
+        // The "collected" amount for display is what the client actually paid
+        // For stripe financing, that's gross + merchant fee (shop's share from the fee)
+        // For deposits, that's just gross
+        // For tipped transactions, we display the service portion (tips shown separately)
+        let collectedAmount = servicePortion;
+        if (method.startsWith("stripe_") && merchantFee > 0) {
+          collectedAmount = servicePortion + merchantFee;
+        }
+
+        if (servicePortion > 0 || merchantFee > 0) {
+          paymentLines.push({
+            id: tx.id,
+            transactionType: tx.transaction_type || "session_payment",
+            paymentMethod: method,
+            methodLabel,
+            collectedAmount,
+            merchantFee,
+            sessionDate: txDate,
+            isRefund,
+            notes: tx.notes || null,
+          });
+        }
+
+        if (tip > 0 && !isRefund) {
+          tipLines.push({
+            id: `${tx.id}_tip`,
+            amount: tip,
+            sessionDate: txDate,
+            method,
+          });
+        }
+      }
+
+      // 4. Compute totals
+      const collected = paymentLines.reduce((sum, p) => {
+        return sum + (p.isRefund ? -p.collectedAmount : p.collectedAmount);
+      }, 0);
+      const totalTips = tipLines.reduce((sum, t) => sum + t.amount, 0);
+      const remainingBalance = quoteAmount != null ? quoteAmount - collected : null;
+
+      res.json({
+        success: true,
+        quoteAmount,
+        transactions: paymentLines,
+        tips: tipLines,
+        collected: parseFloat(collected.toFixed(2)),
+        totalTips: parseFloat(totalTips.toFixed(2)),
+        remainingBalance: remainingBalance != null ? parseFloat(remainingBalance.toFixed(2)) : null,
+      });
+    } catch (err) {
+      console.error(`[PaymentHistory] Error:`, err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Helper: friendly label for payment method
+  function formatMethodLabel(method) {
+    if (!method) return "Unknown";
+    if (method === "square") return "Square";
+    if (method === "venmo") return "Venmo";
+    if (method === "cash") return "Cash";
+    if (method === "stripe_affirm") return "Affirm";
+    if (method === "stripe_klarna") return "Klarna";
+    if (method === "stripe_card") return "Card";
+    return method.replace("stripe_", "").replace(/^./, c => c.toUpperCase());
+  }
+
   // GET /api/artists/:artistId/earnings - Get artist earnings summary
   app.get("/api/artists/:artistId/earnings", async (req, res) => {
     try {
