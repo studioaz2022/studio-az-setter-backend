@@ -29,10 +29,10 @@ Phase 2 produces a `content-intake.md` questionnaire customized to the site. The
 |-------|--------|-------------|----------|
 | **Phase 1: Research** | COMPLETE | keyword-map.md, competitor-teardown.md, content-gaps.md, baseline-audit.md, local-falcon-baseline.md | **Yes** (March 23, 2026) |
 | **Phase 2: Architecture** | COMPLETE | page-blueprint.md, schema-markup.md, internal-linking.md, image-strategy.md, technical-seo.md, geo-ai-readiness.md, content-intake.md | **Yes** (March 23, 2026) |
-| **Phase 3: Design/Build** | NOT STARTED | Next.js site at `tattoo-website/` | — |
-| **Phase 4: Deploy/Verify** | BLOCKED | launch-checklist.md | — |
+| **Phase 3: Design/Build** | COMPLETE | Next.js site at `tattoo-website/` — 10 pages built, SEO verified across all pages (4-pass audit), hero video on R2 | Pending |
+| **Phase 4: Deploy/Verify** | NOT STARTED | launch-checklist.md | — |
 
-**Current step:** Phase 3 — Design & Build. Next: `/frontend-design` skill → Next.js implementation.
+**Current step:** Awaiting Phase 3 approval, then Phase 4 — Deploy & Verify.
 
 **Domain:** tattooshopminneapolis.com
 **GBP Place ID:** ChIJt_vZnAAzs1IR5e7h5BUE0O0
