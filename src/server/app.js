@@ -24,7 +24,7 @@ const {
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
-const { getContactIdFromOrder, createDepositLinkForContact } = require("../payments/squareClient");
+const { getContactIdFromOrder, createDepositLinkForContact, getCheckoutSession, processCheckoutPayment } = require("../payments/squareClient");
 const { createFinancingLinkForContact } = require("../payments/stripeClient");
 const {
   buildOAuthUrl,
@@ -455,6 +455,7 @@ function createApp() {
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
         'https://consent.studioaztattoo.com', // Consent form web app
+        'https://pay.studioaztattoo.com', // Custom checkout page
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:8080',
@@ -3779,6 +3780,57 @@ function createApp() {
     } catch (err) {
       console.error("❌ /stripe/webhook processing error:", err.message || err);
       res.status(500).json({ error: "webhook processing failed" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // CUSTOM CHECKOUT — Frontend API for branded checkout page
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /api/checkout/:id — Frontend loads checkout details
+  app.get("/api/checkout/:id", async (req, res) => {
+    try {
+      const session = await getCheckoutSession(req.params.id);
+      if (!session) {
+        return res.status(404).json({ success: false, error: "Checkout session not found" });
+      }
+
+      // Don't expose internal fields to the frontend
+      const { _squareOrderId, _contactId, ...publicData } = session;
+
+      res.json({ success: true, checkout: publicData });
+    } catch (error) {
+      console.error("[API] Error fetching checkout session:", error.message);
+      res.status(500).json({ success: false, error: "Failed to load checkout" });
+    }
+  });
+
+  // POST /api/checkout/:id/pay — Frontend submits payment token
+  app.post("/api/checkout/:id/pay", async (req, res) => {
+    try {
+      const { sourceId, buyerEmail } = req.body;
+
+      if (!sourceId) {
+        return res.status(400).json({ success: false, error: "Missing sourceId (payment token)" });
+      }
+
+      const result = await processCheckoutPayment(req.params.id, sourceId, buyerEmail);
+
+      res.json({
+        success: true,
+        payment: {
+          paymentId: result.paymentId,
+          status: result.status,
+          receiptUrl: result.receiptUrl,
+        },
+      });
+    } catch (error) {
+      console.error("[API] Checkout payment error:", error.response?.data || error.message);
+      const status = error.message?.includes("not found") ? 404
+        : error.message?.includes("expired") ? 410
+        : error.message?.includes("already") || error.message?.includes("is paid") ? 409
+        : 500;
+      res.status(status).json({ success: false, error: error.message });
     }
   });
 

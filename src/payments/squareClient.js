@@ -1,17 +1,17 @@
 // squareClient.js
-// Direct HTTP client for Square checkout links using axios.
-// Uses CHECKOUT_LINK catalog objects for rich checkout pages (logo, description).
-// Embeds a unique code (last 5 chars of contactId) in the checkout name for
-// reliable webhook tracing: "Tattoo Deposit #kOvnQ" → parse code → Supabase lookup.
+// Square payment integration for custom branded checkout.
+// Creates Orders via Orders API (reference_id for webhook tracing),
+// stores checkout sessions in Supabase, and processes payments via Payments API.
 
 const axios = require("axios");
+const crypto = require("crypto");
 const { createClient } = require("@supabase/supabase-js");
-const { COMPACT_MODE, logSquareEvent, shortId } = require("../utils/logger");
-const { createShortLink } = require("./shortLinks");
+const { COMPACT_MODE, shortId } = require("../utils/logger");
 
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
 const SQUARE_ENVIRONMENT = process.env.SQUARE_ENVIRONMENT || "sandbox";
+const CHECKOUT_BASE_URL = process.env.CHECKOUT_BASE_URL || "https://pay.studioaztattoo.com";
 
 const isProd = SQUARE_ENVIRONMENT === "production";
 
@@ -24,11 +24,8 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Studio AZ logo image ID in Square catalog
-const LOGO_IMAGE_ID = "RK4P3O5ONUIHXYETBDEVQNCU";
-
 // Rich descriptions for deposit tiers
-const DEPOSIT_100_DESCRIPTION =
+const DEPOSIT_DESCRIPTION =
   "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
   "\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back\n" +
   "\ud83d\udcf8 Pro Photo Set (Optional)\n\n" +
@@ -38,27 +35,31 @@ const DEPOSIT_100_DESCRIPTION =
   "\u23f1\ufe0f Priority Scheduling\n" +
   "\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best";
 
-const CONSULT_50_DESCRIPTION =
+const CONSULT_DESCRIPTION =
   "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
   "\ud83d\udcb5 Applied to Your Tattoo Total Fee\n" +
   "\ud83d\udcaf or Fully Refundable";
 
 if (!SQUARE_ACCESS_TOKEN) {
-  console.warn(
-    "[Square] SQUARE_ACCESS_TOKEN is not set. Payment link creation will fail."
-  );
+  console.warn("[Square] SQUARE_ACCESS_TOKEN is not set.");
 }
-
 if (!SQUARE_LOCATION_ID) {
-  console.warn(
-    "[Square] SQUARE_LOCATION_ID is not set. Payment link creation will fail."
-  );
+  console.warn("[Square] SQUARE_LOCATION_ID is not set.");
 }
 
 /**
- * Create a Square checkout link for a specific contact.
- * Uses CHECKOUT_LINK catalog objects for rich checkout (logo + description).
- * Embeds last 5 chars of contactId as "#XXXXX" in the name for webhook tracing.
+ * Generate a short unique ID for checkout sessions.
+ * 8 chars, URL-safe (a-z, 0-9).
+ */
+function generateSessionId() {
+  return crypto.randomBytes(6).toString("base64url").slice(0, 8).toLowerCase();
+}
+
+/**
+ * Create a checkout session for a contact.
+ * 1. Creates a Square Order with reference_id + metadata
+ * 2. Stores a checkout session in Supabase
+ * 3. Returns the custom checkout URL
  */
 async function createDepositLinkForContact({
   contactId,
@@ -72,170 +73,246 @@ async function createDepositLinkForContact({
   contactName = null,
 }) {
   if (!contactId) {
-    throw new Error("contactId is required for createDepositLinkForContact");
+    throw new Error("contactId is required");
   }
   if (typeof amountCents !== "number" || !amountCents) {
-    throw new Error(
-      "amountCents (number) is required for createDepositLinkForContact"
-    );
+    throw new Error("amountCents (number) is required");
   }
   if (!SQUARE_LOCATION_ID) {
-    throw new Error(
-      "SQUARE_LOCATION_ID is not set. Cannot create payment link."
-    );
+    throw new Error("SQUARE_LOCATION_ID is not set");
   }
 
-  // Unique code from last 5 chars of contactId
-  const trackingCode = contactId.slice(-5);
+  // Determine title and description based on amount
+  const title =
+    amountCents <= 5000 ? "Tattoo Consultation Fee" : "Tattoo Deposit";
 
-  // Pick the right display name and description based on amount
-  const baseName =
-    amountCents >= 10000 ? "Tattoo Deposit" :
-    amountCents === 5000 ? "Tattoo Consultation Fee" :
-    description;
-
-  const checkoutName = `${baseName} #${trackingCode}`;
-
-  const checkoutDescription =
-    amountCents >= 10000 ? DEPOSIT_100_DESCRIPTION :
-    amountCents === 5000 ? CONSULT_50_DESCRIPTION :
-    amountCents > 5000 ? DEPOSIT_100_DESCRIPTION :
-    null;
+  const richDescription =
+    amountCents <= 5000 ? CONSULT_DESCRIPTION : DEPOSIT_DESCRIPTION;
 
   if (!COMPACT_MODE) {
-    console.log("[Square] Creating checkout link:", {
+    console.log("[Square] Creating checkout session:", {
       contactId,
       amountCents,
-      trackingCode,
-      checkoutName,
+      title,
       env: isProd ? "production" : "sandbox",
     });
   }
 
-  try {
-    const url = `${SQUARE_BASE_URL}/v2/catalog/object`;
-
-    const catalogBody = {
-      idempotency_key: `${contactId}-${Date.now()}`,
-      object: {
-        type: "CHECKOUT_LINK",
-        id: `#checkout-${contactId}-${Date.now()}`,
-        present_at_location_ids: [SQUARE_LOCATION_ID],
-        checkout_link_data: {
-          name: checkoutName,
-          ...(checkoutDescription && { description: checkoutDescription }),
-          link_type: "PAYMENT_LINK",
-          enabled: true,
-          order_details: {
-            line_items: [
-              {
-                ordinal: 0,
-                quantity: { quantity: 1 },
-                name: baseName,
-                price_money: { amount: amountCents, currency },
-              },
-            ],
-          },
-          allow_tipping: false,
-          image_ids: [LOGO_IMAGE_ID],
+  // 1. Create Square Order with reference_id for webhook tracing
+  const orderResponse = await axios.post(
+    `${SQUARE_BASE_URL}/v2/orders`,
+    {
+      idempotency_key: `order-${contactId}-${Date.now()}`,
+      order: {
+        location_id: SQUARE_LOCATION_ID,
+        reference_id: contactId,
+        metadata: {
+          business,
+          payment_type: paymentType,
+          contact_id: contactId,
+          ...(artistId && { artist_id: artistId }),
+          ...(artistName && { artist_name: artistName }),
         },
+        line_items: [
+          {
+            name: description || title,
+            quantity: "1",
+            base_price_money: { amount: amountCents, currency },
+          },
+        ],
       },
-    };
-
-    const response = await axios.post(url, catalogBody, {
+    },
+    {
       headers: {
         Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
         "Content-Type": "application/json",
-        "Square-Version": "2049-01-03",
       },
+    }
+  );
+
+  const squareOrderId = orderResponse.data?.order?.id;
+  if (!squareOrderId) {
+    throw new Error("Failed to create Square order");
+  }
+
+  // 2. Create checkout session in Supabase
+  const sessionId = generateSessionId();
+
+  const { error: dbError } = await supabase
+    .from("checkout_sessions")
+    .insert({
+      id: sessionId,
+      square_order_id: squareOrderId,
+      status: "pending",
+      amount_cents: amountCents,
+      currency,
+      title,
+      description: richDescription,
+      contact_id: contactId,
+      contact_name: contactName,
+      artist_id: artistId,
+      artist_name: artistName,
+      business,
+      payment_type: paymentType,
     });
 
-    const catalogObject = response.data?.catalog_object;
-    const checkoutData = catalogObject?.checkout_link_data;
-
-    if (!checkoutData?.url) {
-      console.error(
-        "[Square] No checkout URL in response:",
-        JSON.stringify(response.data, null, 2)
-      );
-      throw new Error("No checkout URL returned from Square");
-    }
-
-    const checkoutLinkId = catalogObject.id;
-    const checkoutUrl = checkoutData.url;
-
-    // Store mapping in Supabase for webhook tracing via tracking code
-    const { error: dbError } = await supabase
-      .from("square_checkout_links")
-      .insert({
-        checkout_link_id: checkoutLinkId,
-        checkout_url: checkoutUrl,
-        contact_id: contactId,
-        contact_name: contactName,
-        artist_id: artistId,
-        artist_name: artistName,
-        business,
-        payment_type: paymentType,
-        amount_cents: amountCents,
-      });
-
-    if (dbError) {
-      console.error("[Square] Failed to store checkout link mapping:", dbError.message);
-    }
-
-    // Generate short link: pay.studioaztattoo.com/:code → Square checkout URL
-    let finalUrl = checkoutUrl;
-    try {
-      const result = await createShortLink(checkoutUrl, checkoutLinkId);
-      finalUrl = result.shortUrl;
-    } catch (shortErr) {
-      console.error("[Square] Failed to create short link:", shortErr.message);
-    }
-
-    if (COMPACT_MODE) {
-      console.log(`\ud83d\udcb3 SQUARE: link created contact=${shortId(contactId)} #${trackingCode} $${amountCents / 100} → ${finalUrl}`);
-    } else {
-      console.log("\ud83d\udcb3 Square checkout link created:", {
-        contactId,
-        trackingCode,
-        checkoutLinkId,
-        shortUrl: finalUrl,
-        fullUrl: checkoutUrl,
-      });
-    }
-
-    return {
-      url: finalUrl,
-      paymentLinkId: checkoutLinkId,
-      orderId: null,
-    };
-  } catch (err) {
-    if (err.response) {
-      console.error(
-        "[Square] HTTP error creating checkout link:",
-        err.response.status,
-        JSON.stringify(err.response.data, null, 2)
-      );
-      throw new Error(
-        `Square HTTP error ${err.response.status}: ${
-          err.response.data?.errors?.[0]?.detail ||
-          JSON.stringify(err.response.data)
-        }`
-      );
-    } else if (err.message?.includes("Square HTTP error")) {
-      throw err;
-    } else {
-      console.error("[Square] Unexpected error creating checkout link:", err);
-      throw err;
-    }
+  if (dbError) {
+    console.error("[Square] Failed to create checkout session:", dbError.message);
+    throw new Error("Failed to create checkout session");
   }
+
+  // 3. Build custom checkout URL
+  const checkoutUrl = `${CHECKOUT_BASE_URL}/${sessionId}`;
+
+  if (COMPACT_MODE) {
+    console.log(`\ud83d\udcb3 SQUARE: session=${sessionId} contact=${shortId(contactId)} $${amountCents / 100}`);
+  } else {
+    console.log("\ud83d\udcb3 Checkout session created:", {
+      sessionId,
+      contactId,
+      squareOrderId,
+      url: checkoutUrl,
+    });
+  }
+
+  return {
+    url: checkoutUrl,
+    paymentLinkId: sessionId,
+    orderId: squareOrderId,
+  };
 }
 
 /**
- * Given an orderId from a webhook, fetch the order and resolve the contactId.
- * 1. Try order.reference_id (Payment Links API — backwards compat)
- * 2. Parse tracking code from line item name (CHECKOUT_LINK — "#XXXXX")
- * 3. Look up contact from Supabase via the tracking code
+ * Get checkout session details for the frontend to render.
+ * Returns only display-safe data (no contactId or internal IDs).
+ */
+async function getCheckoutSession(sessionId) {
+  const { data, error } = await supabase
+    .from("checkout_sessions")
+    .select("*")
+    .eq("id", sessionId)
+    .single();
+
+  if (error || !data) {
+    return null;
+  }
+
+  return {
+    id: data.id,
+    status: data.status,
+    amountCents: data.amount_cents,
+    currency: data.currency,
+    title: data.title,
+    description: data.description,
+    artistName: data.artist_name,
+    contactFirstName: data.contact_name?.split(" ")?.[0] || null,
+    business: data.business,
+    paymentType: data.payment_type,
+    createdAt: data.created_at,
+    expiresAt: data.expires_at,
+    // Internal fields for payment processing (not sent to frontend)
+    _squareOrderId: data.square_order_id,
+    _contactId: data.contact_id,
+  };
+}
+
+/**
+ * Process a payment for a checkout session.
+ * Called by frontend after Square Web Payments SDK tokenizes the card.
+ *
+ * @param {string} sessionId - Checkout session ID
+ * @param {string} sourceId - Payment token from Square Web Payments SDK (nonce)
+ * @param {string} buyerEmail - Optional buyer email from checkout form
+ */
+async function processCheckoutPayment(sessionId, sourceId, buyerEmail) {
+  // 1. Load the session
+  const session = await getCheckoutSession(sessionId);
+  if (!session) {
+    throw new Error("Checkout session not found");
+  }
+  if (session.status !== "pending") {
+    throw new Error(`Checkout session is ${session.status}`);
+  }
+
+  // Check expiry
+  if (new Date(session.expiresAt) < new Date()) {
+    await supabase
+      .from("checkout_sessions")
+      .update({ status: "expired" })
+      .eq("id", sessionId);
+    throw new Error("Checkout session has expired");
+  }
+
+  // 2. Process payment via Square Payments API
+  const paymentBody = {
+    idempotency_key: `pay-${sessionId}-${Date.now()}`,
+    source_id: sourceId,
+    amount_money: {
+      amount: session.amountCents,
+      currency: session.currency,
+    },
+    order_id: session._squareOrderId,
+    location_id: SQUARE_LOCATION_ID,
+    autocomplete: true,
+    ...(buyerEmail && {
+      buyer_email_address: buyerEmail,
+    }),
+  };
+
+  const response = await axios.post(
+    `${SQUARE_BASE_URL}/v2/payments`,
+    paymentBody,
+    {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    }
+  );
+
+  const payment = response.data?.payment;
+  if (!payment) {
+    throw new Error("Payment failed — no payment object returned");
+  }
+
+  if (payment.status !== "COMPLETED") {
+    throw new Error(`Payment status: ${payment.status}`);
+  }
+
+  // 3. Mark session as paid
+  await supabase
+    .from("checkout_sessions")
+    .update({
+      status: "paid",
+      square_payment_id: payment.id,
+      paid_at: new Date().toISOString(),
+    })
+    .eq("id", sessionId);
+
+  if (COMPACT_MODE) {
+    console.log(`\ud83d\udcb3 SQUARE: payment completed session=${sessionId} $${session.amountCents / 100}`);
+  } else {
+    console.log("\ud83d\udcb3 Checkout payment completed:", {
+      sessionId,
+      paymentId: payment.id,
+      amount: session.amountCents / 100,
+    });
+  }
+
+  // The webhook will fire separately and handle all downstream processing
+  // (deposit confirmation, pipeline transition, earnings, rent tracker)
+  // via reference_id on the order → contactId
+
+  return {
+    paymentId: payment.id,
+    status: payment.status,
+    receiptUrl: payment.receipt_url,
+  };
+}
+
+/**
+ * Given an orderId from a webhook, fetch the order and return the contactId
+ * from reference_id.
  */
 async function getContactIdFromOrder(orderId) {
   if (!orderId) return null;
@@ -258,53 +335,13 @@ async function getContactIdFromOrder(orderId) {
       return null;
     }
 
+    const contactId = order.reference_id || null;
     const amount = order.total_money?.amount || 0;
 
-    // 1. Try reference_id (Payment Links API orders)
-    let contactId = order.reference_id || null;
-
-    // 2. Parse tracking code from line item name
-    if (!contactId) {
-      const lineItemName = order.line_items?.[0]?.name || "";
-      const match = lineItemName.match(/#(\w{5})\s*$/);
-
-      if (match) {
-        const trackingCode = match[1];
-        if (!COMPACT_MODE) {
-          console.log(`[Square] Found tracking code #${trackingCode} in line item: "${lineItemName}"`);
-        }
-
-        // Look up contact by matching last 5 chars of contact_id
-        const { data: rows, error } = await supabase
-          .from("square_checkout_links")
-          .select("contact_id, artist_id, artist_name, business, payment_type")
-          .like("contact_id", `%${trackingCode}`)
-          .order("created_at", { ascending: false })
-          .limit(1);
-
-        if (error) {
-          console.error("[Square] Supabase lookup error:", error.message);
-        } else if (rows?.[0]) {
-          contactId = rows[0].contact_id;
-          if (COMPACT_MODE) {
-            console.log(`\ud83d\udcb3 SQUARE: #${trackingCode} → contact=${shortId(contactId)}`);
-          } else {
-            console.log("[Square] Resolved contact via tracking code:", {
-              trackingCode,
-              contactId,
-              artistName: rows[0].artist_name,
-            });
-          }
-        } else {
-          console.warn(`[Square] No checkout link found for tracking code #${trackingCode}`);
-        }
-      }
-    }
-
     if (COMPACT_MODE) {
-      console.log(`\ud83d\udcb3 SQUARE: order=${shortId(orderId)} → contact=${shortId(contactId)} $${amount / 100}`);
+      console.log(`\ud83d\udcb3 SQUARE: order=${shortId(orderId)} \u2192 contact=${shortId(contactId)} $${amount / 100}`);
     } else {
-      console.log("[Square] Resolved order → contact mapping:", { orderId, contactId });
+      console.log("[Square] Resolved order \u2192 contact mapping:", { orderId, contactId });
     }
 
     return contactId;
@@ -324,5 +361,7 @@ async function getContactIdFromOrder(orderId) {
 
 module.exports = {
   createDepositLinkForContact,
+  getCheckoutSession,
+  processCheckoutPayment,
   getContactIdFromOrder,
 };
