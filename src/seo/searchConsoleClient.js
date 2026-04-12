@@ -11,12 +11,14 @@ const REFRESH_TOKEN = process.env.GOOGLE_SEO_REFRESH_TOKEN;
 const SITES = {
   barbershop: "sc-domain:minneapolisbarbershop.com",
   tattoo: "sc-domain:tattooshopminneapolis.com",
+  hub: "sc-domain:studioaz.us",
 };
 
 // Also try URL-prefix format if sc-domain doesn't work
 const SITES_URL_PREFIX = {
   barbershop: "https://minneapolisbarbershop.com/",
   tattoo: "https://tattooshopminneapolis.com/",
+  hub: "https://www.studioaz.us/",
 };
 
 const BASE_URL = "https://searchconsole.googleapis.com/webmasters/v3";
