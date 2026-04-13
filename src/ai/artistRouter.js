@@ -247,7 +247,7 @@ async function getArtistWorkloads() {
 }
 
 async function getArtistWithLowestWorkload(candidateArtists = null) {
-  const workloads = await getArtistWorkloads();
+  const workloads = await refreshArtistWorkloads();
   const pool =
     Array.isArray(candidateArtists) && candidateArtists.length > 0
       ? candidateArtists
@@ -501,18 +501,21 @@ function getCalendarIdForArtist(artistName, consultMode = "online") {
 }
 
 /**
- * Refresh artist workloads by aggregating scores across consult and tattoo stages
+ * Refresh artist workloads by aggregating scores across consult and tattoo stages.
+ * Only counts opportunities created within the attribution window (default 30 days).
  * Scores: CONSULT_MESSAGE = 1, CONSULT_APPOINTMENT = 2, TATTOO_BOOKED = 3
  * @param {Object} options
  * @param {boolean} options.force - Force refresh even if cached
+ * @param {number} options.windowDays - Attribution window in days (default 30)
  * @returns {Promise<Object>} Scores by artist name
  */
-async function refreshArtistWorkloads({ force = false } = {}) {
+async function refreshArtistWorkloads({ force = false, windowDays = 30 } = {}) {
   const { PIPELINE_STAGE_CONFIG } = require("../config/pipelineConfig");
   const { OPPORTUNITY_STAGES } = require("../config/constants");
-  
+
   const scores = buildInitialWorkloadMap();
-  
+  const cutoff = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+
   // Stage scores mapping (stageId -> score)
   const stageScores = {
     [PIPELINE_STAGE_CONFIG[OPPORTUNITY_STAGES.CONSULT_MESSAGE]?.id]: 1,
@@ -545,12 +548,25 @@ async function refreshArtistWorkloads({ force = false } = {}) {
       const artistName = mapAssignedUserIdToArtist(userId);
       if (!artistName) continue;
 
+      let counted = 0;
+      let skipped = 0;
       for (const opp of opportunities) {
+        // Only count opportunities within the attribution window
+        const createdAt = new Date(opp.createdAt || opp.dateAdded);
+        if (createdAt < cutoff) {
+          skipped++;
+          continue;
+        }
+
         const stageId = opp.pipelineStageId || opp.pipeline_stage_id;
         const stageScore = stageScores[stageId] || 0;
         if (stageScore > 0) {
           scores[artistName] = (scores[artistName] || 0) + stageScore;
+          counted++;
         }
+      }
+      if (skipped > 0) {
+        console.log(`ℹ️ [Workload] ${artistName}: scored ${counted} opps, skipped ${skipped} outside ${windowDays}-day window`);
       }
     }
 
@@ -562,7 +578,7 @@ async function refreshArtistWorkloads({ force = false } = {}) {
       err.response?.data || err.message
     );
   }
-  
+
   return scores;
 }
 
