@@ -99,6 +99,10 @@ const {
   batchDeleteTranscripts,
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
+const {
+  determineArtist,
+  assignArtistToContact,
+} = require("../ai/artistRouter");
 const analyticsRoutes = require("../analytics/analyticsRoutes");
 const seoRoutes = require("../seo/seoRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
@@ -614,6 +618,21 @@ function createApp() {
           isFirstMessage: true,
           contact,
         });
+      }
+
+      // Auto-assign artist if no technician preference was specified
+      const inquiredTech = payload.customFields?.inquired_technician;
+      if (!inquiredTech) {
+        try {
+          const freshContact = await getContact(contactId);
+          const artist = await determineArtist(freshContact);
+          if (artist) {
+            await assignArtistToContact(contactId, artist);
+            console.log(`🎯 Auto-assigned artist via workload balancing: ${artist}`);
+          }
+        } catch (routeErr) {
+          console.error("⚠️ Artist auto-assign failed (non-fatal):", routeErr.message || routeErr);
+        }
       }
 
       console.log(`✅ Final lead created/updated: ${contactId}`);
