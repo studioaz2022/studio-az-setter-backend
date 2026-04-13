@@ -24,21 +24,45 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// Rich descriptions for deposit tiers
-const DEPOSIT_DESCRIPTION =
-  "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
-  "\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back\n" +
-  "\ud83d\udcf8 Pro Photo Set (Optional)\n\n" +
-  "PLUS:\n" +
-  "\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process\n" +
-  "\ud83c\udf10 Live Translator for seamless communication (Optional)\n" +
-  "\u23f1\ufe0f Priority Scheduling\n" +
-  "\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best";
-
-const CONSULT_DESCRIPTION =
-  "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
-  "\ud83d\udcb5 Applied to Your Tattoo Total Fee\n" +
-  "\ud83d\udcaf or Fully Refundable";
+// Rich descriptions for deposit tiers (English + Spanish)
+const DESCRIPTIONS = {
+  en: {
+    deposit:
+      "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
+      "\ud83d\udcb5 If You Don\u2019t Love the Concept, Get Your Full Deposit Back\n" +
+      "\ud83d\udcf8 Pro Photo Set (Optional)\n\n" +
+      "PLUS:\n" +
+      "\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process\n" +
+      "\ud83c\udf10 Live Translator for seamless communication (Optional)\n" +
+      "\u23f1\ufe0f Priority Scheduling\n" +
+      "\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best",
+    consult:
+      "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
+      "\ud83d\udcb5 Applied to Your Tattoo Total Fee\n" +
+      "\ud83d\udcaf or Fully Refundable",
+    depositTitle: "Tattoo Deposit",
+    consultTitle: "Tattoo Consultation Fee",
+    greeting: (name) => name ? `Hey ${name}, you're almost there` : "You're almost there",
+  },
+  es: {
+    deposit:
+      "\ud83c\udfa8 Consulta de Dise\u00f1o + Boceto del Concepto\n" +
+      "\ud83d\udcb5 Si No Te Encanta el Concepto, Te Devolvemos Tu Dep\u00f3sito Completo\n" +
+      "\ud83d\udcf8 Sesi\u00f3n de Fotos Profesional (Opcional)\n\n" +
+      "ADEM\u00c1S:\n" +
+      "\ud83e\uddd1\u200d\ud83c\udfa8 Director Art\u00edstico (Concierge) para guiar tu proceso\n" +
+      "\ud83c\udf10 Traductor en Vivo para comunicaci\u00f3n sin barreras (Opcional)\n" +
+      "\u23f1\ufe0f Programaci\u00f3n Prioritaria\n" +
+      "\ud83e\udd1d Apoyo Continuo de Sanaci\u00f3n: acceso directo a tu Concierge y Artista para gu\u00eda de cuidado posterior",
+    consult:
+      "\ud83c\udfa8 Consulta de Dise\u00f1o + Boceto del Concepto\n" +
+      "\ud83d\udcb5 Se Aplica al Costo Total de Tu Tatuaje\n" +
+      "\ud83d\udcaf o Completamente Reembolsable",
+    depositTitle: "Dep\u00f3sito de Tatuaje",
+    consultTitle: "Consulta de Tatuaje",
+    greeting: (name) => name ? `Hola ${name}, ya casi est\u00e1s` : "Ya casi est\u00e1s",
+  },
+};
 
 if (!SQUARE_ACCESS_TOKEN) {
   console.warn("[Square] SQUARE_ACCESS_TOKEN is not set.");
@@ -71,6 +95,7 @@ async function createDepositLinkForContact({
   artistId = null,
   artistName = null,
   contactName = null,
+  language = "en",
 }) {
   if (!contactId) {
     throw new Error("contactId is required");
@@ -82,12 +107,12 @@ async function createDepositLinkForContact({
     throw new Error("SQUARE_LOCATION_ID is not set");
   }
 
-  // Determine title and description based on amount
-  const title =
-    amountCents <= 5000 ? "Tattoo Consultation Fee" : "Tattoo Deposit";
+  // Determine title and description based on amount + language
+  const lang = language === "es" ? "es" : "en";
+  const strings = DESCRIPTIONS[lang];
 
-  const richDescription =
-    amountCents <= 5000 ? CONSULT_DESCRIPTION : DEPOSIT_DESCRIPTION;
+  const title = amountCents <= 5000 ? strings.consultTitle : strings.depositTitle;
+  const richDescription = amountCents <= 5000 ? strings.consult : strings.deposit;
 
   if (!COMPACT_MODE) {
     console.log("[Square] Creating checkout session:", {
@@ -154,6 +179,7 @@ async function createDepositLinkForContact({
       artist_name: artistName,
       business,
       payment_type: paymentType,
+      language: lang,
     });
 
   if (dbError) {
@@ -208,6 +234,7 @@ async function getCheckoutSession(sessionId) {
     contactFirstName: data.contact_name?.split(" ")?.[0] || null,
     business: data.business,
     paymentType: data.payment_type,
+    language: data.language || "en",
     createdAt: data.created_at,
     expiresAt: data.expires_at,
     // Internal fields for payment processing (not sent to frontend)

@@ -3416,7 +3416,7 @@ function createApp() {
   // POST /api/generate-payment-link - Generate a Square payment link for a contact
   app.post("/api/generate-payment-link", async (req, res) => {
     try {
-      const { contactId, amountCents, description, artistId, artistName, contactName } = req.body;
+      const { contactId, amountCents, description, artistId, artistName, contactName, language } = req.body;
 
       if (!contactId) {
         return res.status(400).json({
@@ -3441,6 +3441,7 @@ function createApp() {
         artistId: artistId || null,
         artistName: artistName || null,
         contactName: contactName || null,
+        language: language === "Spanish" ? "es" : "en",
       });
 
       console.log(`[API] Payment link generated: ${paymentLink.url}`);
