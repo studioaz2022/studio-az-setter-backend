@@ -456,6 +456,7 @@ function createApp() {
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
         'https://consent.studioaztattoo.com', // Consent form web app
         'https://pay.studioaztattoo.com', // Custom checkout page
+        'https://checkout-chi-nine.vercel.app', // Checkout page (Vercel)
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:8080',
