@@ -14,7 +14,6 @@ class APNsService {
     this.teamId = process.env.APNS_TEAM_ID;
     this.bundleId = process.env.APNS_BUNDLE_ID || 'com.studioaz.tattoo';
     this.keyPath = process.env.APNS_KEY_PATH || path.join(__dirname, '../certs/AuthKey.p8');
-    this.isProduction = process.env.APNS_ENVIRONMENT === 'production';
 
     // Cache JWT token (valid for 1 hour, refresh every 50 minutes)
     this.jwtToken = null;
@@ -86,44 +85,24 @@ class APNsService {
   }
 
   /**
-   * Get APNs host based on environment
-   */
-  getAPNsHost() {
-    return this.isProduction
-      ? 'api.push.apple.com'
-      : 'api.sandbox.push.apple.com';
-  }
-
-  /**
-   * Send a push notification to a device
+   * Send a push notification to a single APNs host
+   * @param {string} host - APNs host (production or sandbox)
    * @param {string} deviceToken - The APNs device token
-   * @param {Object} notification - The notification payload
-   * @param {Object} options - Additional options (silent, priority, etc.)
+   * @param {string} payloadString - JSON-encoded payload
+   * @param {Object} options - Additional options
    */
-  async send(deviceToken, notification, options = {}) {
-    if (!this.privateKey) {
-      console.warn('⚠️ APNs not configured, skipping push notification');
-      return { success: false, error: 'APNs not configured' };
-    }
-
+  _sendToHost(host, deviceToken, payloadString, options = {}) {
     return new Promise((resolve) => {
       try {
         const jwt = this.generateJWT();
-        const host = this.getAPNsHost();
 
-        // Build the APNs payload
-        const payload = this.buildPayload(notification, options);
-        const payloadString = JSON.stringify(payload);
-
-        // Create HTTP/2 connection
         const client = http2.connect(`https://${host}`);
 
         client.on('error', (err) => {
-          console.error('❌ APNs connection error:', err);
+          console.error(`❌ APNs connection error (${host}):`, err);
           resolve({ success: false, error: err.message });
         });
 
-        // Build headers
         const headers = {
           ':method': 'POST',
           ':path': `/3/device/${deviceToken}`,
@@ -136,13 +115,11 @@ class APNsService {
           'content-length': Buffer.byteLength(payloadString)
         };
 
-        // Add collapse ID if provided (for replacing notifications)
         if (options.collapseId) {
           headers['apns-collapse-id'] = options.collapseId;
         }
 
         const req = client.request(headers);
-
         let responseData = '';
 
         req.on('response', (responseHeaders) => {
@@ -156,22 +133,21 @@ class APNsService {
             client.close();
 
             if (status === 200) {
-              console.log(`✅ Push notification sent to ${deviceToken.substring(0, 8)}...`);
-              resolve({ success: true });
+              console.log(`✅ Push sent via ${host} to ${deviceToken.substring(0, 8)}...`);
+              resolve({ success: true, host });
             } else {
               let error = 'Unknown error';
               try {
                 const parsed = JSON.parse(responseData);
                 error = parsed.reason || error;
               } catch {}
-              console.error(`❌ APNs error (${status}): ${error}`);
-              resolve({ success: false, error, status });
+              resolve({ success: false, error, status, host });
             }
           });
         });
 
         req.on('error', (err) => {
-          console.error('❌ APNs request error:', err);
+          console.error(`❌ APNs request error (${host}):`, err);
           client.close();
           resolve({ success: false, error: err.message });
         });
@@ -180,10 +156,47 @@ class APNsService {
         req.end();
 
       } catch (error) {
-        console.error('❌ Error sending push notification:', error);
         resolve({ success: false, error: error.message });
       }
     });
+  }
+
+  /**
+   * Send a push notification to a device
+   * Tries production first, falls back to sandbox if the token is a sandbox token.
+   * This handles both App Store and TestFlight devices automatically.
+   * @param {string} deviceToken - The APNs device token
+   * @param {Object} notification - The notification payload
+   * @param {Object} options - Additional options (silent, priority, etc.)
+   */
+  async send(deviceToken, notification, options = {}) {
+    if (!this.privateKey) {
+      console.warn('⚠️ APNs not configured, skipping push notification');
+      return { success: false, error: 'APNs not configured' };
+    }
+
+    const payload = this.buildPayload(notification, options);
+    const payloadString = JSON.stringify(payload);
+
+    // Try production first
+    const prodResult = await this._sendToHost('api.push.apple.com', deviceToken, payloadString, options);
+    if (prodResult.success) {
+      return prodResult;
+    }
+
+    // If production rejects the token, try sandbox (TestFlight/dev builds)
+    if (prodResult.error === 'BadDeviceToken' || prodResult.error === 'DeviceTokenNotForTopic') {
+      console.log(`🔄 Token rejected by production APNs, retrying on sandbox...`);
+      const sandboxResult = await this._sendToHost('api.sandbox.push.apple.com', deviceToken, payloadString, options);
+      if (sandboxResult.success) {
+        return sandboxResult;
+      }
+      console.error(`❌ APNs failed on both production and sandbox: ${sandboxResult.error}`);
+      return sandboxResult;
+    }
+
+    console.error(`❌ APNs error: ${prodResult.error}`);
+    return prodResult;
   }
 
   /**
@@ -275,7 +288,7 @@ class APNsService {
       keyId: !!this.keyId,
       teamId: !!this.teamId,
       bundleId: this.bundleId,
-      environment: this.isProduction ? 'production' : 'sandbox',
+      environment: 'auto (production → sandbox fallback)',
       isConfigured: this.isConfigured()
     };
   }
