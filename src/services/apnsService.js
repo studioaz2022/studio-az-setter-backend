@@ -193,7 +193,8 @@ class APNsService {
     }
 
     // If production rejects the token, try sandbox (TestFlight/dev builds)
-    if (prodResult.error === 'BadDeviceToken' || prodResult.error === 'DeviceTokenNotForTopic') {
+    const sandboxRetryErrors = ['BadDeviceToken', 'DeviceTokenNotForTopic', 'TopicDisallowed'];
+    if (sandboxRetryErrors.includes(prodResult.error)) {
       console.log(`🔄 Token rejected by production APNs, retrying on sandbox...`);
       const sandboxResult = await this._sendToHost('api.sandbox.push.apple.com', deviceToken, payloadString, options);
       if (sandboxResult.success) {
