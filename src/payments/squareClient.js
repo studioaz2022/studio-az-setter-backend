@@ -11,7 +11,7 @@ const { COMPACT_MODE, shortId } = require("../utils/logger");
 const SQUARE_ACCESS_TOKEN = process.env.SQUARE_ACCESS_TOKEN;
 const SQUARE_LOCATION_ID = process.env.SQUARE_LOCATION_ID;
 const SQUARE_ENVIRONMENT = process.env.SQUARE_ENVIRONMENT || "sandbox";
-const CHECKOUT_BASE_URL = process.env.CHECKOUT_BASE_URL || "https://pay.studioaztattoo.com";
+const CHECKOUT_BASE_URL = process.env.CHECKOUT_BASE_URL || "https://checkout.studioaztattoo.com";
 
 const isProd = SQUARE_ENVIRONMENT === "production";
 
