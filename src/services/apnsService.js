@@ -35,7 +35,8 @@ class APNsService {
 
       // Fallback: read from APNS_PRIVATE_KEY env var (for Render deployment)
       if (process.env.APNS_PRIVATE_KEY) {
-        this.privateKey = process.env.APNS_PRIVATE_KEY;
+        // Render stores env vars as single-line strings — restore real newlines
+        this.privateKey = process.env.APNS_PRIVATE_KEY.replace(/\\n/g, '\n');
         console.log('✅ APNs private key loaded from environment variable');
         return;
       }
