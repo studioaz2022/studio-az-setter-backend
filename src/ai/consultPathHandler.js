@@ -45,6 +45,7 @@ async function handlePathChoice({
   existingConsultType = null,
   consultationTypeLocked = false,
   applyOnly = false, // when true, apply state updates without sending consult-only messages
+  languagePreference = null,
 }) {
   const choice = detectPathChoice(messageText);
   if (!choice) return null;
@@ -120,17 +121,22 @@ async function handlePathChoice({
       console.log("📝 [CONSULTATION_TYPE] Sent message-path confirmation directly");
 
       // === Send deposit link after confirmation ===
+      const isSpanish = String(languagePreference || "").toLowerCase().includes("span") ||
+                        String(languagePreference || "").toLowerCase() === "es";
       try {
         const deposit = await createDepositLinkForContact({
           contactId,
           amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
           description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+          language: isSpanish ? "es" : "en",
         });
 
         const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
-        const depositMessage = 
-          `The $${amount} deposit locks in your spot and is fully refundable if you change your mind — it goes toward your tattoo total either way.\n\n` +
-          `Here's the link whenever you're ready: ${deposit?.url}`;
+        const depositMessage = isSpanish
+          ? `El depósito de $${amount} reserva tu lugar y es completamente reembolsable si cambias de opinión — se aplica al total de tu tatuaje.\n\n` +
+            `Aquí está el enlace cuando estés listo/a: ${deposit?.url}`
+          : `The $${amount} deposit locks in your spot and is fully refundable if you change your mind — it goes toward your tattoo total either way.\n\n` +
+            `Here's the link whenever you're ready: ${deposit?.url}`;
 
         await sendConversationMessage({
           contactId,
@@ -157,7 +163,9 @@ async function handlePathChoice({
         console.error("❌ Failed to create/send deposit link for message consult:", depositErr.message || depositErr);
         // Send fallback message without link
         const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
-        const fallbackMessage = `Just need the $${amount} refundable deposit to get started — it goes toward your tattoo total. I'll send the payment link shortly.`;
+        const fallbackMessage = isSpanish
+          ? `Solo necesitamos el depósito reembolsable de $${amount} para comenzar — se aplica al total de tu tatuaje. Te enviaré el enlace de pago en un momento.`
+          : `Just need the $${amount} refundable deposit to get started — it goes toward your tattoo total. I'll send the payment link shortly.`;
         await sendConversationMessage({
           contactId,
           body: fallbackMessage,

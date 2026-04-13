@@ -477,10 +477,14 @@ async function buildDeterministicResponse({
         sendHoldMessage: false, // prevent double messaging
       });
 
+      const langPref = canonicalState.languagePreference || "";
+      const isSpanish = String(langPref).toLowerCase().includes("span") ||
+                        String(langPref).toLowerCase() === "es";
       const deposit = await createDepositLinkForContact({
         contactId,
         amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
         description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
+        language: isSpanish ? "es" : "en",
       });
 
       const holdTimestamp = new Date().toISOString();
@@ -516,14 +520,20 @@ async function buildDeterministicResponse({
           : chosenSlot.startTime);
       const amount = (DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS || 0) / 100;
 
-      const message = `Got you for ${display}.\n` +
-        `To lock in your consultation, we require a $${amount} deposit. ` +
-        `It's fully refundable if you don't end up loving the design, and it goes toward your tattoo total.\n\n` +
-        `Here's the link: ${deposit?.url}\n` +
-        `I'll keep that spot on hold for about 20 minutes.`;
+      const message = isSpanish
+        ? `Te reservé para ${display}.\n` +
+          `Para confirmar tu consulta, necesitamos un depósito de $${amount}. ` +
+          `Es completamente reembolsable si no te encanta el diseño, y se aplica al total de tu tatuaje.\n\n` +
+          `Aquí está el enlace: ${deposit?.url}\n` +
+          `Mantendré ese espacio reservado por unos 20 minutos.`
+        : `Got you for ${display}.\n` +
+          `To lock in your consultation, we require a $${amount} deposit. ` +
+          `It's fully refundable if you don't end up loving the design, and it goes toward your tattoo total.\n\n` +
+          `Here's the link: ${deposit?.url}\n` +
+          `I'll keep that spot on hold for about 20 minutes.`;
 
       return {
-        language: "en",
+        language: isSpanish ? "es" : "en",
         bubbles: [message],
         internal_notes: "deterministic_slot_selection_hold_and_deposit",
         meta: {

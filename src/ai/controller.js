@@ -289,6 +289,7 @@ async function handleInboundMessage({
         existingConsultType: canonicalBefore.consultationType,
         consultationTypeLocked: canonicalBefore.consultationTypeLocked,
         applyOnly: true,
+        languagePreference: canonicalBefore.languagePreference,
       });
       console.log("[ROUTING] Applied consult-path updates before scheduling");
     } catch (err) {
@@ -315,6 +316,7 @@ async function handleInboundMessage({
         existingConsultType: canonicalBefore.consultationType,
         consultationTypeLocked: canonicalBefore.consultationTypeLocked,
         applyOnly: false,
+        languagePreference: canonicalBefore.languagePreference,
       });
 
       // If video call was picked, offer slots immediately (translator auto-confirmed)
