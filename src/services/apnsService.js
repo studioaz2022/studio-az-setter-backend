@@ -12,7 +12,7 @@ class APNsService {
   constructor() {
     this.keyId = process.env.APNS_KEY_ID;
     this.teamId = process.env.APNS_TEAM_ID;
-    this.bundleId = process.env.APNS_BUNDLE_ID || 'com.studioaz.tattoo';
+    this.bundleId = process.env.APNS_BUNDLE_ID || 'chavez.Studio-AZ-Tattoo';
     this.keyPath = process.env.APNS_KEY_PATH || path.join(__dirname, '../certs/AuthKey.p8');
 
     // Cache JWT token (valid for 1 hour, refresh every 50 minutes)
