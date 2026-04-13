@@ -35,9 +35,16 @@ class APNsService {
 
       // Fallback: read from APNS_PRIVATE_KEY env var (for Render deployment)
       if (process.env.APNS_PRIVATE_KEY) {
-        // Render stores env vars as single-line strings — restore real newlines
-        this.privateKey = process.env.APNS_PRIVATE_KEY.replace(/\\n/g, '\n');
+        let key = process.env.APNS_PRIVATE_KEY;
+        // Restore real newlines (Render may store as literal \n)
+        key = key.replace(/\\n/g, '\n');
+        // If the PEM header/footer are missing, wrap the raw base64
+        if (!key.includes('-----BEGIN')) {
+          key = `-----BEGIN PRIVATE KEY-----\n${key.trim()}\n-----END PRIVATE KEY-----`;
+        }
+        this.privateKey = key;
         console.log('✅ APNs private key loaded from environment variable');
+        console.log(`   Key starts with: ${key.substring(0, 30)}...`);
         return;
       }
 
