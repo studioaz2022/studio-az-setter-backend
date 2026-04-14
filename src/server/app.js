@@ -745,11 +745,26 @@ function createApp() {
         });
       }
 
-      const contactRaw = await getContact(contactId);
-      
+      // Detect location from webhook payload to use the correct SDK
+      const webhookLocationId = latestPayload?.locationId || latestPayload?.location?.id || null;
+      const isBarbershopMessage = webhookLocationId === process.env.GHL_BARBER_LOCATION_ID;
+
+      let contactRaw;
+      if (isBarbershopMessage && ghlBarber) {
+        try {
+          const resp = await ghlBarber.contacts.getContact({ contactId });
+          contactRaw = resp?.contact || resp;
+        } catch (err) {
+          console.error('⚠️ [MSG] Barbershop getContact failed:', err.message);
+          contactRaw = null;
+        }
+      } else {
+        contactRaw = await getContact(contactId);
+      }
+
       // Extract custom fields from webhook payload (use latest payload for most current data)
       const webhookCustomFields = extractCustomFieldsFromPayload(latestPayload);
-      
+
       // Merge webhook custom fields into contact (webhook payload has correct format)
       const contact = buildEffectiveContact(contactRaw, webhookCustomFields);
       const contactName = `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || "(unknown)";
@@ -771,6 +786,12 @@ function createApp() {
           .catch(err => console.error('❌ [MSG APN] Error:', err.message || err));
       } else if (isEmailMessage) {
         if (!COMPACT_MODE) console.log('📧 [MSG APN] Skipping push notification for email message');
+      }
+
+      // Barbershop messages: push notification is all we need — skip AI setter + pipeline
+      if (isBarbershopMessage) {
+        console.log(`💈 [MSG] Barbershop message from ${contactName} — push sent, skipping AI setter`);
+        return res.status(200).json({ ok: true, barbershop: true });
       }
 
       if (!COMPACT_MODE) {
