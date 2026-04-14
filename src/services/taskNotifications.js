@@ -43,7 +43,7 @@ async function sendPushToGhlUser(ghlUserId, notification) {
     // Fetch active push tokens
     const { data: tokens, error: tokenError } = await supabase
       .from('push_tokens')
-      .select('token')
+      .select('token, language')
       .eq('user_id', profile.id)
       .eq('is_active', true);
 
@@ -57,7 +57,11 @@ async function sendPushToGhlUser(ghlUserId, notification) {
 
     for (const tokenRecord of tokens) {
       try {
-        await apnsService.send(tokenRecord.token, notification);
+        // Localize notification if needed
+        const localizedNotification = typeof notification === 'function'
+          ? notification(tokenRecord.language)
+          : notification;
+        await apnsService.send(tokenRecord.token, localizedNotification);
         sent++;
       } catch (err) {
         console.error(`❌ [TASK APN] Failed to send to token: ${err.message}`);
@@ -88,12 +92,15 @@ async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserI
     ? taskNote.substring(0, 80) + '...'
     : taskNote;
 
-  const notification = {
-    type: 'task_assigned',
-    title: `New Task from ${creatorName}`,
-    body: notePreview || `Follow up with ${contactName}`,
-    contactId: null,
-    taskId: taskId || null,
+  const notification = (language) => {
+    const isSpanish = language === 'es';
+    return {
+      type: 'task_assigned',
+      title: isSpanish ? `Nueva Tarea de ${creatorName}` : `New Task from ${creatorName}`,
+      body: notePreview || (isSpanish ? `Seguimiento con ${contactName}` : `Follow up with ${contactName}`),
+      contactId: null,
+      taskId: taskId || null,
+    };
   };
 
   return sendPushToGhlUser(assigneeGhlUserId, notification);
@@ -110,12 +117,17 @@ async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUse
     return { sent: 0, failed: 0 };
   }
 
-  const notification = {
-    type: 'task_completed',
-    title: 'Task Completed',
-    body: `${completerName} completed the follow-up with ${contactName}`,
-    contactId: null,
-    taskId: taskId || null,
+  const notification = (language) => {
+    const isSpanish = language === 'es';
+    return {
+      type: 'task_completed',
+      title: isSpanish ? 'Tarea Completada' : 'Task Completed',
+      body: isSpanish
+        ? `${completerName} completó el seguimiento con ${contactName}`
+        : `${completerName} completed the follow-up with ${contactName}`,
+      contactId: null,
+      taskId: taskId || null,
+    };
   };
 
   return sendPushToGhlUser(creatorGhlUserId, notification);
@@ -125,12 +137,17 @@ async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUse
  * Notify assignee that their task is now overdue.
  */
 async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, taskId }) {
-  const notification = {
-    type: 'task_overdue',
-    title: 'Task Overdue',
-    body: `Your follow-up with ${contactName} is overdue`,
-    contactId: null,
-    taskId: taskId || null,
+  const notification = (language) => {
+    const isSpanish = language === 'es';
+    return {
+      type: 'task_overdue',
+      title: isSpanish ? 'Tarea Vencida' : 'Task Overdue',
+      body: isSpanish
+        ? `Tu seguimiento con ${contactName} está vencido`
+        : `Your follow-up with ${contactName} is overdue`,
+      contactId: null,
+      taskId: taskId || null,
+    };
   };
 
   return sendPushToGhlUser(assigneeGhlUserId, notification);
@@ -140,12 +157,17 @@ async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, tas
  * Notify assignee that their task has escalated to urgent.
  */
 async function sendTaskUrgentNotification({ assigneeGhlUserId, contactName, taskId }) {
-  const notification = {
-    type: 'task_urgent',
-    title: '⚠ Urgent Task',
-    body: `Follow-up with ${contactName} needs immediate attention`,
-    contactId: null,
-    taskId: taskId || null,
+  const notification = (language) => {
+    const isSpanish = language === 'es';
+    return {
+      type: 'task_urgent',
+      title: isSpanish ? 'Tarea Urgente' : 'Urgent Task',
+      body: isSpanish
+        ? `El seguimiento con ${contactName} necesita atención inmediata`
+        : `Follow-up with ${contactName} needs immediate attention`,
+      contactId: null,
+      taskId: taskId || null,
+    };
   };
 
   return sendPushToGhlUser(assigneeGhlUserId, notification);

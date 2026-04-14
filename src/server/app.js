@@ -6601,20 +6601,24 @@ function createApp() {
       if (apnsService.isConfigured()) {
         const { data: tokens } = await supabase
           .from("push_tokens")
-          .select("token")
+          .select("token, language")
           .eq("user_id", profile.id)
           .eq("is_active", true);
 
         if (tokens && tokens.length > 0) {
-          const locationLabel = location === "tattoo" ? "Tattoo Shop" : "Barbershop";
-          const notification = {
-            title: "Client Check-In",
-            body: `${customerName} has arrived at the ${locationLabel}`,
-            data: { type: "kiosk_check_in", customerName, location, appointmentId: matchedAppointmentId },
-          };
-
           for (const tokenRecord of tokens) {
             try {
+              const isSpanish = tokenRecord.language === 'es';
+              const locationLabel = isSpanish
+                ? (location === "tattoo" ? "el Estudio de Tatuajes" : "la Barbería")
+                : (location === "tattoo" ? "the Tattoo Shop" : "the Barbershop");
+              const notification = {
+                title: isSpanish ? "Cliente Llegó" : "Client Check-In",
+                body: isSpanish
+                  ? `${customerName} ha llegado a ${locationLabel}`
+                  : `${customerName} has arrived at ${locationLabel}`,
+                data: { type: "kiosk_check_in", customerName, location, appointmentId: matchedAppointmentId },
+              };
               await apnsService.sendWithRefresh(tokenRecord.token, notification);
             } catch (pushErr) {
               console.error("❌ [KIOSK] Push send error:", pushErr.message);
@@ -7479,24 +7483,27 @@ function createApp() {
           if (profile) {
             const { data: tokens } = await supabase
               .from("push_tokens")
-              .select("token")
+              .select("token, language")
               .eq("user_id", profile.id)
               .eq("is_active", true);
 
             if (tokens && tokens.length > 0) {
-              const time = new Date(startTime).toLocaleTimeString("en-US", {
-                hour: "numeric",
-                minute: "2-digit",
-                hour12: true,
-              });
-              const notification = {
-                title: "Walk-In Booked",
-                body: `${customerName} — ${serviceLabel} at ${time}`,
-                data: { type: "kiosk_walk_in", appointmentId, customerName, service },
-              };
-
               for (const tokenRecord of tokens) {
                 try {
+                  const isSpanish = tokenRecord.language === 'es';
+                  const locale = isSpanish ? 'es-US' : 'en-US';
+                  const time = new Date(startTime).toLocaleTimeString(locale, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                    hour12: true,
+                  });
+                  const notification = {
+                    title: isSpanish ? "Walk-In Reservado" : "Walk-In Booked",
+                    body: isSpanish
+                      ? `${customerName} — ${serviceLabel} a las ${time}`
+                      : `${customerName} — ${serviceLabel} at ${time}`,
+                    data: { type: "kiosk_walk_in", appointmentId, customerName, service },
+                  };
                   await apnsService.sendWithRefresh(tokenRecord.token, notification);
                 } catch (pushErr) {
                   console.error("❌ [KIOSK] Push send error:", pushErr.message);

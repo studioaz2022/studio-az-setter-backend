@@ -38,7 +38,7 @@ async function sendPushToGhlUser(ghlUserId, notification) {
 
     const { data: tokens, error: tokenError } = await supabase
       .from('push_tokens')
-      .select('token')
+      .select('token, language')
       .eq('user_id', profile.id)
       .eq('is_active', true);
 
@@ -52,7 +52,11 @@ async function sendPushToGhlUser(ghlUserId, notification) {
 
     for (const tokenRecord of tokens) {
       try {
-        await apnsService.send(tokenRecord.token, notification);
+        // Localize notification if needed
+        const localizedNotification = typeof notification === 'function'
+          ? notification(tokenRecord.language)
+          : notification;
+        await apnsService.send(tokenRecord.token, localizedNotification);
         sent++;
       } catch (err) {
         console.error(`❌ [PAY APN] Failed to send to token: ${err.message}`);
@@ -84,11 +88,16 @@ async function sendPaymentReceivedNotification({ artistGhlUserId, contactName, a
     .replace('card', 'Card')
     .replace('square', 'Square');
 
-  const notification = {
-    type: 'payment_received',
-    title: 'Payment Received 💰',
-    body: `${contactName} paid $${amount.toFixed(2)} via ${methodLabel}`,
-    contactId: contactId || null,
+  const notification = (language) => {
+    const isSpanish = language === 'es';
+    return {
+      type: 'payment_received',
+      title: isSpanish ? 'Pago Recibido' : 'Payment Received',
+      body: isSpanish
+        ? `${contactName} pagó $${amount.toFixed(2)} por ${methodLabel}`
+        : `${contactName} paid $${amount.toFixed(2)} via ${methodLabel}`,
+      contactId: contactId || null,
+    };
   };
 
   return sendPushToGhlUser(artistGhlUserId, notification);

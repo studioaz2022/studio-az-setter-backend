@@ -497,7 +497,7 @@ async function runMondayRitual() {
         // Get active push tokens
         const { data: tokens, error: tokenErr } = await supabase
           .from("push_tokens")
-          .select("token")
+          .select("token, language")
           .eq("user_id", profile.id)
           .eq("is_active", true);
 
@@ -509,20 +509,26 @@ async function runMondayRitual() {
         // Build notification
         const moneyStr = moneyLeaked != null
           ? `$${Math.round(moneyLeaked).toLocaleString()}`
-          : "Check your scorecard";
+          : null;
         const rebookCurrent = scorecard.rebookRate?.current;
         const rebookGoal = scorecard.rebookRate?.goal;
 
-        const notification = {
-          title: "Your Money Leak Report is ready.",
-          body: moneyLeaked != null
-            ? `You left ${moneyStr} on the floor this month. New client rebook: ${rebookCurrent != null ? Math.round(rebookCurrent) + "%" : "N/A"} → ${rebookGoal != null ? Math.round(rebookGoal) + "%" : "N/A"}.`
-            : "Your weekly scorecard is ready. Tap to see your numbers.",
-          type: "money_leak_scorecard",
-        };
-
         for (const tokenRecord of tokens) {
           try {
+            const isSpanish = tokenRecord.language === 'es';
+            const notification = {
+              title: isSpanish
+                ? "Tu Reporte de Dinero Perdido está listo."
+                : "Your Money Leak Report is ready.",
+              body: moneyStr != null
+                ? (isSpanish
+                  ? `Dejaste ${moneyStr} en la mesa este mes. Rebooking de nuevos clientes: ${rebookCurrent != null ? Math.round(rebookCurrent) + "%" : "N/A"} → ${rebookGoal != null ? Math.round(rebookGoal) + "%" : "N/A"}.`
+                  : `You left ${moneyStr} on the floor this month. New client rebook: ${rebookCurrent != null ? Math.round(rebookCurrent) + "%" : "N/A"} → ${rebookGoal != null ? Math.round(rebookGoal) + "%" : "N/A"}.`)
+                : (isSpanish
+                  ? "Tu scorecard semanal está listo. Toca para ver tus números."
+                  : "Your weekly scorecard is ready. Tap to see your numbers."),
+              type: "money_leak_scorecard",
+            };
             await apnsService.send(tokenRecord.token, notification, {
               collapseId: `scorecard-${weekStart}`,
             });

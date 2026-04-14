@@ -383,7 +383,7 @@ async function sendAppointmentPushNotification(appointment, eventType) {
 
     const { data: tokens, error: tokenError } = await supabase
       .from('push_tokens')
-      .select('token')
+      .select('token, language')
       .eq('user_id', profile.id)
       .eq('is_active', true);
 
@@ -397,11 +397,10 @@ async function sendAppointmentPushNotification(appointment, eventType) {
       return;
     }
 
-    const notification = formatAppointmentNotification(appointment, eventType);
-
     console.log(`📱 Sending ${eventType} notification to ${tokens.length} device(s)`);
 
     for (const tokenRecord of tokens) {
+      const notification = formatAppointmentNotification(appointment, eventType, tokenRecord.language);
       await apnsService.sendWithRefresh(tokenRecord.token, notification);
     }
 
@@ -415,16 +414,18 @@ async function sendAppointmentPushNotification(appointment, eventType) {
 /**
  * Format appointment notification content based on event type
  */
-function formatAppointmentNotification(appointment, eventType) {
+function formatAppointmentNotification(appointment, eventType, language = 'en') {
   const contactName = appointment.title || appointment.contactName || 'Client';
   const startTime = appointment.startTime || appointment.start_time;
+  const isSpanish = language === 'es';
 
   const date = new Date(startTime);
-  const formattedDate = date.toLocaleDateString('en-US', {
+  const locale = isSpanish ? 'es-US' : 'en-US';
+  const formattedDate = date.toLocaleDateString(locale, {
     month: 'short',
     day: 'numeric'
   });
-  const formattedTime = date.toLocaleTimeString('en-US', {
+  const formattedTime = date.toLocaleTimeString(locale, {
     hour: 'numeric',
     minute: '2-digit',
     hour12: true
@@ -435,22 +436,28 @@ function formatAppointmentNotification(appointment, eventType) {
 
   switch (eventType) {
     case 'created':
-      title = 'New Appointment';
-      body = `${contactName} - ${formattedDate} at ${formattedTime}`;
+      title = isSpanish ? 'Nueva Cita' : 'New Appointment';
+      body = `${contactName} - ${formattedDate} ${isSpanish ? 'a las' : 'at'} ${formattedTime}`;
       break;
     case 'updated':
-      body = `Appointment updated: ${contactName} - ${formattedDate} at ${formattedTime}`;
+      body = isSpanish
+        ? `Cita actualizada: ${contactName} - ${formattedDate} a las ${formattedTime}`
+        : `Appointment updated: ${contactName} - ${formattedDate} at ${formattedTime}`;
       break;
     case 'cancelled':
-      title = 'Appointment Cancelled';
-      body = `${contactName} - ${formattedDate} at ${formattedTime}`;
+      title = isSpanish ? 'Cita Cancelada' : 'Appointment Cancelled';
+      body = `${contactName} - ${formattedDate} ${isSpanish ? 'a las' : 'at'} ${formattedTime}`;
       break;
     case 'rescheduled':
-      title = 'Appointment Rescheduled';
-      body = `${contactName} - Now ${formattedDate} at ${formattedTime}`;
+      title = isSpanish ? 'Cita Reprogramada' : 'Appointment Rescheduled';
+      body = isSpanish
+        ? `${contactName} - Ahora ${formattedDate} a las ${formattedTime}`
+        : `${contactName} - Now ${formattedDate} at ${formattedTime}`;
       break;
     default:
-      body = `Appointment: ${contactName} - ${formattedDate} at ${formattedTime}`;
+      body = isSpanish
+        ? `Cita: ${contactName} - ${formattedDate} a las ${formattedTime}`
+        : `Appointment: ${contactName} - ${formattedDate} at ${formattedTime}`;
   }
 
   return {
@@ -505,7 +512,7 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
     const profileIds = profiles.map(p => p.id);
     const { data: tokens, error: tokenError } = await supabase
       .from('push_tokens')
-      .select('token, user_id')
+      .select('token, user_id, language')
       .in('user_id', profileIds)
       .eq('is_active', true);
 
@@ -518,17 +525,17 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
       ? messageText.substring(0, 100) + '...'
       : messageText;
 
-    const notification = {
-      type: 'new_message',
-      title: contactName || 'New Message',
-      body: preview || 'You have a new message',
-      contactId,
-    };
-
     const followerNote = includeFollowers ? `+ ${(followers || []).length} follower(s)` : 'owner only';
     console.log(`📱 [MSG APN] Sending to ${tokens.length} device(s) for ${contactName} (${followerNote})`);
 
     for (const tokenRecord of tokens) {
+      const isSpanish = tokenRecord.language === 'es';
+      const notification = {
+        type: 'new_message',
+        title: contactName || (isSpanish ? 'Nuevo Mensaje' : 'New Message'),
+        body: preview || (isSpanish ? 'Tienes un nuevo mensaje' : 'You have a new message'),
+        contactId,
+      };
       await apnsService.sendWithRefresh(tokenRecord.token, notification);
     }
   } catch (error) {
