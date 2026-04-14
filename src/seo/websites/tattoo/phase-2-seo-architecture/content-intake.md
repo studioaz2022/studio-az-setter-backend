@@ -199,37 +199,181 @@ Answer: take pain killers
 ## Section 6: Aftercare (to be confirmed with tattoo artists)
 
 **Q6.1** What type of bandage do you use? (plastic wrap, Saniderm/Tegaderm, etc.):
-Answer: Saniderm
+Answer: Plastic wrap (primary) or Saniderm depending on artist/situation. The detailed aftercare steps below describe the plastic wrap process.
 
 **Q6.2** How long should the bandage stay on?
 Answer: 
+**Step 1- Remove Plastic Wrap**
+**When:** 2-4 hours after tattoo
+**What to Do:**
+Wash your hands thoroughly.
+Gently remove the plastic wrap your artist applied.
+If it sticks, use lukewarm water to loosen it — never pull it off dry.
+https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/6908294068dfc2ba619c96c6.png
 
 **Q6.3** Washing instructions (what soap? how often? how to wash?):
-Answer:
+Answer: 
+**Step 2- Cleanse Gently** https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69082cc7bee93bc75699f93f.png
+**Product:** _Foam Cleanser (from your aftercare kit)_  
+**When:** 2–3 times daily during healing.  
+**How to Use:**
+**Cleanser:** 
+Our gentle foam cleanser is formulated to lift away excess ink, plasma, and bacteria without drying or irritating your skin. Cleansing your tattoo properly keeps pores clear, reduces the chance of infection, and helps your new ink heal evenly and stay vibrant.
+Follow the three steps shown above:
+- **Gently Cleanse** https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/690979abdb58b4cd8fd99060.png
+Dispense 1–2 pumps of cleanser onto clean fingertips and softly lather over your tattoo in small circular motions. This removes any buildup from the surface while soothing the area.
+- **Rinse Thoroughly**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69097a7c6b7a5733079ed430.png
+Rinse with lukewarm water until all cleanser and residue are gone. The tattoo should feel fresh and clean — never tight or sticky. Avoid hot water, which can irritate healing skin.
+- **Pat Dry**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69097b4337c43a2038c2defb.png
+Use a clean, soft towel or paper towel to gently pat the area dry. Avoid rubbing or reusing towels, as friction and bacteria can disrupt the healing process.
+- **Ingredients**:
+Weter (Aqua), Sodium C14 - C16 Olefin Sulfonate, Cocamide MIPA, Cocamidopropyl Hydraxysultaine, Aloe Berbadensis Leaf Juice, Glycol Stearete, Sodium Chloride, Phenoxyethanol, Caprylyl Glycol, Citric Acid.
 
 **Q6.4** Moisturizing instructions (what product? how often? how much?):
 Answer:
+**Step 3- Protect** https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69082ede5e5b74b7e4836bec.png
+**Product:** _A&D Ointment (from your aftercare kit)_  
+**When:** Apply a thin layer after each cleanse for the first 2 days/48 hrs.  
+**How to Use:**
+A&D ointment creates a light protective barrier that locks in moisture while shielding your tattoo from bacteria and irritation. It helps the skin begin healing safely during the most sensitive stage — the first two days after your session.
 
+- **Apply a Pea-Sized Amount**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69082ede5e5b74b7e4836bec.png
+After cleansing and drying your tattoo, squeeze out a small, pea-sized amount of ointment. This is all you need — a thin layer is enough to keep the area protected without clogging pores.
+- **Gently Rub It In**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69098408119a82e32b949818.png
+Using clean fingertips, softly spread the ointment over your tattoo until the surface looks slightly shiny but not greasy. The goal is to keep the skin lightly coated, allowing it to breathe and heal naturally.
+_Remember: less is more. Over-applying ointment can trap moisture and slow the healing process — a light touch is best._
+
+**Active Ingredient:**
+Petrolatum USP (76%w/w)
+
+**Step 4- Hydrate** https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/69082fb568dfc2f4519d7421.png
+**Product:** _Lotion (from your aftercare kit)_  
+**When:** 2–3 times daily after cleansing (continue until fully healed).  
+
+**How to Use:**
+**Fragrance-Free Lotion**
+**Hydrate and Maintain Healthy Skin**
+After the first 48 hours, switch from ointment to lotion to keep your healing skin soft and hydrated. Our lightweight, fragrance-free lotion absorbs quickly to prevent dryness, cracking, and irritation while letting your tattoo breathe and heal naturally.
+
+- **Apply a Small Amount**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/6909896a6b7a5702bfa0b513.png
+Dispense a small drop of lotion onto clean, dry skin — a little goes a long way. Too much product can clog pores or make your tattoo feel sticky.
+- **Gently Massage In**  https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/690989a037c43ae7e6c49658.png
+Using clean hands, softly massage the lotion into your tattoo until it’s fully absorbed. Your skin should feel smooth and comfortable, not greasy.
+_Keeping your tattoo lightly moisturized helps preserve color, reduces flaking, and supports a smooth, even heal._
+
+**Ingredients**:
+Water (Aqua), Sodium C14 - C16 Olefin Sulfonate, Cocamide MIPA, Cocamidopropyl Hydraxysultaine, Aloe Berbadensis Leaf Juice, Glycol Stearete, Sodium Chloride, Phenoxyethanol, Caprylyl Glycol, Citric acid
 **Q6.5** Do you recommend or sell a specific aftercare product/balm?
 Answer:
 
 **Q6.6** Day-by-day expectations — what should clients expect during healing?
-- Days 1-3:
-- Days 4-7:
-- Week 2:
-- Week 3-4:
+- Days 1-3 (fresh tattoo, open wound phase)- 
+- **What it looks like:**
+• Bright, bold, and slightly swollen
+• Redness around the tattoo
+• May look shiny or “wet”
+• Some ink + plasma leakage (totally normal)
+**What it feels like:**
+• Tender, like a sunburn
+• Warm to the touch
+• Slight stinging or soreness
+**What’s happening:**
+Your body is starting the healing process—this is technically an **open wound**, so your immune system is working hard.
+**What to do:**
+• Gently wash with fragrance-free soap
+• Pat dry (don’t rub)
+• Apply a thin layer of aftercare ointment
+• Keep it clean and avoid touching
+**Avoid:**
+• Tight clothing over the area
+• Sweating excessively
+• Submerging in water (no baths, pools, hot tubs)
+- Days 4-7: **Peeling & Itching Phase** 
+- **What it looks like:**
+• Dull or cloudy appearance
+• Flaking or peeling (like a sunburn)
+• Light scabbing may appear
+
+**What it feels like:**
+• ITCHY (this is the hardest part for most people)
+• Less sore, more tight/dry
+  
+**What’s happening:**
+Your skin is regenerating and shedding the damaged top layer.
+
+**What to do:**
+• Switch to a light, fragrance-free lotion
+• Keep it moisturized (not overly saturated)
+• Let flakes fall off naturally
+
+**Avoid:**
+• Scratching
+• Picking or peeling skin
+• Over-moisturizing (can clog pores and slow healing)
+
+- Week 2: **Surface Healing (Looks Better, Not Done)**
+- **What it looks like:**
+• Peeling mostly done
+• Tattoo may look slightly dull or “milky”
+• Skin appears more normal
+
+**What it feels like:**
+• Minimal itching
+• Less sensitivity overall
+**What’s happening:**
+The **top layer is healed**, but deeper layers are still repairing.
+**What to do:**
+• Continue moisturizing daily
+• Resume light normal activity (depending on placement)
+**Avoid:**
+• Sun exposure (tattoos are very sensitive to UV right now)
+• Thinking it’s fully healed—it’s not yet!
+
+- Week 3-4: **Settling Phase (Deeper Healing)**
+**What it looks like:**
+• Color and detail become more vibrant again
+• Skin texture returns to normal
+• No more flaking or dryness
+**What it feels like:**
+• Completely normal
+• No itching or tenderness
+**What’s happening:**
+The deeper layers of skin finish healing and the ink settles fully.
+**What to do:**
+• Start applying SPF if exposed to sun 
+• Keep skin hydrated
+
 
 **Q6.7** What should clients AVOID during healing? (sun, pool, gym, picking, etc.):
 Answer:
+- **Don’t Pick or Scratch**  
+Let flakes fall naturally to prevent scarring or color loss.
+- **Avoid Soaking & Heavy Sweating**  
+Skip pools, hot tubs, saunas, and hard workouts until your tattoo fully heals.
+Avoid swimming, soaking, or heavy sweating for at least **2–3 weeks**. Water, sweat, and friction can irritate or introduce bacteria to your healing tattoo.  
+Once the skin is fully closed (no open areas or flaking), you can safely return to normal activities.
+- **Protect from Sun & Friction**  
+Keep it covered from sunlight and wear loose, breathable clothing. After healing, apply sunscreen daily.
+
+
 
 **Q6.8** When is a tattoo fully healed?
-Answer:
+Answer: Most tattoos take about **2–4 weeks** to heal on the surface, but full internal healing can take up to **6–8 weeks** depending on the size, placement, and your skin type.  
+During this time, follow your artist’s aftercare instructions consistently — clean, protect, and hydrate.
 
 **Q6.9** When should a client contact the shop about healing concerns?
-Answer:
+Answer: 
+**Watch for Infection Signs**  
+Some redness, tenderness, and mild swelling are normal. Reach out if you notice:
+Redness **spreading outward**
+**Pus or yellow/green discharge**
+**Strong odor**
+Skin **hot to the touch**
+**Fever**
+If any of these occur, **contact your artist or a doctor promptly** to ensure proper healing.
 
 **Q6.10** When can they come in for a touch-up if needed?
-Answer:
+Answer: Not until 40 days of healing can we look into providing a touch up
 
 ---
 

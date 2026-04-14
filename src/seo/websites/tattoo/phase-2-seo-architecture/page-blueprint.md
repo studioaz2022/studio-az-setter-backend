@@ -572,8 +572,9 @@ Mid-stage — visitor is browsing for proof and inspiration. CTAs should connect
 
 **URL:** `/aftercare`
 **Buyer Stage:** Early
-**Word Count Target:** 1,000 - 1,500
+**Word Count Target:** 1,500 - 2,000
 **Spanish Content:** No (but consider adding in future iteration)
+**Images:** 10 instructional images (WebP, hosted on GHL media storage)
 
 ### Title Tag
 `Tattoo Aftercare Guide | Healing Tips from Studio AZ`
@@ -599,30 +600,68 @@ Mid-stage — visitor is browsing for proof and inspiration. CTAs should connect
 ### H2/H3 Outline
 
 ```
-H2: The First 24 Hours After Your Tattoo
-  — Remove wrap, gentle wash, pat dry, thin moisturizer
+H2: Your 4-Step Aftercare Routine
+  — HowTo schema target — each product step is a HowToStep (4 steps)
+  — Note: Studio AZ uses plastic wrap OR Saniderm depending on artist/situation
+  — Product language should be GENERAL (not "Studio AZ aftercare kit") for reusability and liability
+  — "a gentle foam cleanser", "A&D ointment", "a fragrance-free lotion"
+  — Add note: "Your artist will recommend specific products for your skin type"
+  H3: Step 1 — Remove Your Bandage (2-4 hours after tattoo)
+    — Wash hands, gently remove plastic wrap or Saniderm, lukewarm water if it sticks
+    — Image: remove-bandage-fresh-tattoo-aftercare.webp
+  H3: Step 2 — Cleanse Gently (2-3x daily during healing)
+    — Foam cleanser, circular motions, rinse with lukewarm water, pat dry with clean towel
+    — Images: foam-cleanser product, cleanse substep, rinse substep, pat dry substep (4 images)
+  H3: Step 3 — Protect (first 48 hours)
+    — A&D ointment, thin layer after each cleanse, pea-sized amount, lightly shiny not greasy
+    — Images: A&D ointment product, rub in substep (2 images)
+  H3: Step 4 — Hydrate (after 48 hours, until fully healed)
+    — Fragrance-free lotion, small amount, massage in gently, 2-3x daily
+    — Images: lotion product, apply substep, massage substep (3 images)
   — Authority link: AAD.org (tattoo aftercare)
 
 H2: Day-by-Day Tattoo Healing Timeline
-  H3: Days 1-3 — Redness and Swelling
-  H3: Days 4-7 — Peeling Begins
-  H3: Days 8-14 — Itching Phase
-  H3: Days 15-30 — Surface Healing Complete
-  H3: Months 1-3 — Deep Skin Layers Fully Heal
+  H3: Days 1-3 — Open Wound Phase
+    — Looks like: bright, bold, swollen, shiny, ink/plasma leakage
+    — Feels like: tender like sunburn, warm, slight stinging
+    — What to do: wash gently, pat dry, apply ointment, keep clean
+    — Avoid: tight clothing, sweating, submerging in water
+  H3: Days 4-7 — Peeling & Itching Phase
+    — Looks like: dull, cloudy, flaking, light scabbing
+    — Feels like: ITCHY, less sore, tight/dry
+    — What to do: switch to lotion, let flakes fall naturally
+    — Avoid: scratching, picking, over-moisturizing
+  H3: Week 2 — Surface Healing
+    — Looks like: peeling mostly done, slightly milky, more normal
+    — Feels like: minimal itching, less sensitivity
+    — What to do: continue moisturizing daily, resume light activity
+    — Avoid: sun exposure, thinking it's fully healed
+  H3: Weeks 3-4 — Settling Phase
+    — Looks like: color vibrant again, normal skin texture, no flaking
+    — Feels like: completely normal
+    — What to do: apply SPF when exposed to sun, keep hydrated
   — Authority link: AAD.org (wound healing)
-  — HowTo schema target — each day range is a step
 
 H2: What to Avoid While Your Tattoo Heals
-  — Sun exposure, swimming, picking/scratching, tight clothing
+  — Don't pick or scratch (prevents scarring/color loss)
+  — Avoid soaking & heavy sweating (pools, hot tubs, saunas, hard workouts) for 2-3 weeks
+  — Protect from sun & friction (loose clothing, sunscreen after healing)
   — Authority link: Wikipedia — Tattoo (health risks section)
 
 H2: Signs of Infection — When to See a Doctor
-  — Redness spreading beyond tattoo, pus, fever, swelling that gets worse
-  — This section is critical for E-E-A-T (experience, expertise)
+  — Redness spreading OUTWARD
+  — Pus or yellow/green discharge
+  — Strong odor
+  — Skin hot to the touch
+  — Fever
+  — "If any of these occur, contact your artist or a doctor promptly"
   — Authority link: AAD.org (skin infection signs)
 
 H2: Long-Term Tattoo Care
-  — Sunscreen, moisturizer, touch-up timing
+  — Full healing: 2-4 weeks surface, 6-8 weeks full internal
+  — Touch-up assessment at 40 days
+  — SPF 30+ sunscreen on exposed tattoos
+  — Keep skin hydrated
   — Authority link: Minnesota Dept of Health
 
 H2: Frequently Asked Aftercare Questions
@@ -641,32 +680,46 @@ H2: Frequently Asked Aftercare Questions
 | / | "tattoo shop Minneapolis" | Target |
 | /faq | "more tattoo questions" | Generic |
 | /services | "tattoo touch-up service" | Target |
-| /contact | "contact Studio AZ Tattoo" | Brand |
-| /artists | "our artists" | Generic |
+| /contact | "Studio AZ Tattoo" | Brand |
 
 ### CTA Strategy
 
 Early-stage — visitor is researching, not ready to buy. CTAs should be soft, educational, and trust-building:
 
 - **Primary CTA:** "Have more questions? Read our FAQ" (links to /faq)
-- **Secondary CTA:** "Thinking about your first tattoo? Meet our artists" (soft link to /artists)
-- **DO NOT** put "Book Now" on this page — it's an informational resource
+- **Secondary CTA:** "Book Your Next Tattoo" (soft link to /artists) — OK to include as secondary
+- Aftercare page visitors are existing clients or researchers — a booking CTA is fine as secondary
 
 ### Authority Links (1+ per H2)
 
 | H2 Section | Authority Link | DA/DR |
 |------------|---------------|-------|
-| First 24 Hours | AAD.org — tattoo aftercare | 90+ |
+| 4-Step Routine | AAD.org — tattoo aftercare | 90+ |
 | Day-by-Day Timeline | AAD.org — wound healing | 90+ |
 | What to Avoid | Wikipedia — Tattoo | 95+ |
 | Signs of Infection | AAD.org — skin infections | 90+ |
 | Long-Term Care | Minnesota Dept of Health | 80+ |
 | Aftercare Questions | AAD.org | 90+ |
 
+### Aftercare Images (10 WebP files on GHL media storage)
+
+| Step | SEO Filename | GHL URL | Alt Text |
+|------|-------------|---------|----------|
+| 1 | remove-bandage-fresh-tattoo-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/424e82c2-831e-406b-b607-3e87f822ddd7.webp` | "Removing bandage from fresh tattoo — tattoo aftercare step one" |
+| 2 | foam-cleanser-tattoo-aftercare-product.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/454198a4-8144-471c-9ca7-666d46ad1e3b.webp` | "Foam cleanser for tattoo aftercare — gentle daily cleansing product" |
+| 2a | gentle-cleanse-new-tattoo-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/810ee0ba-e7d1-4280-ac54-9a48abc37db9.webp` | "Gently cleansing a new tattoo with foam cleanser — tattoo aftercare routine" |
+| 2b | rinse-tattoo-lukewarm-water-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/4bf03bcb-8bbe-4fc7-96e3-5ad91c2baea0.webp` | "Rinsing tattoo with lukewarm water after cleansing — tattoo aftercare" |
+| 2c | pat-dry-tattoo-clean-towel-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/8d4cd0d7-4d80-4e52-bb75-a38e27a4438f.webp` | "Patting tattoo dry with clean towel — tattoo aftercare after washing" |
+| 3 | ad-ointment-tattoo-aftercare-product.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/a4358709-6f10-4d83-a2ee-6389e449df26.webp` | "A and D ointment for tattoo aftercare — protective barrier for first 48 hours" |
+| 3a | apply-ad-ointment-healing-tattoo.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/d4ad8ab8-a195-408f-b073-486b878d5baf.webp` | "Applying A and D ointment to healing tattoo — tattoo aftercare protection step" |
+| 4 | fragrance-free-lotion-tattoo-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/05575e06-7587-4f00-82b1-262b2e5cd43e.webp` | "Fragrance-free lotion for tattoo aftercare — daily hydration product" |
+| 4a | apply-lotion-healing-tattoo-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/ae7cec37-6779-42a4-a268-cbee78d64314.webp` | "Applying fragrance-free lotion to healing tattoo — tattoo aftercare moisturizing" |
+| 4b | massage-lotion-tattoo-aftercare.webp | `https://assets.cdn.filesafe.space/mUemx2jG4wly4kJWBkI4/media/9a87d62c-5635-4ab8-9628-4152ac81d01e.webp` | "Massaging lotion into healing tattoo — tattoo aftercare daily hydration" |
+
 ### Content Hook
 
 **Style:** Fear factor (soft)
-**First paragraph approach:** Open with the stakes — "Your tattoo is an open wound. How you treat it in the first two weeks determines whether it heals crisp and vibrant or faded and patchy. This aftercare guide covers exactly what to do (and what to avoid) from day one through full healing." This creates urgency without being alarmist.
+**First paragraph approach:** Open with the stakes — "Your tattoo is an open wound. How you treat it in the first few weeks determines whether it heals crisp and vibrant or faded and patchy. This aftercare guide covers exactly what to do (and what to avoid) from the first hours through full healing at 6-8 weeks."
 
 ---
 
