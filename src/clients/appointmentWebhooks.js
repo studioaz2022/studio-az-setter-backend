@@ -423,12 +423,14 @@ function formatAppointmentNotification(appointment, eventType, language = 'en') 
   const locale = isSpanish ? 'es-US' : 'en-US';
   const formattedDate = date.toLocaleDateString(locale, {
     month: 'short',
-    day: 'numeric'
+    day: 'numeric',
+    timeZone: 'America/Chicago'
   });
   const formattedTime = date.toLocaleTimeString(locale, {
     hour: 'numeric',
     minute: '2-digit',
-    hour12: true
+    hour12: true,
+    timeZone: 'America/Chicago'
   });
 
   let title = 'Studio AZ';

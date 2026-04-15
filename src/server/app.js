@@ -7517,6 +7517,7 @@ function createApp() {
                     hour: "numeric",
                     minute: "2-digit",
                     hour12: true,
+                    timeZone: "America/Chicago",
                   });
                   const notification = {
                     title: isSpanish ? "Walk-In Reservado" : "Walk-In Booked",
