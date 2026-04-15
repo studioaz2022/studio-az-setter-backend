@@ -221,10 +221,11 @@ async function handleAppointmentUpdated(payload) {
 
   // --- Reschedule detection: fetch current row before upserting ---
   let isRescheduled = false;
+  let existing = null;
 
   if (!isCancelled && appointment.id) {
     try {
-      const { data: existing, error: fetchError } = await supabase
+      const { data: existingRow, error: fetchError } = await supabase
         .from('appointments')
         .select('start_time, end_time, reschedule_count, reschedule_history, original_start_time, original_end_time')
         .eq('id', appointment.id)
@@ -232,7 +233,8 @@ async function handleAppointmentUpdated(payload) {
 
       if (fetchError) {
         console.log('⚠️ Could not fetch existing appointment (may be new):', fetchError.message);
-      } else if (existing) {
+      } else if (existingRow) {
+        existing = existingRow;
         // Normalize times to ISO strings for comparison
         const existingStart = new Date(existing.start_time).toISOString();
         const incomingStart = new Date(appointment.start_time).toISOString();
@@ -297,7 +299,9 @@ async function handleAppointmentUpdated(payload) {
   let eventType = 'updated';
   if (isCancelled) eventType = 'cancelled';
   else if (isRescheduled) eventType = 'rescheduled';
-  await sendAppointmentPushNotification(rawAppointment, eventType);
+  // Pass previous start time for reschedule notifications
+  const pushOptions = isRescheduled ? { previousStartTime: existing?.start_time } : {};
+  await sendAppointmentPushNotification(rawAppointment, eventType, pushOptions);
 
   // Re-create Google Meet + Fireflies for rescheduled online consultations
   if (isRescheduled) {
@@ -356,7 +360,7 @@ function mapGHLAppointmentToSupabase(payload) {
 /**
  * Send push notification to assigned artist when appointment changes
  */
-async function sendAppointmentPushNotification(appointment, eventType) {
+async function sendAppointmentPushNotification(appointment, eventType, options = {}) {
   if (!apnsService.isConfigured()) {
     console.log('⚠️ APNs not configured, skipping push notification');
     return;
@@ -400,7 +404,7 @@ async function sendAppointmentPushNotification(appointment, eventType) {
     console.log(`📱 Sending ${eventType} notification to ${tokens.length} device(s)`);
 
     for (const tokenRecord of tokens) {
-      const notification = formatAppointmentNotification(appointment, eventType, tokenRecord.language);
+      const notification = formatAppointmentNotification(appointment, eventType, tokenRecord.language, options);
       await apnsService.sendWithRefresh(tokenRecord.token, notification);
     }
 
@@ -414,24 +418,16 @@ async function sendAppointmentPushNotification(appointment, eventType) {
 /**
  * Format appointment notification content based on event type
  */
-function formatAppointmentNotification(appointment, eventType, language = 'en') {
+function formatAppointmentNotification(appointment, eventType, language = 'en', options = {}) {
   const contactName = appointment.title || appointment.contactName || 'Client';
   const startTime = appointment.startTime || appointment.start_time;
   const isSpanish = language === 'es';
+  const locale = isSpanish ? 'es-US' : 'en-US';
+  const tz = 'America/Chicago';
 
   const date = new Date(startTime);
-  const locale = isSpanish ? 'es-US' : 'en-US';
-  const formattedDate = date.toLocaleDateString(locale, {
-    month: 'short',
-    day: 'numeric',
-    timeZone: 'America/Chicago'
-  });
-  const formattedTime = date.toLocaleTimeString(locale, {
-    hour: 'numeric',
-    minute: '2-digit',
-    hour12: true,
-    timeZone: 'America/Chicago'
-  });
+  const formattedDate = date.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+  const formattedTime = date.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz });
 
   let title = 'Studio AZ';
   let body = '';
@@ -450,12 +446,23 @@ function formatAppointmentNotification(appointment, eventType, language = 'en') 
       title = isSpanish ? 'Cita Cancelada' : 'Appointment Cancelled';
       body = `${contactName} - ${formattedDate} ${isSpanish ? 'a las' : 'at'} ${formattedTime}`;
       break;
-    case 'rescheduled':
+    case 'rescheduled': {
       title = isSpanish ? 'Cita Reprogramada' : 'Appointment Rescheduled';
-      body = isSpanish
-        ? `${contactName} - Ahora ${formattedDate} a las ${formattedTime}`
-        : `${contactName} - Now ${formattedDate} at ${formattedTime}`;
+      // Show old time → new time if previous start time is available
+      if (options.previousStartTime) {
+        const prevDate = new Date(options.previousStartTime);
+        const prevFormatted = prevDate.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+        const prevTime = prevDate.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz });
+        body = isSpanish
+          ? `${contactName}\n${prevFormatted} ${prevTime} → ${formattedDate} ${formattedTime}`
+          : `${contactName}\n${prevFormatted} ${prevTime} → ${formattedDate} ${formattedTime}`;
+      } else {
+        body = isSpanish
+          ? `${contactName} - Ahora ${formattedDate} a las ${formattedTime}`
+          : `${contactName} - Now ${formattedDate} at ${formattedTime}`;
+      }
       break;
+    }
     default:
       body = isSpanish
         ? `Cita: ${contactName} - ${formattedDate} a las ${formattedTime}`
