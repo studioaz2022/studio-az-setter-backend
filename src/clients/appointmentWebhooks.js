@@ -311,8 +311,10 @@ async function handleAppointmentUpdated(payload) {
   }
 
   // Send reschedule confirmation SMS to the contact (barbershop only)
+  // Pass locationId from the outer payload since rawAppointment may not have it
   if (isRescheduled) {
-    sendRescheduleConfirmationSMS(rawAppointment)
+    const apptWithLocation = { ...rawAppointment, locationId: appointment.location_id || rawAppointment.locationId || payload.locationId };
+    sendRescheduleConfirmationSMS(apptWithLocation)
       .catch(err => console.error('⚠️ Reschedule confirmation SMS failed (non-fatal):', err.message));
   }
 }
@@ -566,9 +568,11 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
  */
 async function sendRescheduleConfirmationSMS(appointment) {
   const locationId = appointment.locationId;
+  console.log(`📲 [RESCHED SMS] Checking locationId=${locationId} vs BARBER=${BARBER_LOCATION_ID}`);
 
   // Only barbershop appointments
   if (locationId !== BARBER_LOCATION_ID) {
+    console.log(`📲 [RESCHED SMS] Skipping — not a barbershop appointment`);
     return;
   }
 
