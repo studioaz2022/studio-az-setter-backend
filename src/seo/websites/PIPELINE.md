@@ -29,10 +29,11 @@ Phase 2 produces a `content-intake.md` questionnaire customized to the site. The
 |-------|--------|-------------|----------|
 | **Phase 1: Research** | COMPLETE | keyword-map.md, competitor-teardown.md, content-gaps.md, baseline-audit.md, local-falcon-baseline.md | **Yes** (March 23, 2026) |
 | **Phase 2: Architecture** | COMPLETE | page-blueprint.md, schema-markup.md, internal-linking.md, image-strategy.md, technical-seo.md, geo-ai-readiness.md, content-intake.md | **Yes** (March 23, 2026) |
-| **Phase 3: Design/Build** | COMPLETE | Next.js site at `tattoo-website/` — 10 pages built, SEO verified across all pages (4-pass audit), hero video on R2 | Pending |
-| **Phase 4: Deploy/Verify** | NOT STARTED | launch-checklist.md | — |
+| **Phase 3: Design/Build** | COMPLETE | Next.js site at `tattoo-website/` — 10+ pages built, SEO verified (4-pass audit + post-audit fixes), consultation form, financing, language framing audit | **Yes** (April 2026) |
+| **Phase 4: Deploy/Verify** | COMPLETE | Deployed to Vercel, DNS cutover via Cloudflare, GA4 live (G-XYEDL03XZR), favicon + manifest, Search Console connected | **Yes** (April 15, 2026) |
 
-**Current step:** Awaiting Phase 3 approval, then Phase 4 — Deploy & Verify.
+**Status:** LIVE at tattooshopminneapolis.com (deployed April 15, 2026)
+**Post-launch:** Submit sitemap in Search Console, request indexing for all pages, update GBP website URL, run PageSpeed audit, begin GBP optimization + review generation.
 
 **Domain:** tattooshopminneapolis.com
 **GBP Place ID:** ChIJt_vZnAAzs1IR5e7h5BUE0O0
