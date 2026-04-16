@@ -296,6 +296,11 @@ function detectFAQQuestion(text) {
  * Returns: { shouldRespond: boolean, reason: string, appendFrontDesk: boolean }
  */
 async function shouldAIRespond(contactId, locationId, messageText) {
+  // Global kill switch — set AI_RESPONSES_ENABLED=false in .env to suspend all AI responses
+  if (process.env.AI_RESPONSES_ENABLED === 'false') {
+    return { shouldRespond: false, reason: 'ai_suspended_by_env', appendFrontDesk: false };
+  }
+
   // Check if lead is in qualified stage
   const isQualified = await isInQualifiedStage(contactId, locationId);
   
