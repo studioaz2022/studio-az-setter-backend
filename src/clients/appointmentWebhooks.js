@@ -18,6 +18,8 @@ const {
 const { updateContact, getContact } = require('./ghlClient');
 const { getOpportunitiesByContact, updateOpportunityStage } = require('./ghlOpportunityClient');
 const { getStageId } = require('../config/pipelineConfig');
+const { ghlBarber, getCachedUsers } = require('./ghlMultiLocationSdk');
+const { BARBER_LOCATION_ID } = require('../config/kioskConfig');
 
 // Online consultation calendar IDs — these get Google Meet + Fireflies
 const ONLINE_CONSULT_CALENDAR_IDS = new Set([
@@ -307,6 +309,12 @@ async function handleAppointmentUpdated(payload) {
   if (isRescheduled) {
     await ensureGoogleMeetForConsultation(rawAppointment, { forceNew: true });
   }
+
+  // Send reschedule confirmation SMS to the contact (barbershop only)
+  if (isRescheduled) {
+    sendRescheduleConfirmationSMS(rawAppointment)
+      .catch(err => console.error('⚠️ Reschedule confirmation SMS failed (non-fatal):', err.message));
+  }
 }
 
 /**
@@ -549,6 +557,91 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
     }
   } catch (error) {
     console.error('❌ [MSG APN] Error sending push notification:', error.message || error);
+  }
+}
+
+/**
+ * Send reschedule confirmation SMS to the contact (barbershop only).
+ * Uses the GHL trigger link so the contact gets a personalized confirmation page.
+ */
+async function sendRescheduleConfirmationSMS(appointment) {
+  const locationId = appointment.locationId;
+
+  // Only barbershop appointments
+  if (locationId !== BARBER_LOCATION_ID) {
+    return;
+  }
+
+  if (!ghlBarber) {
+    console.log('⚠️ [RESCHED SMS] ghlBarber SDK not available');
+    return;
+  }
+
+  const contactId = appointment.contactId;
+  const assignedUserId = appointment.assignedUserId;
+  const startTime = appointment.startTime;
+
+  if (!contactId || !startTime) {
+    console.log('⚠️ [RESCHED SMS] Missing contactId or startTime');
+    return;
+  }
+
+  try {
+    // Get contact first name
+    let firstName = 'there';
+    try {
+      const resp = await ghlBarber.contacts.getContact({ contactId });
+      const contact = resp?.contact || resp;
+      firstName = contact?.firstName?.trim() || 'there';
+    } catch (err) {
+      console.warn('⚠️ [RESCHED SMS] Could not fetch contact name:', err.message);
+    }
+
+    // Get artist first name from cached users
+    let artistFirstName = 'your barber';
+    if (assignedUserId) {
+      try {
+        const users = await getCachedUsers('barber', ghlBarber, BARBER_LOCATION_ID);
+        const artist = users.find(u => u.id === assignedUserId);
+        if (artist) {
+          artistFirstName = (artist.firstName || artist.name?.split(' ')[0] || 'your barber').trim();
+        }
+      } catch (err) {
+        console.warn('⚠️ [RESCHED SMS] Could not look up artist name:', err.message);
+      }
+    }
+
+    // Format the new date/time in Central time
+    const date = new Date(startTime);
+    const formattedDate = date.toLocaleDateString('en-US', {
+      weekday: 'long',
+      year: 'numeric',
+      month: 'long',
+      day: 'numeric',
+      timeZone: 'America/Chicago'
+    });
+    const formattedTime = date.toLocaleTimeString('en-US', {
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+      timeZone: 'America/Chicago'
+    });
+
+    // Trigger link placeholder — GHL resolves this to a per-contact URL
+    const triggerLink = '{{trigger_link.pPYoJcATUSzjUoy71L4w}}';
+
+    const message = `Studio AZ: ${firstName}, your appointment with ${artistFirstName} has been rescheduled to ${formattedDate} ${formattedTime}!\n\nModify/Cancel this event: ${triggerLink}`;
+
+    // Send via GHL conversations API — SMS type
+    await ghlBarber.conversations.sendANewMessage({
+      type: 'SMS',
+      contactId,
+      message,
+    });
+
+    console.log(`✅ [RESCHED SMS] Confirmation sent to ${firstName} (${contactId})`);
+  } catch (error) {
+    console.error('❌ [RESCHED SMS] Failed:', error.message || error);
   }
 }
 
