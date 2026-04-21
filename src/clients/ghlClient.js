@@ -829,6 +829,12 @@ async function _sendMessage(payload) {
 
 // Send a message in a contact's conversation
 async function sendConversationMessage({ contactId, body, channelContext = {} }) {
+  // ═══ GLOBAL KILL SWITCH — blocks ALL automated outbound messages ═══
+  if (process.env.AI_RESPONSES_ENABLED === 'false') {
+    console.warn(`🚫 AI_RESPONSES_ENABLED=false — blocking outbound message to contact ${contactId}: "${body?.substring(0, 80)}..."`);
+    return null;
+  }
+
   if (!contactId) {
     throw new Error("contactId is required for sendConversationMessage");
   }
