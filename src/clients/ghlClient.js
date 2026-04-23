@@ -210,6 +210,25 @@ function normalizeTags(rawTags = [], mode = "partial") {
 /**
  * Fetch a contact by ID from GoHighLevel
  */
+/**
+ * Fetch multiple contacts in parallel with concurrency throttling.
+ * Returns a Map<contactId, contact> (null values for contacts that failed to fetch).
+ */
+async function getContactsBatch(contactIds = [], { concurrency = 5 } = {}) {
+  if (!contactIds.length) return new Map();
+
+  const pLimit = require("p-limit");
+  const limit = pLimit(concurrency);
+
+  const entries = await Promise.all(
+    contactIds.map((id) =>
+      limit(async () => [id, await getContact(id)])
+    )
+  );
+
+  return new Map(entries);
+}
+
 async function getContact(contactId) {
   if (!contactId) return null;
 
@@ -1227,6 +1246,7 @@ async function addTranslatorAsFollower(contactId) {
 
 module.exports = {
   getContact,
+  getContactsBatch,
   getContactV2,
   createContact,
   updateContact,

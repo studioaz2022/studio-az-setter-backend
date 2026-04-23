@@ -7,6 +7,7 @@ const {
   createContact,
   assignContactToArtist,
   findConversationForContact,
+  updateSystemFields,
 } = require("../clients/ghlClient");
 const { ghl: ghlSdk } = require("../clients/ghlSdk");
 
@@ -68,6 +69,10 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   // 2. Assign the correct artist as contact owner
   await assignContactToArtist(contactId, artistUserId);
+
+  // 2b. Persist lead source
+  await updateSystemFields(contactId, { lead_source: "artist_landing_page" });
+  console.log(`📍 [LEAD SOURCE] Set lead_source="artist_landing_page" for ${contactId}`);
 
   // 3. Store the lead's message in the landing_page_inquiry custom field
   // Format: "[source]message" — iOS app parses the source prefix for attribution

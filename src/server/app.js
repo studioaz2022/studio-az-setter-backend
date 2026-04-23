@@ -105,6 +105,7 @@ const {
 } = require("../ai/artistRouter");
 const analyticsRoutes = require("../analytics/analyticsRoutes");
 const seoRoutes = require("../seo/seoRoutes");
+const leadsRoutes = require("../leads/leadsRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
@@ -816,6 +817,16 @@ function createApp() {
           isFirstMessage: true,
           contact,
         });
+
+        // Persist lead source on first contact
+        let leadSource = channelContext.channelType;
+        if (leadSource === "dm") {
+          const medium = body?.attributionSource?.medium || "";
+          if (medium.toLowerCase().includes("instagram")) leadSource = "instagram";
+          else if (medium.toLowerCase().includes("facebook")) leadSource = "facebook";
+        }
+        await updateSystemFields(contactId, { lead_source: leadSource });
+        if (!COMPACT_MODE) console.log(`📍 [LEAD SOURCE] Set lead_source="${leadSource}" for ${contactId}`);
       }
 
       // Fetch conversation history for context
@@ -1048,6 +1059,10 @@ function createApp() {
             isFirstMessage: true,
             contact: effectiveContact,
           });
+
+          // Persist lead source — widget chat = ai_setter
+          await updateSystemFields(contactId, { lead_source: "ai_setter" });
+          console.log(`📍 [LEAD SOURCE] Set lead_source="ai_setter" for ${contactId}`);
         }
 
         // Fetch conversation history for context (may be empty for new leads from form)
@@ -7556,6 +7571,9 @@ function createApp() {
 
   // ═══ SEO TOOLKIT ROUTES ═══
   app.use("/api/seo", seoRoutes);
+
+  // ═══ LEADS COMMAND CENTER ROUTES ═══
+  app.use("/api/leads", leadsRoutes);
 
   // ═══ CONSENT FORM ROUTES ═══
   const {

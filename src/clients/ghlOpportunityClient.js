@@ -127,33 +127,27 @@ async function searchOpportunities({
   pagination = null,
 }) {
   // NOTE: LeadConnector/GHL supports searching opportunities via GET:
-  // /opportunities/search?location_id=...&contact_id=...
-  // /opportunities/search?location_id=...&assigned_to=...&status=open
+  // /opportunities/search?location_id=...&pipeline_id=...&status=open
+  // Supported filters: contactId, assignedTo, pipelineId, pipelineStageId, status
   // Supported status values: open, won, lost, abandoned, all
-  // This avoids 422 errors seen with the POST schema.
   const q = query || {};
   const contactId = q.contactId || q.contact_id || null;
   const assignedTo = q.assignedTo || q.assigned_to || null;
-  const status = q.status || null; // Supported by API: open, won, lost, abandoned, all
-  const pipelineStageId = q.pipelineStageId || q.pipeline_stage_id || null; // Client-side filtering
+  const pipelineId = q.pipelineId || q.pipeline_id || null;
+  const status = q.status || null;
+  const pipelineStageId = q.pipelineStageId || q.pipeline_stage_id || null;
   const locationId = q.locationId || q.location_id || GHL_LOCATION_ID;
 
   if (!locationId) {
     throw new Error("GHL_LOCATION_ID is missing");
   }
 
-  // Build query params - require at least contactId OR assignedTo
-  if (!contactId && !assignedTo) {
-    console.warn(
-      "⚠️ [GHL Opportunities] searchOpportunities called without contact_id or assigned_to; returning empty list."
-    );
-    return [];
-  }
-
-  // First page via SDK
+  // Build SDK params — pipelineId alone is sufficient for pipeline-wide searches
   const sdkParams = { locationId };
   if (contactId) sdkParams.contactId = String(contactId);
   if (assignedTo) sdkParams.assignedTo = String(assignedTo);
+  if (pipelineId) sdkParams.pipelineId = String(pipelineId);
+  if (pipelineStageId) sdkParams.pipelineStageId = String(pipelineStageId);
   if (status && status !== "all") sdkParams.status = String(status);
   if (pagination?.startAfter !== undefined && pagination?.startAfter !== null) {
     sdkParams.startAfter = String(pagination.startAfter);
@@ -177,15 +171,7 @@ async function searchOpportunities({
     nextPageUrl = response.data?.meta?.nextPageUrl || response.data?.meta?.nextPageURL || null;
   }
 
-  // Client-side filtering for pipelineStageId (not supported by API)
-  let filtered = results;
-  if (pipelineStageId) {
-    filtered = filtered.filter(
-      (opp) => opp.pipelineStageId === pipelineStageId || opp.pipeline_stage_id === pipelineStageId
-    );
-  }
-
-  return filtered;
+  return results;
 }
 
 async function getOpportunity(opportunityId) {

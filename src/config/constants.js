@@ -43,6 +43,7 @@ const SYSTEM_FIELDS = {
   CONSULTATION_TYPE_LOCKED: "consultation_type_locked",
   ASSIGNED_ARTIST: "assigned_artist",
   ARTIST_ASSIGNED_AT: "artist_assigned_at",
+  LEAD_SOURCE: "lead_source",
   LEAD_SPANISH_COMFORTABLE: "lead_spanish_comfortable",
   TRANSLATOR_NEEDED: "translator_needed",
   TRANSLATOR_CONFIRMED: "translator_confirmed",
