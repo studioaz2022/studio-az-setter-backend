@@ -217,16 +217,20 @@ function normalizeTags(rawTags = [], mode = "partial") {
 async function getContactsBatch(contactIds = [], { concurrency = 5 } = {}) {
   if (!contactIds.length) return new Map();
 
-  const pLimit = require("p-limit");
-  const limit = pLimit(concurrency);
+  const results = new Map();
 
-  const entries = await Promise.all(
-    contactIds.map((id) =>
-      limit(async () => [id, await getContact(id)])
-    )
-  );
+  // Process in chunks for concurrency throttling
+  for (let i = 0; i < contactIds.length; i += concurrency) {
+    const chunk = contactIds.slice(i, i + concurrency);
+    const entries = await Promise.all(
+      chunk.map(async (id) => [id, await getContact(id)])
+    );
+    for (const [id, contact] of entries) {
+      results.set(id, contact);
+    }
+  }
 
-  return new Map(entries);
+  return results;
 }
 
 async function getContact(contactId) {
