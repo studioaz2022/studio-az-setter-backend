@@ -8,6 +8,7 @@ const {
   assignContactToArtist,
   findConversationForContact,
   updateSystemFields,
+  uploadFilesToTattooCustomField,
 } = require("../clients/ghlClient");
 const { ghl: ghlSdk } = require("../clients/ghlSdk");
 
@@ -33,7 +34,7 @@ const ARTIST_USER_IDS = {
  * No SMS is sent — the first text the lead receives is the artist's personal reply.
  * The iOS app reads the custom field and displays it as an inbound bubble.
  */
-async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source }) {
+async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source, files = [] }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
@@ -73,6 +74,19 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // 2b. Persist lead source
   await updateSystemFields(contactId, { lead_source: "artist_landing_page" });
   console.log(`📍 [LEAD SOURCE] Set lead_source="artist_landing_page" for ${contactId}`);
+
+  // 2c. Upload reference images (if any) to the Tattoo Reference Idea file custom field.
+  // Field defaults to GHL_TATTOO_FILE_FIELD_ID env var inside uploadFilesToTattooCustomField.
+  if (files && files.length > 0) {
+    try {
+      console.log(`📎 Uploading ${files.length} reference image(s) to contact ${contactId}`);
+      await uploadFilesToTattooCustomField(contactId, files);
+      console.log(`✅ Reference images uploaded for contact ${contactId}`);
+    } catch (uploadErr) {
+      // Don't fail the whole inquiry — log and continue (matches /lead/final behavior)
+      console.error(`❌ Reference image upload failed for ${contactId}:`, uploadErr.message);
+    }
+  }
 
   // 3. Store the lead's message in the landing_page_inquiry custom field
   // Format: "[source]message" — iOS app parses the source prefix for attribution

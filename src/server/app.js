@@ -3529,9 +3529,22 @@ function createApp() {
 
   // POST /api/tattoo/inquiry — Form submission from artist bio link landing pages
   // Creates/upserts GHL contact, assigns artist as owner, posts inbound SMS
-  app.post("/api/tattoo/inquiry", async (req, res) => {
+  // Accepts JSON or multipart/form-data (with `data` JSON field + `files` images)
+  app.post("/api/tattoo/inquiry", upload.array("files", 3), async (req, res) => {
     try {
-      const { firstName, lastName, phone, message, artistSlug, source } = req.body;
+      let payload = {};
+      if (req.body && typeof req.body.data === "string") {
+        // Multipart: JSON is in the `data` field
+        try {
+          payload = JSON.parse(req.body.data);
+        } catch (e) {
+          return res.status(400).json({ success: false, error: "Invalid JSON in data field" });
+        }
+      } else {
+        payload = req.body || {};
+      }
+
+      const { firstName, lastName, phone, message, artistSlug, source } = payload;
 
       if (!firstName || !lastName || !phone || !message || !artistSlug) {
         return res.status(400).json({
@@ -3547,9 +3560,18 @@ function createApp() {
         });
       }
 
-      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone}) via ${source || "unknown"}`);
+      const fileCount = req.files?.length || 0;
+      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone}) via ${source || "unknown"} — ${fileCount} file(s) attached`);
 
-      const result = await processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source });
+      const result = await processArtistInquiry({
+        firstName,
+        lastName,
+        phone,
+        message,
+        artistSlug,
+        source,
+        files: req.files || [],
+      });
 
       res.json(result);
     } catch (error) {
