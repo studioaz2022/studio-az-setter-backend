@@ -45,6 +45,13 @@ const {
 const { getServicePriceMap } = require("../config/barberServicePrices");
 const { processArtistInquiry, ARTIST_USER_IDS } = require("../services/tattooInquiryService");
 const {
+  createToken: createFillToken,
+  resolveToken: resolveFillToken,
+  recordStepProgress: recordFillStepProgress,
+  consumeToken: consumeFillToken,
+  FillTokenError,
+} = require("../services/fillTokenService");
+const {
   extractCustomFieldsFromPayload,
   buildEffectiveContact,
   formatThreadForLLM,
@@ -3582,6 +3589,250 @@ function createApp() {
       });
     }
   });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FILL FLOW — pre-loaded consultation page (FILL_FLOW_PLAN.md Phase 1)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // 4 endpoints:
+  //   POST /api/tattoo/fill-token       — internal-only: mint a token (back-fill / re-issue)
+  //   GET  /api/tattoo/fill/:token      — public: resolve token → prefill payload
+  //   POST /api/tattoo/fill/:token/step — public: record step transition (analytics)
+  //   POST /api/tattoo/fill/:token      — public: submit the full form, lock the token
+  //
+  // Validity is enforced inside fillTokenService — handlers just translate
+  // FillTokenError.code into the matching HTTP status.
+
+  // Custom field IDs the fill submission writes back to GHL.
+  // Mirrored from src/clients/ghlClient.js CUSTOM_FIELD_MAP.
+  const FILL_GHL_FIELD_IDS = {
+    tattoo_title: "8JqgdVJraABsqgUeqJ3a",
+    tattoo_summary: "xAGtMfmbxtfCHdo2oyf7",
+    tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
+    tattoo_style: "12b2O4ydlfO99FA4yCuk",
+    tattoo_size: "KXtfZYdeSKUyS5llTKsr",
+    tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
+    how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
+    first_tattoo: "QqDydmY1fnldidlcMnBC",
+    tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
+    // Note: budget_range + tattoo_concerns + fill_form_submitted_at are not yet
+    // wired to known GHL field IDs. They get added during Phase 3 / Phase 4.5
+    // GHL field provisioning. Until then we accept-and-drop them silently
+    // (logged) so the fill page can still POST without 400ing.
+  };
+
+  function sendFillError(res, err, where) {
+    if (err instanceof FillTokenError) {
+      console.warn(`[Fill][${where}] ${err.code} ${err.message}`);
+      const status = err.code === 404 ? 404 : err.code === 410 ? 410 : 500;
+      return res.status(status).json({
+        success: false,
+        error: err.message,
+      });
+    }
+    console.error(`[Fill][${where}] Unexpected:`, err);
+    return res.status(500).json({
+      success: false,
+      error: err?.message || "Internal error",
+    });
+  }
+
+  // Tiny shared-secret guard for the internal mint endpoint. Same pattern the
+  // analytics endpoint will use in Phase 4.5. Header: x-internal-key.
+  function requireInternalKey(req, res) {
+    const expected = process.env.INTERNAL_API_KEY;
+    if (!expected) {
+      // No key configured = endpoint is locked.
+      res.status(503).json({
+        success: false,
+        error: "INTERNAL_API_KEY not configured on server",
+      });
+      return false;
+    }
+    if (req.get("x-internal-key") !== expected) {
+      res.status(401).json({ success: false, error: "Unauthorized" });
+      return false;
+    }
+    return true;
+  }
+
+  // POST /api/tattoo/fill-token
+  // Internal-only re-issue / back-fill. Useful for migrating existing leads or
+  // manually generating a link from iOS. Body: { contactId, artistSlug, language?, source?, expiryDays? }
+  app.post("/api/tattoo/fill-token", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { contactId, artistSlug, language, source, expiryDays } = req.body || {};
+      if (!contactId || !artistSlug) {
+        return res.status(400).json({
+          success: false,
+          error: "contactId and artistSlug are required",
+        });
+      }
+      if (!ARTIST_USER_IDS[artistSlug]) {
+        return res.status(400).json({
+          success: false,
+          error: `Unknown artist: ${artistSlug}`,
+        });
+      }
+      const result = await createFillToken({
+        contactId,
+        artistSlug,
+        language: language || "en",
+        source: source || null,
+        expiryDays: typeof expiryDays === "number" ? expiryDays : undefined,
+      });
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      return sendFillError(res, err, "POST fill-token");
+    }
+  });
+
+  // GET /api/tattoo/fill/:token
+  // Public. Returns the prefill payload + bumps last_seen_at.
+  app.get("/api/tattoo/fill/:token", async (req, res) => {
+    try {
+      const payload = await resolveFillToken(req.params.token);
+
+      // Surface the artist's first name for the welcome screen — the page
+      // already knows the slug from `payload.artistSlug` but a humanized name
+      // belongs server-side so we can ever rename / remap without a redeploy.
+      const ARTIST_DISPLAY_NAMES = { joan: "Joan", andrew: "Andrew" };
+      const artistFirstName = ARTIST_DISPLAY_NAMES[payload.artistSlug] ||
+        payload.artistSlug.charAt(0).toUpperCase() + payload.artistSlug.slice(1);
+
+      return res.json({
+        success: true,
+        ...payload,
+        artistFirstName,
+      });
+    } catch (err) {
+      return sendFillError(res, err, "GET fill");
+    }
+  });
+
+  // POST /api/tattoo/fill/:token/step
+  // Public, fire-and-forget from the page on each step transition.
+  // Body: { step: number }. Failures are tolerated client-side.
+  app.post("/api/tattoo/fill/:token/step", async (req, res) => {
+    try {
+      const step = Number(req.body?.step);
+      if (!Number.isFinite(step) || step < 1) {
+        return res.status(400).json({
+          success: false,
+          error: "step must be a positive integer",
+        });
+      }
+      await recordFillStepProgress(req.params.token, step);
+      return res.json({ success: true });
+    } catch (err) {
+      return sendFillError(res, err, "POST fill/:token/step");
+    }
+  });
+
+  // POST /api/tattoo/fill/:token
+  // Public, final submission. Accepts JSON (no extra photos) or multipart
+  // (with `data` JSON field + `files` images, mirroring /api/tattoo/inquiry).
+  // Locks the token, then writes form values to GHL custom fields and appends
+  // any new photos. Phase 3 will wire the iOS-side "fill_form_submitted_at"
+  // bubble onto a real GHL field — for now we just log + return ok.
+  app.post(
+    "/api/tattoo/fill/:token",
+    upload.array("files", 3),
+    async (req, res) => {
+      // Step 1: lock the token first. If the token is invalid we never touch GHL.
+      let tokenContext;
+      try {
+        tokenContext = await consumeFillToken(req.params.token);
+      } catch (err) {
+        return sendFillError(res, err, "POST fill submit (consume)");
+      }
+
+      // Step 2: parse the payload (JSON or multipart).
+      let payload = {};
+      if (req.body && typeof req.body.data === "string") {
+        try {
+          payload = JSON.parse(req.body.data);
+        } catch (e) {
+          return res.status(400).json({
+            success: false,
+            error: "Invalid JSON in data field",
+          });
+        }
+      } else {
+        payload = req.body || {};
+      }
+
+      const { contactId } = tokenContext;
+      const fieldsAccepted = [];
+      const fieldsDropped = [];
+      const customFields = [];
+
+      Object.entries(payload).forEach(([key, value]) => {
+        if (value === undefined || value === null || value === "") return;
+        const fieldId = FILL_GHL_FIELD_IDS[key];
+        if (!fieldId) {
+          fieldsDropped.push(key);
+          return;
+        }
+        customFields.push({ id: fieldId, field_value: String(value) });
+        fieldsAccepted.push(key);
+      });
+
+      if (fieldsDropped.length > 0) {
+        console.warn(
+          `[Fill][POST submit] contact=${contactId} dropped unknown fields: ${fieldsDropped.join(", ")}`
+        );
+      }
+
+      // Step 3: persist GHL custom fields (best-effort — token is already locked).
+      const errors = [];
+      if (customFields.length > 0) {
+        try {
+          const { ghl: ghlSdk } = require("../clients/ghlSdk");
+          await ghlSdk.contacts.updateContact(
+            { contactId },
+            { customFields }
+          );
+          console.log(
+            `[Fill][POST submit] contact=${contactId} wrote ${customFields.length} fields: ${fieldsAccepted.join(", ")}`
+          );
+        } catch (cfErr) {
+          console.error(
+            `[Fill][POST submit] contact=${contactId} custom-field update failed:`,
+            cfErr.message
+          );
+          errors.push(`custom_fields: ${cfErr.message}`);
+        }
+      }
+
+      // Step 4: append new photos (best-effort).
+      if (req.files && req.files.length > 0) {
+        try {
+          const { uploadFilesToTattooCustomField } = require("../clients/ghlClient");
+          await uploadFilesToTattooCustomField(contactId, req.files);
+          console.log(
+            `[Fill][POST submit] contact=${contactId} uploaded ${req.files.length} new photo(s)`
+          );
+        } catch (uploadErr) {
+          console.error(
+            `[Fill][POST submit] contact=${contactId} photo upload failed:`,
+            uploadErr.message
+          );
+          errors.push(`photos: ${uploadErr.message}`);
+        }
+      }
+
+      return res.json({
+        success: errors.length === 0,
+        contactId,
+        fieldsAccepted,
+        fieldsDropped,
+        photosUploaded: req.files?.length || 0,
+        errors: errors.length > 0 ? errors : undefined,
+      });
+    }
+  );
 
   // ═══════════════════════════════════════════════════════════════════════════
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code

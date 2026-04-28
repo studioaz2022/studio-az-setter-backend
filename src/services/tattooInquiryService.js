@@ -11,6 +11,7 @@ const {
   uploadFilesToTattooCustomField,
 } = require("../clients/ghlClient");
 const { ghl: ghlSdk } = require("../clients/ghlSdk");
+const { createToken: createFillToken } = require("./fillTokenService");
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
@@ -86,6 +87,31 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
       // Don't fail the whole inquiry — log and continue (matches /lead/final behavior)
       console.error(`❌ Reference image upload failed for ${contactId}:`, uploadErr.message);
     }
+  }
+
+  // 2d. Mint a fill-flow token. Lets the lead deep-link into the pre-filled
+  // consultation page via the auto-confirmation SMS. Non-fatal: if minting
+  // fails the inquiry still completes; SMS just won't carry a fill link yet.
+  // SMS link injection is a separate step (Phase 1 Step 3 of FILL_FLOW_PLAN.md).
+  let fillToken = null;
+  let fillUrl = null;
+  try {
+    const tokenResult = await createFillToken({
+      contactId,
+      artistSlug,
+      language: "en",
+      source: source || "bio_link",
+    });
+    fillToken = tokenResult.token;
+    fillUrl = tokenResult.url;
+    console.log(
+      `🔗 [FILL TOKEN] Minted ${fillToken} for contact ${contactId} → ${fillUrl} (reused=${tokenResult.reused})`
+    );
+  } catch (tokenErr) {
+    console.error(
+      `❌ Failed to mint fill token for ${contactId}:`,
+      tokenErr.message
+    );
   }
 
   // 3. Store the lead's message in the landing_page_inquiry custom field
@@ -166,7 +192,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     console.warn(`⚠️ Failed to add note to contact ${contactId}:`, noteErr.message);
   }
 
-  return { success: true, contactId, conversationId };
+  return { success: true, contactId, conversationId, fillToken, fillUrl };
 }
 
 module.exports = { processArtistInquiry, ARTIST_USER_IDS };
