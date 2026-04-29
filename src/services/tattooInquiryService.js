@@ -19,11 +19,47 @@ const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 // The iOS app reads this field and renders it as a synthetic inbound bubble in the conversation.
 const LANDING_PAGE_INQUIRY_FIELD_ID = "kNJrZsTQhDmILbdqJlo0";
 
+// "Last Auto SMS At" — DATE field stamped when the auto-confirmation SMS sends.
+// Used by funnel analytics to exclude the auto-SMS from "time to first artist reply"
+// (otherwise the auto-SMS would always look like the artist replied instantly).
+// See FILL_FLOW_PLAN.md Phase 4.5 — "Distinguishing the auto-confirmation SMS".
+const LAST_AUTO_SMS_AT_FIELD_ID = "EjpTbHO59al8yiS2QP7E";
+
+// "Language Preference" — drives EN vs ES copy.
+const LANGUAGE_PREFERENCE_FIELD_ID = "ETxasC6QlyxRaKU18kbz";
+
 // Map artist slug → GHL user ID
 const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
 };
+
+// Display name lookup for auto-SMS personalization.
+const ARTIST_FIRST_NAMES = {
+  joan: "Joan",
+  andrew: "Andrew",
+};
+
+// Kill switch — set LANDING_PAGE_AUTO_SMS_ENABLED=false on Render to disable
+// auto-SMS without a redeploy (e.g., if the SMS is misbehaving in prod and we
+// need to stop it instantly). Default ON.
+function autoSmsEnabled() {
+  const v = process.env.LANDING_PAGE_AUTO_SMS_ENABLED;
+  return v === undefined || v === null || v === "" || v.toLowerCase() !== "false";
+}
+
+/**
+ * Build the auto-confirmation SMS body. Plain copy (no fill link) for v1 —
+ * Step 3 of FILL_FLOW_PLAN.md Phase 1 will swap in the fill URL once the fill
+ * page is live.
+ */
+function buildAutoSmsBody({ firstName, artistFirstName, language }) {
+  const isEs = language === "es" || language === "spanish";
+  if (isEs) {
+    return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! Te responderá personalmente en menos de 24 horas. — Studio AZ`;
+  }
+  return `Hey ${firstName} — got your message for ${artistFirstName}! He'll text you back personally within 24 hours. — Studio AZ`;
+}
 
 /**
  * Process an inquiry from the artist social landing page.
@@ -154,6 +190,67 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   console.log(`💬 Using conversation ${conversationId} for contact ${contactId}`);
 
+  // 4b. Auto-confirmation SMS to the lead.
+  // - Sent from the assigned artist's GHL number (GHL routes via owner phone)
+  //   so the lead's text app threads it with the artist's eventual personal reply.
+  // - Plain copy for v1 (no fill link) — link gets injected in Step 3 once the
+  //   fill page is live.
+  // - Stamps `last_auto_sms_at` on the contact ONLY after a successful send,
+  //   so funnel analytics can subtract the auto-SMS from "time to first reply"
+  //   without false positives from failed sends.
+  // - Kill-switch via LANDING_PAGE_AUTO_SMS_ENABLED env var.
+  let autoSmsSent = false;
+  if (autoSmsEnabled()) {
+    try {
+      const artistFirstName = ARTIST_FIRST_NAMES[artistSlug] ||
+        artistSlug.charAt(0).toUpperCase() + artistSlug.slice(1);
+      const smsBody = buildAutoSmsBody({
+        firstName,
+        artistFirstName,
+        language: "en", // v1 default; per-contact language detection lands with the fill page
+      });
+
+      await ghlSdk.conversations.sendANewMessage({
+        type: "SMS",
+        contactId,
+        message: smsBody,
+      });
+
+      // Stamp the timestamp custom field. GHL DATE fields accept ISO strings.
+      const sentAtIso = new Date().toISOString();
+      try {
+        await ghlSdk.contacts.updateContact(
+          { contactId },
+          {
+            customFields: [
+              { id: LAST_AUTO_SMS_AT_FIELD_ID, field_value: sentAtIso },
+            ],
+          }
+        );
+      } catch (stampErr) {
+        // Non-fatal — the SMS already went out; analytics may double-count this
+        // contact's "first artist reply" as the auto-SMS, but that's a soft
+        // failure compared to losing the SMS itself.
+        console.warn(
+          `⚠️ Failed to stamp last_auto_sms_at on ${contactId}:`,
+          stampErr.message
+        );
+      }
+
+      autoSmsSent = true;
+      console.log(`📱 [AUTO-SMS] Sent to ${firstName} (${contactId}) at ${sentAtIso}`);
+    } catch (smsErr) {
+      // Don't fail the whole inquiry — the artist still has the conversation
+      // and unread badge. Lead just won't get an auto-confirmation.
+      console.error(
+        `❌ [AUTO-SMS] Failed to send to contact ${contactId}:`,
+        smsErr.response?.data || smsErr.message
+      );
+    }
+  } else {
+    console.log(`🔇 [AUTO-SMS] Disabled via LANDING_PAGE_AUTO_SMS_ENABLED=false`);
+  }
+
   // 5. Post an internal comment so the conversation preview shows the message.
   // Internal comments don't send SMS but populate lastInternalComment in GHL.
   try {
@@ -192,7 +289,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     console.warn(`⚠️ Failed to add note to contact ${contactId}:`, noteErr.message);
   }
 
-  return { success: true, contactId, conversationId, fillToken, fillUrl };
+  return { success: true, contactId, conversationId, fillToken, fillUrl, autoSmsSent };
 }
 
 module.exports = { processArtistInquiry, ARTIST_USER_IDS };

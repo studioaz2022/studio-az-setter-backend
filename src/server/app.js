@@ -3835,6 +3835,33 @@ function createApp() {
   );
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // LEAD FUNNEL ANALYTICS (FILL_FLOW_PLAN.md Phase 4.5)
+  // ═══════════════════════════════════════════════════════════════════════════
+  //
+  // GET /api/analytics/lead-funnel?days=30
+  //   - Internal-only (x-internal-key header)
+  //   - 5-min in-memory cache; pass ?force=1 to bypass
+  //   - days clamped to [1, 365]
+  //   - Returns the JSON shape documented in FILL_FLOW_PLAN.md Phase 4.5
+
+  app.get("/api/analytics/lead-funnel", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { getFunnelSnapshot } = require("../analytics/leadFunnelAnalytics");
+      const days = Number(req.query.days) || 30;
+      const force = req.query.force === "1" || req.query.force === "true";
+      const snapshot = await getFunnelSnapshot(days, { force });
+      return res.json(snapshot);
+    } catch (err) {
+      console.error("[Analytics][lead-funnel] failed:", err);
+      return res.status(500).json({
+        success: false,
+        error: err?.message || "Failed to compute funnel snapshot",
+      });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
   // ═══════════════════════════════════════════════════════════════════════════
 
