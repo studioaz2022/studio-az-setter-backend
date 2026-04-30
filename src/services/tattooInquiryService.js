@@ -314,6 +314,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
         type: "lead_assigned",
         title: isEs ? `Nuevo Cliente de ${sourceLabel}` : `New Lead from ${sourceLabel}`,
         body,
+        badge: 1,
         contactId,
       };
     }).catch((err) => console.error("❌ [LEAD APN] Error:", err.message || err));
