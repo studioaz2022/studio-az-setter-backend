@@ -201,11 +201,43 @@ class APNsService {
         return sandboxResult;
       }
       console.error(`❌ APNs failed on both production and sandbox: ${sandboxResult.error}`);
+      // Both hosts permanently rejected the token — deactivate it so we stop
+      // wasting sends on rotated/uninstalled devices.
+      this._deactivateToken(deviceToken, sandboxResult.error).catch(() => {});
       return sandboxResult;
+    }
+
+    // Permanent failures from production that don't warrant a sandbox retry
+    // (Unregistered = app uninstalled / token invalidated)
+    if (prodResult.error === 'Unregistered') {
+      this._deactivateToken(deviceToken, prodResult.error).catch(() => {});
     }
 
     console.error(`❌ APNs error: ${prodResult.error}`);
     return prodResult;
+  }
+
+  /**
+   * Mark a push token inactive in Supabase so future sends skip it.
+   * Lazy-loads the supabase client to avoid a circular dependency at module load.
+   */
+  async _deactivateToken(deviceToken, reason) {
+    try {
+      const { supabase } = require('../clients/supabaseClient');
+      if (!supabase) return;
+      const { error } = await supabase
+        .from('push_tokens')
+        .update({ is_active: false, updated_at: new Date().toISOString() })
+        .eq('token', deviceToken)
+        .eq('is_active', true);
+      if (error) {
+        console.error(`⚠️ Failed to deactivate stale token: ${error.message}`);
+      } else {
+        console.log(`🧹 Deactivated stale push token (${reason}): ${deviceToken.substring(0, 8)}...`);
+      }
+    } catch (err) {
+      console.error(`⚠️ Error deactivating token: ${err.message}`);
+    }
   }
 
   /**
@@ -262,9 +294,22 @@ class APNsService {
    * @param {Object} notification - The notification payload
    */
   async sendWithRefresh(deviceToken, notification) {
+    // Build a collapse-id scoped to the notification type so unrelated pushes
+    // don't replace each other. Falls back to a generic id if no scope is available.
+    let collapseId;
+    if (notification.type === 'new_message' && notification.contactId) {
+      // One bucket per contact thread — rapid messages from the same contact
+      // collapse to a single lock-screen card; distinct contacts get distinct cards.
+      collapseId = `msg-${notification.contactId}`;
+    } else if (notification.appointmentId) {
+      collapseId = `appointment-${notification.appointmentId}`;
+    } else {
+      collapseId = `${notification.type || 'notification'}-update`;
+    }
+
     // Send visible notification
     const alertResult = await this.send(deviceToken, notification, {
-      collapseId: `appointment-${notification.appointmentId || 'update'}`
+      collapseId
     });
 
     // Also send silent notification for calendar refresh
