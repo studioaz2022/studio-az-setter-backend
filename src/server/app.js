@@ -3617,11 +3617,15 @@ function createApp() {
     how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
     first_tattoo: "QqDydmY1fnldidlcMnBC",
     tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
-    // Note: budget_range + tattoo_concerns + fill_form_submitted_at are not yet
-    // wired to known GHL field IDs. They get added during Phase 3 / Phase 4.5
-    // GHL field provisioning. Until then we accept-and-drop them silently
-    // (logged) so the fill page can still POST without 400ing.
+    // Note: budget_range + tattoo_concerns are not yet wired to known GHL
+    // field IDs. They get added when those fields are provisioned in GHL;
+    // until then we accept-and-drop silently (logged) so the fill page can
+    // still POST without 400ing.
   };
+
+  // Stamped on every successful submit — the iOS app reads this to surface
+  // the second synthetic "provided more details" bubble (Phase 3 of the plan).
+  const FILL_FORM_SUBMITTED_AT_FIELD_ID = "TxmgB8Y0j8ETyZaziAqi";
 
   function sendFillError(res, err, where) {
     if (err instanceof FillTokenError) {
@@ -3803,6 +3807,15 @@ function createApp() {
         customFields.push({ id: fieldId, field_value: String(value) });
         fieldsAccepted.push(key);
       });
+
+      // Always stamp fill_form_submitted_at — drives the iOS synthetic bubble.
+      // Done unconditionally so even an empty submission (every field dropped)
+      // still surfaces in the artist's thread.
+      customFields.push({
+        id: FILL_FORM_SUBMITTED_AT_FIELD_ID,
+        field_value: new Date().toISOString(),
+      });
+      fieldsAccepted.push("fill_form_submitted_at");
 
       if (fieldsDropped.length > 0) {
         console.warn(
