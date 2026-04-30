@@ -63,16 +63,54 @@ function autoSmsEnabled() {
 }
 
 /**
- * Build the auto-confirmation SMS body. Plain copy (no fill link) for v1 —
- * Step 3 of FILL_FLOW_PLAN.md Phase 1 will swap in the fill URL once the fill
- * page is live.
+ * Build the auto-confirmation SMS body. When `fillUrl` is provided (v1 of the
+ * fill flow), the copy points the lead at the fill page; otherwise it falls
+ * back to the simpler "we got your message" acknowledgment so we can still
+ * disable the fill flow via env var without losing the auto-SMS.
+ *
+ * Copy matches FILL_FLOW_PLAN.md Phase 1 "SMS copy update" section.
  */
-function buildAutoSmsBody({ firstName, artistFirstName, language }) {
+function buildAutoSmsBody({ firstName, artistFirstName, language, fillUrl }) {
   const isEs = language === "es" || language === "spanish";
+  if (fillUrl) {
+    if (isEs) {
+      return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! Mientras él responde a otros mensajes, llena unos detalles rápidos para agilizar el proceso: ${fillUrl} — Studio AZ`;
+    }
+    return `Hey ${firstName} — got your message for ${artistFirstName}! While he's responding to other leads, fill in a few quick details to speed things up: ${fillUrl} — Studio AZ`;
+  }
   if (isEs) {
     return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! Te responderá personalmente en menos de 24 horas. — Studio AZ`;
   }
   return `Hey ${firstName} — got your message for ${artistFirstName}! He'll text you back personally within 24 hours. — Studio AZ`;
+}
+
+/**
+ * Read the contact's `language_preference` custom field and normalize it to
+ * "en" | "es". Returns null when unset so callers can fall back to whatever
+ * default they want (the inquiry payload's language, or "en").
+ */
+async function getContactLanguage(contactId) {
+  if (!contactId) return null;
+  try {
+    const data = await ghlSdk.contacts.getContact({ contactId });
+    const contact = data?.contact || data;
+    const cf = contact?.customField || {};
+    const raw =
+      cf[LANGUAGE_PREFERENCE_FIELD_ID] ||
+      // Some responses also serialize as customFields array
+      (Array.isArray(contact?.customFields)
+        ? contact.customFields.find((f) => f.id === LANGUAGE_PREFERENCE_FIELD_ID)?.value ||
+          contact.customFields.find((f) => f.id === LANGUAGE_PREFERENCE_FIELD_ID)?.field_value
+        : null);
+    if (!raw) return null;
+    const lower = String(raw).toLowerCase();
+    if (lower.includes("span") || lower === "es" || lower === "español") return "es";
+    if (lower.includes("eng") || lower === "en") return "en";
+    return null;
+  } catch (err) {
+    console.warn(`⚠️ getContactLanguage(${contactId}) failed:`, err.message);
+    return null;
+  }
 }
 
 /**
@@ -139,23 +177,28 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     }
   }
 
-  // 2d. Mint a fill-flow token. Lets the lead deep-link into the pre-filled
+  // 2d. Detect contact language preference (set during the original inquiry
+  // flow if the lead used the Spanish landing page). Falls back to EN.
+  // Read this BEFORE token mint so the fill page renders in the right
+  // language on first paint.
+  const detectedLanguage = (await getContactLanguage(contactId)) || "en";
+
+  // 2e. Mint a fill-flow token. Lets the lead deep-link into the pre-filled
   // consultation page via the auto-confirmation SMS. Non-fatal: if minting
-  // fails the inquiry still completes; SMS just won't carry a fill link yet.
-  // SMS link injection is a separate step (Phase 1 Step 3 of FILL_FLOW_PLAN.md).
+  // fails the inquiry still completes; SMS falls back to plain copy.
   let fillToken = null;
   let fillUrl = null;
   try {
     const tokenResult = await createFillToken({
       contactId,
       artistSlug,
-      language: "en",
+      language: detectedLanguage,
       source: source || "bio_link",
     });
     fillToken = tokenResult.token;
     fillUrl = tokenResult.url;
     console.log(
-      `🔗 [FILL TOKEN] Minted ${fillToken} for contact ${contactId} → ${fillUrl} (reused=${tokenResult.reused})`
+      `🔗 [FILL TOKEN] Minted ${fillToken} for contact ${contactId} → ${fillUrl} (lang=${detectedLanguage}, reused=${tokenResult.reused})`
     );
   } catch (tokenErr) {
     console.error(
@@ -207,8 +250,9 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // 4b. Auto-confirmation SMS to the lead.
   // - Sent from the assigned artist's GHL number (GHL routes via owner phone)
   //   so the lead's text app threads it with the artist's eventual personal reply.
-  // - Plain copy for v1 (no fill link) — link gets injected in Step 3 once the
-  //   fill page is live.
+  // - Embeds the fill-flow URL when the token mint succeeded; otherwise falls
+  //   back to plain "we got your message" copy.
+  // - Localized via `detectedLanguage` (read from contact.language_preference).
   // - Stamps `last_auto_sms_at` on the contact ONLY after a successful send,
   //   so funnel analytics can subtract the auto-SMS from "time to first reply"
   //   without false positives from failed sends.
@@ -221,7 +265,8 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
       const smsBody = buildAutoSmsBody({
         firstName,
         artistFirstName,
-        language: "en", // v1 default; per-contact language detection lands with the fill page
+        language: detectedLanguage,
+        fillUrl: fillUrl || undefined,
       });
 
       await ghlSdk.conversations.sendANewMessage({
