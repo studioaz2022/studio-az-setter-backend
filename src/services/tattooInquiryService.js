@@ -12,6 +12,20 @@ const {
 } = require("../clients/ghlClient");
 const { ghl: ghlSdk } = require("../clients/ghlSdk");
 const { createToken: createFillToken } = require("./fillTokenService");
+const { sendPushToGhlUser } = require("./taskNotifications");
+
+// Pretty traffic-source labels for the push title. Falls back to the raw slug
+// (capitalized) for any source we haven't named yet.
+const SOURCE_LABELS_EN = {
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  bio_link: "Bio Link",
+};
+const SOURCE_LABELS_ES = {
+  instagram: "Instagram",
+  tiktok: "TikTok",
+  bio_link: "Bio Link",
+};
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
@@ -273,6 +287,38 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     console.log(`🔔 Conversation ${conversationId} marked as unread`);
   } catch (unreadErr) {
     console.warn(`⚠️ Could not mark conversation as unread:`, unreadErr.message);
+  }
+
+  // 6b. Push to the artist. GHL doesn't fire InboundMessage for landing-page
+  // submissions (no real inbound SMS, just an internal comment + custom field),
+  // so the artist would otherwise get no push when their app is closed.
+  // Localized per the artist's stored device language (push_tokens.language).
+  try {
+    const leadName = [firstName, lastName].filter(Boolean).join(" ") || (
+      // Fallback for the rare empty-name case
+      undefined
+    );
+    const messagePreview = (message || "").length > 100
+      ? `${message.substring(0, 100)}...`
+      : (message || "");
+    sendPushToGhlUser(artistUserId, (language) => {
+      const isEs = language === "es";
+      const sourceLabel = isEs
+        ? (SOURCE_LABELS_ES[trafficSource] || trafficSource)
+        : (SOURCE_LABELS_EN[trafficSource] || trafficSource);
+      const fallbackBody = isEs ? "Nueva consulta de tatuaje" : "New tattoo inquiry";
+      const body = leadName
+        ? (messagePreview ? `${leadName} · ${messagePreview}` : leadName)
+        : (messagePreview || fallbackBody);
+      return {
+        type: "lead_assigned",
+        title: isEs ? `Nuevo Cliente de ${sourceLabel}` : `New Lead from ${sourceLabel}`,
+        body,
+        contactId,
+      };
+    }).catch((err) => console.error("❌ [LEAD APN] Error:", err.message || err));
+  } catch (pushErr) {
+    console.error("❌ [LEAD APN] Error setting up push:", pushErr.message || pushErr);
   }
 
   // 6. Add the lead's original message as a note on the contact (backup)
