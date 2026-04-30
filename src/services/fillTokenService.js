@@ -245,15 +245,35 @@ async function resolveToken(token) {
     messageText = stripped || inquiryRaw;
   }
 
-  // Photos are stored as a JSON array of URLs by uploadFilesToTattooCustomField.
+  // Photos. GHL file-upload custom fields can come back in several shapes
+  // depending on how they were written and which API endpoint returned them:
+  //   1. Object map keyed by index, e.g. { "1": { url, originalUrl, meta }, "2": {...} }
+  //      — what `getContact` returns when files were uploaded via
+  //      uploadFilesToTattooCustomField (multipart custom-field POST). This is
+  //      the canonical landing-page-inquiry shape.
+  //   2. Array of URLs (some legacy paths)
+  //   3. Comma-separated string (rare, older v1 responses)
+  // Prefer `originalUrl` (Google Cloud Storage CDN, fast) over `url`
+  // (services.leadconnectorhq.com, requires auth in some cases).
   let photos = [];
   if (FIELD_IDS.tattoo_ideasreferences) {
     const photosRaw = cf[FIELD_IDS.tattoo_ideasreferences];
     if (Array.isArray(photosRaw)) {
       photos = photosRaw.filter((u) => typeof u === "string" && u.length > 0);
     } else if (typeof photosRaw === "string" && photosRaw.length > 0) {
-      // Some GHL responses return a comma-separated string.
       photos = photosRaw.split(",").map((s) => s.trim()).filter(Boolean);
+    } else if (photosRaw && typeof photosRaw === "object") {
+      // Object-map shape — sort by numeric key so the order matches upload order.
+      photos = Object.entries(photosRaw)
+        .sort(([a], [b]) => Number(a) - Number(b))
+        .map(([, file]) => {
+          if (typeof file === "string") return file;
+          if (file && typeof file === "object") {
+            return file.meta?.originalUrl || file.url || file.originalUrl || null;
+          }
+          return null;
+        })
+        .filter((u) => typeof u === "string" && u.length > 0);
     }
   }
 
