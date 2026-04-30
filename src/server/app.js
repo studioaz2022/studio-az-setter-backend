@@ -3899,13 +3899,18 @@ function createApp() {
     }
   });
 
-  // POST /api/tattoo/fill/nudge-sweep
+  // POST /api/tattoo/fill-nudge/sweep
   //   - Internal-only (x-internal-key header)
   //   - Hit hourly by Render cron; runs the 24h non-engager nudge sweep.
   //   - Returns the tally of sent / skipped / deferred rows (see
   //     fillNudgeService.runNudgeSweep for the schema).
   //   - Honors LANDING_PAGE_FILL_NUDGE_ENABLED kill switch.
-  app.post("/api/tattoo/fill/nudge-sweep", async (req, res) => {
+  //
+  // NOTE: lives under /api/tattoo/fill-nudge/, NOT /api/tattoo/fill/, because
+  // POST /api/tattoo/fill/:token (the form-submit handler) is registered above
+  // and would otherwise swallow this path with `:token = "nudge-sweep"`. Same
+  // sibling-namespace pattern as POST /api/tattoo/fill-token.
+  app.post("/api/tattoo/fill-nudge/sweep", async (req, res) => {
     if (!requireInternalKey(req, res)) return;
     try {
       const { runNudgeSweep } = require("../services/fillNudgeService");
