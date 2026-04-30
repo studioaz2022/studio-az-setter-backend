@@ -49,6 +49,7 @@ const {
   resolveToken: resolveFillToken,
   recordStepProgress: recordFillStepProgress,
   consumeToken: consumeFillToken,
+  getPhotoForToken: getFillPhotoForToken,
   FillTokenError,
 } = require("../services/fillTokenService");
 const {
@@ -3709,6 +3710,29 @@ function createApp() {
       });
     } catch (err) {
       return sendFillError(res, err, "GET fill");
+    }
+  });
+
+  // GET /api/tattoo/fill/:token/photo/:index
+  // Public proxy. The raw GHL / GCS URLs require a PIT auth header that we
+  // can't expose to the lead's browser — fetch + stream them through here.
+  // Caches at the edge for an hour (private since it's per-token).
+  app.get("/api/tattoo/fill/:token/photo/:index", async (req, res) => {
+    try {
+      const { stream, contentType, contentLength } = await getFillPhotoForToken(
+        req.params.token,
+        req.params.index
+      );
+      res.setHeader("Content-Type", contentType);
+      if (contentLength) res.setHeader("Content-Length", contentLength);
+      // Token is per-contact, link is short-lived — short cache is safe and
+      // saves a GHL round-trip if the lead reloads or revisits.
+      res.setHeader("Cache-Control", "private, max-age=600");
+      // Pipe the upstream body directly to the response.
+      const { Readable } = require("stream");
+      Readable.fromWeb(stream).pipe(res);
+    } catch (err) {
+      return sendFillError(res, err, "GET fill photo");
     }
   });
 

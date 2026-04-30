@@ -47,6 +47,40 @@ class FillTokenError extends Error {
   }
 }
 
+/**
+ * Pull the ordered list of GHL-side source URLs (services.leadconnectorhq.com
+ * `documents/download/<id>`) for the photos custom field on a contact's
+ * customField object. Returns [] when the field is empty / missing.
+ */
+function getPhotoSourceUrls(cf) {
+  if (!cf || !FIELD_IDS.tattoo_ideasreferences) return [];
+  const raw = cf[FIELD_IDS.tattoo_ideasreferences];
+  if (!raw) return [];
+
+  if (Array.isArray(raw)) {
+    return raw.filter((u) => typeof u === "string" && u.length > 0);
+  }
+  if (typeof raw === "string" && raw.length > 0) {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  if (typeof raw === "object") {
+    return Object.entries(raw)
+      .sort(([a], [b]) => Number(a) - Number(b))
+      .map(([, file]) => {
+        if (typeof file === "string") return file;
+        if (file && typeof file === "object") {
+          // Prefer the auth'd documents/download URL (we proxy through it
+          // with our PIT token); fall back to originalUrl / url as a sanity
+          // path even though GCS will 403 directly — caller is the proxy.
+          return file.url || file.originalUrl || file.meta?.originalUrl || null;
+        }
+        return null;
+      })
+      .filter((u) => typeof u === "string" && u.length > 0);
+  }
+  return [];
+}
+
 function ensureSupabase() {
   if (!supabase) {
     throw new FillTokenError(500, "Supabase client not configured");
@@ -249,33 +283,20 @@ async function resolveToken(token) {
   // depending on how they were written and which API endpoint returned them:
   //   1. Object map keyed by index, e.g. { "1": { url, originalUrl, meta }, "2": {...} }
   //      — what `getContact` returns when files were uploaded via
-  //      uploadFilesToTattooCustomField (multipart custom-field POST). This is
-  //      the canonical landing-page-inquiry shape.
+  //      uploadFilesToTattooCustomField. This is the canonical landing-page-
+  //      inquiry shape.
   //   2. Array of URLs (some legacy paths)
   //   3. Comma-separated string (rare, older v1 responses)
-  // Prefer `originalUrl` (Google Cloud Storage CDN, fast) over `url`
-  // (services.leadconnectorhq.com, requires auth in some cases).
-  let photos = [];
-  if (FIELD_IDS.tattoo_ideasreferences) {
-    const photosRaw = cf[FIELD_IDS.tattoo_ideasreferences];
-    if (Array.isArray(photosRaw)) {
-      photos = photosRaw.filter((u) => typeof u === "string" && u.length > 0);
-    } else if (typeof photosRaw === "string" && photosRaw.length > 0) {
-      photos = photosRaw.split(",").map((s) => s.trim()).filter(Boolean);
-    } else if (photosRaw && typeof photosRaw === "object") {
-      // Object-map shape — sort by numeric key so the order matches upload order.
-      photos = Object.entries(photosRaw)
-        .sort(([a], [b]) => Number(a) - Number(b))
-        .map(([, file]) => {
-          if (typeof file === "string") return file;
-          if (file && typeof file === "object") {
-            return file.meta?.originalUrl || file.url || file.originalUrl || null;
-          }
-          return null;
-        })
-        .filter((u) => typeof u === "string" && u.length > 0);
-    }
-  }
+  //
+  // The raw GCS / services.leadconnectorhq.com URLs are NOT publicly
+  // accessible — they 401 / 403 without a PIT auth header. Return our own
+  // proxy URLs (resolved server-side via getPhotoSourceUrls below) so the
+  // browser can fetch them directly. The proxy lives at
+  // GET /api/tattoo/fill/:token/photo/:index.
+  const photoSources = getPhotoSourceUrls(cf);
+  const photos = photoSources.map(
+    (_, i) => `/api/tattoo/fill/${row.token}/photo/${i}`
+  );
 
   return {
     token: row.token,
@@ -379,11 +400,67 @@ async function consumeToken(token) {
   };
 }
 
+/**
+ * Public: stream a single prefill photo for a token. Validates the token
+ * (404 / 410 like other handlers), looks up the source URL by index, fetches
+ * it from GHL with the PIT auth header, and returns { stream, contentType }
+ * for the HTTP layer to pipe to the response.
+ *
+ * Why proxy instead of returning the GHL URL: GHL's documents/download
+ * endpoint 401s without auth, and the underlying GCS originalUrl 403s. The
+ * lead's browser can't reach either, so the only way to surface the photo
+ * is to fetch it server-side and stream it through.
+ */
+async function getPhotoForToken(token, indexRaw) {
+  const row = await loadValidToken(token);
+  const idx = Number.isFinite(Number(indexRaw)) ? Math.floor(Number(indexRaw)) : -1;
+  if (idx < 0) {
+    throw new FillTokenError(404, "Invalid photo index");
+  }
+
+  const contact = await getContact(row.contact_id);
+  const sources = getPhotoSourceUrls(contact?.customField || {});
+  if (idx >= sources.length) {
+    throw new FillTokenError(404, "Photo not found");
+  }
+  const sourceUrl = sources[idx];
+
+  // GHL PIT token reused from the file-upload helper. Same auth, same scope.
+  const pit = process.env.GHL_FILE_UPLOAD_TOKEN;
+  if (!pit) {
+    throw new FillTokenError(500, "GHL_FILE_UPLOAD_TOKEN not configured");
+  }
+
+  // Use undici/fetch (Node 18+) so we can stream the body without buffering
+  // the whole image in memory.
+  const upstream = await fetch(sourceUrl, {
+    headers: {
+      Authorization: `Bearer ${pit}`,
+      Version: "2021-07-28",
+    },
+    redirect: "follow",
+  });
+
+  if (!upstream.ok) {
+    console.error(
+      `[fillToken] photo proxy upstream ${upstream.status} for ${sourceUrl}`
+    );
+    throw new FillTokenError(500, `Upstream ${upstream.status}`);
+  }
+
+  return {
+    stream: upstream.body,
+    contentType: upstream.headers.get("content-type") || "application/octet-stream",
+    contentLength: upstream.headers.get("content-length") || undefined,
+  };
+}
+
 module.exports = {
   createToken,
   resolveToken,
   recordStepProgress,
   consumeToken,
+  getPhotoForToken,
   FillTokenError,
   // Exported for tests
   _generateToken: generateToken,
