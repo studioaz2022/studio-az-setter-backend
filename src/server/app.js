@@ -695,6 +695,12 @@ function createApp() {
   });
 
   app.post("/ghl/message-webhook", async (req, res) => {
+    // Acknowledge immediately so GHL doesn't retry while we debounce + run AI.
+    // The handler awaits a 15s debounce + AI pipeline, which exceeds GHL's webhook
+    // timeout and previously caused 5–7 retries per message → duplicate APN sends.
+    res.status(200).json({ ok: true, queued: true });
+
+    setImmediate(async () => {
     try {
       // ═══ VERBOSE MODE HEADER ═══
       if (!COMPACT_MODE) {
@@ -734,17 +740,17 @@ function createApp() {
 
       if (!contactId) {
         console.warn("⚠️ /ghl/message-webhook missing contactId");
-        return res.status(200).json({ ok: false, error: "missing contactId" });
+        return;
       }
 
       // ═══ MESSAGE DEBOUNCING ═══
       // Wait for 15 seconds of "quiet" to batch multiple rapid messages
       const batchData = await addToBatch(contactId, messageText, payload);
-      
+
       // If batchData is null, another request will handle this batch
       if (!batchData) {
         if (!COMPACT_MODE) console.log(`⏭️ [DEBOUNCE] Skipping - batch will be processed by another request`);
-        return res.status(200).json({ ok: true, debounced: true });
+        return;
       }
       
       // Use the combined message text from all batched messages
@@ -804,7 +810,7 @@ function createApp() {
       // Barbershop messages: push notification is all we need — skip AI setter + pipeline
       if (isBarbershopMessage) {
         console.log(`💈 [MSG] Barbershop message from ${contactName} — push sent, skipping AI setter`);
-        return res.status(200).json({ ok: true, barbershop: true });
+        return;
       }
 
       if (!COMPACT_MODE) {
@@ -890,11 +896,7 @@ function createApp() {
           console.log(`   Stage ID: ${cf.opportunity_stage_id || cf.opportunityStageId}`);
           console.log(`   Message: "${combinedMessageText.substring(0, 50)}${combinedMessageText.length > 50 ? '...' : ''}"`);
         }
-        return res.status(200).json({ 
-          ok: true, 
-          skipped: true, 
-          reason: responseCheck.reason 
-        });
+        return;
       }
       
       // Log if this is a qualified lead FAQ response
@@ -985,11 +987,10 @@ function createApp() {
       }
 
       if (!COMPACT_MODE) console.log("💬 ════════════════════════════════════════════════════════\n");
-      return res.status(200).json({ ok: true });
     } catch (err) {
       console.error("❌ /ghl/message-webhook error:", err.message || err);
-      return res.status(200).json({ ok: false });
     }
+    });
   });
 
   app.post("/ghl/form-webhook", async (req, res) => {
