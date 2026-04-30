@@ -3899,6 +3899,27 @@ function createApp() {
     }
   });
 
+  // POST /api/tattoo/fill/nudge-sweep
+  //   - Internal-only (x-internal-key header)
+  //   - Hit hourly by Render cron; runs the 24h non-engager nudge sweep.
+  //   - Returns the tally of sent / skipped / deferred rows (see
+  //     fillNudgeService.runNudgeSweep for the schema).
+  //   - Honors LANDING_PAGE_FILL_NUDGE_ENABLED kill switch.
+  app.post("/api/tattoo/fill/nudge-sweep", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { runNudgeSweep } = require("../services/fillNudgeService");
+      const result = await runNudgeSweep();
+      return res.json(result);
+    } catch (err) {
+      console.error("[fillNudge] sweep failed:", err);
+      return res.status(500).json({
+        ok: false,
+        error: err?.message || "Nudge sweep failed",
+      });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
   // ═══════════════════════════════════════════════════════════════════════════
