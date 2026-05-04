@@ -412,18 +412,50 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   // so the artist would otherwise get no push when their app is closed.
   // Localized per the artist's stored device language (push_tokens.language).
   try {
-    const leadName = [firstName, lastName].filter(Boolean).join(" ") || (
+    const baseLeadName = [firstName, lastName].filter(Boolean).join(" ") || (
       // Fallback for the rare empty-name case
       undefined
     );
     const messagePreview = (message || "").length > 100
       ? `${message.substring(0, 100)}...`
       : (message || "");
+    // Stored preference in GHL: "English" | "Spanish" | "Bilingual" | null.
+    // We surface a tag on the lock-screen lead name for non-default values
+    // (Spanish or Bilingual) so a Spanish-only artist can spot at a glance
+    // whether they can handle the lead solo or need a translator.
+    //
+    // Precedence:
+    //   1. Form's verbatim choice from this submission (`resolvedLanguage.stored`)
+    //   2. Legacy `detectedLanguage` lookup ("en"/"es" only — no Bilingual signal)
+    //   3. No tag (default English assumption)
+    const tagSource = resolvedLanguage.stored || (
+      detectedLanguage === "es" ? "Spanish" : null
+    );
+    const langTagEn = (() => {
+      switch (tagSource) {
+        case "Spanish": return "SPANISH";
+        case "Bilingual": return "BILINGUAL";
+        default: return null;
+      }
+    })();
+    const langTagEs = (() => {
+      switch (tagSource) {
+        case "Spanish": return "ESPAÑOL";
+        case "Bilingual": return "BILINGÜE";
+        default: return null;
+      }
+    })();
     sendPushToGhlUser(artistUserId, (language) => {
       const isEs = language === "es";
       const sourceLabel = isEs
         ? (SOURCE_LABELS_ES[trafficSource] || trafficSource)
         : (SOURCE_LABELS_EN[trafficSource] || trafficSource);
+      const langTag = isEs ? langTagEs : langTagEn;
+      // Decorate the lead name with the language tag so the artist sees it
+      // on the lock screen before opening the app, e.g. "Sarah Kowalski · ESPAÑOL".
+      const leadName = baseLeadName && langTag
+        ? `${baseLeadName} · ${langTag}`
+        : baseLeadName;
       const fallbackBody = isEs ? "Nueva consulta de tatuaje" : "New tattoo inquiry";
       const body = leadName
         ? (messagePreview ? `${leadName} · ${messagePreview}` : leadName)
