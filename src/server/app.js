@@ -1972,11 +1972,13 @@ function createApp() {
       const transactions = rawTransactions || [];
 
       // 2. Fetch quote amount from GHL contact custom fields
+      // Source of truth is final_price (the signed consent-form contract).
+      // Fallback to deprecated quote_to_client for legacy contacts pre-consent-form.
       let quoteAmount = null;
       try {
         const contact = await getContact(contactId);
         const cf = contact?.customField || {};
-        const rawQuote = cf.tattoo_quote || cf.quote_amount || cf.quoted;
+        const rawQuote = cf.final_price ?? cf.quote_to_client;
         if (rawQuote != null && rawQuote !== "") {
           const parsed = parseFloat(String(rawQuote).replace(/[^0-9.]/g, ""));
           if (!isNaN(parsed) && parsed > 0) quoteAmount = parsed;
@@ -2543,12 +2545,12 @@ function createApp() {
 
       console.log(`[API] Updating quote for contact ${contactId} to $${quoteAmount}`);
 
-      // Update GHL contact with quote_to_client custom field
+      // Update GHL contact with final_price custom field (single source of truth — the contract).
       const { updateContact } = require('../clients/ghlClient');
+      const { GHL_CUSTOM_FIELD_IDS } = require('../config/constants');
 
-      // The quote_to_client field key - GHL will match by key name
       const customField = {
-        'quote_to_client': quoteAmount
+        [GHL_CUSTOM_FIELD_IDS.FINAL_PRICE]: quoteAmount,
       };
 
       const updateResult = await updateContact(contactId, { customField });
@@ -2613,14 +2615,14 @@ function createApp() {
       console.log(`   Payment Type: ${paymentType}`);
       console.log(`   Session Estimate: ${sessionEstimate}`);
 
-      // Update GHL contact with all custom fields
+      // Update GHL contact with all custom fields. Quote writes go to final_price (the contract).
       const { updateContact } = require('../clients/ghlClient');
+      const { GHL_CUSTOM_FIELD_IDS } = require('../config/constants');
 
-      // Custom fields to update
       const customField = {
-        'quote_to_client': quoteAmount,
+        [GHL_CUSTOM_FIELD_IDS.FINAL_PRICE]: quoteAmount,
         'payment_type': paymentType,
-        'session_estimate': sessionEstimate
+        'session_estimate': sessionEstimate,
       };
 
       const updateResult = await updateContact(contactId, { customField });

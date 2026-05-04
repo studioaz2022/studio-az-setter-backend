@@ -187,7 +187,8 @@ const GHL_USER_EMAILS = {
 
 // GHL Custom Field IDs for quote-related fields
 const GHL_CUSTOM_FIELD_IDS = {
-  QUOTED: "U4vZ7BVoyw6Zkwq33sj6",
+  FINAL_PRICE: "gPilaCtR7j32ACQIwAzk",
+  QUOTED: "U4vZ7BVoyw6Zkwq33sj6", // DEPRECATED: read-only fallback. Do not write. Use FINAL_PRICE.
   CLIENT_INFORMED: "w4f5vvG2BXok9JhayjYD",
   LANGUAGE_PREFERENCE: "ETxasC6QlyxRaKU18kbz",
 };

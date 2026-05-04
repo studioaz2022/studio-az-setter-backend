@@ -1,0 +1,24 @@
+{
+  "runAt": "2026-05-04T21:34:20.472Z",
+  "dryRun": false,
+  "candidates": 2,
+  "backfilled": [
+    {
+      "id": "EwL7L1Y8d0MxEfW06R9q",
+      "name": "paul evans",
+      "quote_to_client": "500",
+      "final_price": null,
+      "wrote": 500
+    },
+    {
+      "id": "2hmCxUngp0dlFq2IovW8",
+      "name": "leonel chavez",
+      "quote_to_client": "800",
+      "final_price": null,
+      "wrote": 800
+    }
+  ],
+  "skipped": [],
+  "conflicts": [],
+  "errors": []
+}
