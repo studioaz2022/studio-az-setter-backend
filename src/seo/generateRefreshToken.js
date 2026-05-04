@@ -24,6 +24,7 @@ if (!CLIENT_ID || !CLIENT_SECRET) {
 const SCOPES = [
   "https://www.googleapis.com/auth/webmasters.readonly",        // Search Console
   "https://www.googleapis.com/auth/business.manage",             // Google Business Profile
+  "https://www.googleapis.com/auth/analytics.readonly",          // GA4 Data API + Admin API
 ];
 
 const PORT = 3847;

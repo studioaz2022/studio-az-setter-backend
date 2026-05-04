@@ -100,17 +100,77 @@ Other map services + key citations:
 - [ ] Verify NAP consistency on top 10 industry-relevant directories
 - [ ] Document citation list in `phase-5-post-launch-ops/citation-tracker.md`
 
+### 9. `analytics-data-sources.md`
+Wire up ALL the data sources that exist for the site so we can track growth comprehensively. There are 5 to set up — each tells us something different:
+
+#### 9a. GA4 Data API
+Reads visitor behavior data programmatically.
+- [ ] Create GA4 property (covered in Phase 4) with Measurement ID `G-XXXXXXXXXX`
+- [ ] Note the GA4 **property ID** (numeric, found in GA4 Admin → Property settings) — different from Measurement ID
+- [ ] Re-issue OAuth refresh token to include `https://www.googleapis.com/auth/analytics.readonly` scope (run `node src/seo/generateRefreshToken.js`)
+- [ ] Update `GOOGLE_SEO_REFRESH_TOKEN` in backend `.env` AND on Render
+- [ ] Test API: `GET https://analyticsadmin.googleapis.com/v1beta/accountSummaries`
+- [ ] Build wrapper in `src/seo/ga4Client.js` for common queries (sessions, users, conversions, top pages, top sources)
+
+#### 9b. Cloudflare Analytics (GraphQL)
+Edge-level visitor + threat data.
+- [ ] Confirm Cloudflare credentials exist in `.env` (`CLOUDFLARE_EMAIL`, `CLOUDFLARE_API_KEY`, `CLOUDFLARE_ZONE_<DOMAIN>`)
+- [ ] Use GraphQL endpoint `https://api.cloudflare.com/client/v4/graphql` (the legacy `/zones/{id}/analytics/dashboard` REST endpoint was sunset)
+- [ ] Note: if Cloudflare proxy is OFF (DNS-only for Vercel SSL), only DNS-level data flows here. That's fine — use it for threat blocking + DNS health, not page-view counts. Real visitor data lives in GA4/Vercel.
+
+#### 9c. Vercel Analytics + Speed Insights
+Server-side visitor count + real-world Core Web Vitals.
+- [ ] `npm install @vercel/analytics @vercel/speed-insights`
+- [ ] Add `<Analytics />` and `<SpeedInsights />` components from each package to the root `layout.tsx` (right before closing `</body>`)
+- [ ] Deploy — data starts flowing immediately
+- [ ] Free tier handles small-business traffic comfortably
+- [ ] View at: `vercel.com/<team>/<project>/analytics` and `/speed-insights`
+
+#### 9d. Search Console URL Inspection API
+Per-URL indexing health checks.
+- [ ] Already covered by existing `webmasters.readonly` scope — no new auth needed
+- [ ] Endpoint: `POST https://searchconsole.googleapis.com/v1/urlInspection/index:inspect` with `{inspectionUrl, siteUrl}`
+- [ ] Useful for: confirming a page is indexed, last crawl date, mobile usability, AMP/HTTPS status
+- [ ] Add a `urlInspect()` helper to `searchConsoleClient.js`
+
+#### 9e. GBP Performance Daily Metrics
+Per-day GBP impression + action counts (we already wired the location/keywords endpoints — this is the daily timeseries).
+- [ ] Endpoint: `GET https://businessprofileperformance.googleapis.com/v1/locations/{locationId}:fetchMultiDailyMetricsTimeSeries`
+- [ ] Required params: `dailyMetrics=BUSINESS_IMPRESSIONS_DESKTOP_MAPS,BUSINESS_IMPRESSIONS_MOBILE_MAPS,BUSINESS_IMPRESSIONS_DESKTOP_SEARCH,BUSINESS_IMPRESSIONS_MOBILE_SEARCH,BUSINESS_DIRECTION_REQUESTS,CALL_CLICKS,WEBSITE_CLICKS,BUSINESS_BOOKINGS` (all flat, repeated)
+- [ ] Required params: `dailyRange.startDate.{year,month,day}` and `dailyRange.endDate.{year,month,day}` (NOT a single ISO date)
+- [ ] Add wrapper in `src/seo/gbpClient.js` to fix the existing 400 error on the performance endpoint
+
+### 10. `data-baseline-{date}.md`
+Generate a single document combining all data sources at the moment of post-launch instrumentation:
+- [ ] Pull current Search Console data (28-day default)
+- [ ] Pull GBP Performance daily metrics (last 30 days)
+- [ ] Pull Cloudflare GraphQL analytics (last 7 days)
+- [ ] Note Vercel Analytics + GA4 status (data won't be useful immediately — flag "check back in 7 days")
+- [ ] Cross-reference all sources for sanity check (different sources count differently — explain the discrepancies)
+- [ ] Save as `data-baseline-{YYYY-MM-DD}.md` — this is the snapshot future months compare against
+
+### 11. `monthly-data-snapshot.md`
+Build a recurring backend job that pulls and saves all data sources monthly:
+- [ ] Cron: 1st of each month at 6 AM
+- [ ] Pulls all 5 data sources programmatically
+- [ ] Writes to `phase-5-post-launch-ops/monthly-snapshots/{YYYY-MM}.md`
+- [ ] Includes month-over-month delta tables for key metrics
+- [ ] Optional: send a summary email/Slack notification with the headline numbers
+
 ---
 
 ## Memory Files to Create / Update
 
 After Phase 5 setup, write these to `~/.claude/projects/-Users-studioaz-Documents-Studio-AZ-Tattoo-App/memory/`:
 
-1. **`gbp_api_access.md`** — API state, location IDs, working endpoints, payload examples
+1. **`gbp_api_access.md`** — API state, location IDs, working endpoints, payload examples (already exists for tattoo, must include both v1 + v4 status, plus performance API daily-metrics quirk)
 2. **`serpapi_setup.md`** — key location, baseline keywords, GPS coordinates
-3. **`search_console_access.md`** — verified domain, sitemap URL, OAuth refresh token location
-4. **`cloudflare_credentials.md`** — env vars, zone ID, existing redirect rules
-5. Update **`MEMORY.md`** index with one-line pointers to each new memory file
+3. **`search_console_access.md`** — verified domain, sitemap URL, OAuth refresh token location, working endpoints (search analytics + URL inspection)
+4. **`cloudflare_credentials.md`** — env vars, zone ID per domain, existing redirect rules, GraphQL Analytics example query
+5. **`ga4_data_api.md`** — GA4 property ID per site, OAuth scope (`analytics.readonly`), example queries
+6. **`vercel_analytics.md`** — which sites have it enabled, where to view dashboards
+7. **`data-sources-summary.md`** — cross-source reconciliation guide (which source measures what, why they disagree, which to prioritize for which question)
+8. Update **`MEMORY.md`** index with one-line pointers to each new memory file
 
 This makes Phase 5 self-documenting — future Claude conversations can immediately understand the full operational state of any site.
 

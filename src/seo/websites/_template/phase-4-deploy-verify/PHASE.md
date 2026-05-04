@@ -71,6 +71,25 @@ Initial deployment + project setup:
   </Script>
   ```
 - [ ] Verify in GA4 Realtime within 60 seconds of deploy
+- [ ] Note the GA4 **Property ID** (numeric — different from Measurement ID — found in GA4 Admin → Property settings) — needed in Phase 5 for the Data API
+
+### 3b. `vercel-analytics.md`
+Free real-visitor + Core Web Vitals data, served from the same Vercel deploy:
+- [ ] `npm install @vercel/analytics @vercel/speed-insights`
+- [ ] In root `src/app/layout.tsx`, add the imports:
+  ```tsx
+  import { Analytics } from "@vercel/analytics/next";
+  import { SpeedInsights } from "@vercel/speed-insights/next";
+  ```
+- [ ] Render them inside `<body>` right before `</body>`:
+  ```tsx
+  {children}
+  <Analytics />
+  <SpeedInsights />
+  ```
+- [ ] Deploy — data starts flowing immediately
+- [ ] View at: `vercel.com/<team>/<project>/analytics` and `/speed-insights`
+- [ ] Speed Insights = real-world Core Web Vitals from actual visitors (more honest than PageSpeed lab data)
 
 ### 4. `pre-cutover-checklist.md`
 Run through every check on the Vercel preview URL **before** changing DNS:
