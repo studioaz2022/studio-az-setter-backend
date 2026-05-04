@@ -1618,18 +1618,40 @@ async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDat
 /**
  * Fetch calendar events via raw HTTP with Version 2021-04-15.
  * SDK default version (2021-07-28) returns empty for this endpoint.
+ *
+ * Retries up to 3 times on transient failures (no response, 5xx, 429) with
+ * exponential backoff (500ms, 1s, 2s). Does NOT retry on 4xx auth errors —
+ * those won't fix themselves. On exhaustion, returns [] so the day is skipped.
  */
 async function _fetchCalendarEvents(httpClient, locationId, userId, startMs, endMs) {
-  try {
-    const resp = await httpClient.get(
-      `/calendars/events?locationId=${locationId}&startTime=${startMs}&endTime=${endMs}&userId=${userId}`,
-      { headers: { Version: "2021-04-15" } }
-    );
-    return resp.data?.events || [];
-  } catch (err) {
-    console.warn(`[GridWalk] Calendar events fetch failed: ${err.message}`);
-    return [];
+  const url = `/calendars/events?locationId=${locationId}&startTime=${startMs}&endTime=${endMs}&userId=${userId}`;
+  const maxAttempts = 3;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const resp = await httpClient.get(url, { headers: { Version: "2021-04-15" } });
+      return resp.data?.events || [];
+    } catch (err) {
+      const status = err?.response?.status;
+      const isTransient = !err?.response || status === 429 || (status >= 500 && status < 600);
+      const lastAttempt = attempt === maxAttempts;
+
+      if (!isTransient || lastAttempt) {
+        console.warn(
+          `[GridWalk] Calendar events fetch failed (attempt ${attempt}/${maxAttempts}, status=${status ?? "no response"}): ${err.message}`
+        );
+        return [];
+      }
+
+      const delayMs = 500 * Math.pow(2, attempt - 1); // 500ms, 1s, 2s
+      console.warn(
+        `[GridWalk] Calendar events fetch transient error (attempt ${attempt}/${maxAttempts}, status=${status ?? "no response"}) — retrying in ${delayMs}ms`
+      );
+      await new Promise((resolve) => setTimeout(resolve, delayMs));
+    }
   }
+
+  return [];
 }
 
 /**

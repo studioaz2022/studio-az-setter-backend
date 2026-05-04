@@ -14,7 +14,7 @@
 
 const axios = require("axios");
 const { createClient } = require("@supabase/supabase-js");
-const { getBarberToken } = require("./squareOAuth");
+const { getBarberToken, refreshBarberToken } = require("./squareOAuth");
 const { getContact } = require("../clients/ghlClient");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
@@ -115,7 +115,8 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
     throw new Error(`No Square account connected for barber ${barberGhlId}`);
   }
 
-  const { access_token, square_location_id, last_sync_cursor } = tokenRow;
+  let { access_token } = tokenRow;
+  const { square_location_id, last_sync_cursor } = tokenRow;
 
   // Default to last 30 days if no date range provided
   const endDate = options.endDate
@@ -127,12 +128,33 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
 
   console.log(`[SquareSync] Syncing barber ${barberGhlId} from ${startDate.toISOString()} to ${endDate.toISOString()}`);
 
-  // Fetch payments from Square
-  const payments = await fetchSquarePayments(access_token, square_location_id, {
-    startDate,
-    endDate,
-    cursor: options.incremental ? last_sync_cursor : null,
-  });
+  // Fetch payments from Square — refresh + retry once if the access token has expired
+  let payments;
+  try {
+    payments = await fetchSquarePayments(access_token, square_location_id, {
+      startDate,
+      endDate,
+      cursor: options.incremental ? last_sync_cursor : null,
+    });
+  } catch (err) {
+    if (err?.response?.status !== 401) throw err;
+    console.warn(`[SquareSync] 401 from Square for barber ${barberGhlId} — attempting token refresh`);
+    try {
+      const refreshed = await refreshBarberToken(barberGhlId);
+      access_token = refreshed.access_token;
+    } catch (refreshErr) {
+      console.error(
+        `[SquareSync] Square token refresh failed for barber ${barberGhlId}: ${refreshErr.message}. ` +
+        `Barber needs to re-connect Square in the iOS app.`
+      );
+      throw refreshErr;
+    }
+    payments = await fetchSquarePayments(access_token, square_location_id, {
+      startDate,
+      endDate,
+      cursor: options.incremental ? last_sync_cursor : null,
+    });
+  }
 
   if (!payments.length) {
     console.log(`[SquareSync] No payments found for barber ${barberGhlId}`);
