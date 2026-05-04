@@ -70,6 +70,8 @@ const {
   CONSULTATION_CALENDARS,
   GHL_USER_IDS,
   GHL_CUSTOM_FIELD_IDS,
+  ARTIST_NAME_TO_ID,
+  ARTIST_ASSIGNED_USER_IDS,
 } = require("../config/constants");
 const { formatSlotDisplay } = require("../ai/bookingController");
 const {
@@ -382,6 +384,28 @@ function isUSPhoneNumber(phone) {
   return true;
 }
 
+// Sentinel display strings that have historically leaked into artist fields
+// (calendar names, "soonest" labels). Treat them as no-artist.
+const ARTIST_SENTINELS = new Set(["soonest available", "soonest possible", "soonest_available", "unknown", ""]);
+
+// Resolve a contact to a real GHL artist user ID.
+// Priority: contact.assignedTo (GHL CRM owner) → name lookup on assigned_artist/inquired_technician → null.
+function resolveArtistUserId(contact) {
+  const assignedTo = contact?.assignedTo || contact?.assigned_to || null;
+  if (assignedTo && Object.values(ARTIST_ASSIGNED_USER_IDS).includes(assignedTo)) {
+    return assignedTo;
+  }
+  const cf = contact?.customField || contact?.customFields || {};
+  for (const candidate of [cf.assigned_artist, cf.inquired_technician]) {
+    const raw = String(candidate || "").trim().toLowerCase();
+    if (!raw || ARTIST_SENTINELS.has(raw)) continue;
+    if (ARTIST_NAME_TO_ID[raw]) return ARTIST_NAME_TO_ID[raw];
+    if (raw.includes("joan")) return ARTIST_NAME_TO_ID.joan;
+    if (raw.includes("andrew")) return ARTIST_NAME_TO_ID.andrew;
+  }
+  return null;
+}
+
 function deriveChannelContext(payload, contact) {
   // Check if this is a DM based on attribution source medium
   const medium = (
@@ -634,9 +658,13 @@ function createApp() {
         });
       }
 
-      // Auto-assign artist if no technician preference was specified
-      const inquiredTech = payload.customFields?.inquired_technician;
-      if (!inquiredTech) {
+      // Auto-assign artist if no technician preference was specified.
+      // Treat legacy sentinel strings (calendar names, "Soonest Available") as no-preference —
+      // they're display labels, not real artist selections.
+      const inquiredTech = (payload.customFields?.inquired_technician || "").trim();
+      const SENTINEL_NO_PREF = new Set(["soonest available", "soonest possible", "soonest_available"]);
+      const hasRealPreference = inquiredTech && !SENTINEL_NO_PREF.has(inquiredTech.toLowerCase());
+      if (!hasRealPreference) {
         try {
           const freshContact = await getContact(contactId);
           const artist = await determineArtist(freshContact);
@@ -1298,7 +1326,10 @@ function createApp() {
           if (alreadyProcessed) {
             console.log(`[Financial] Payment ${payment.id} already processed, skipping`);
           } else {
-            const assignedArtist = cf.assigned_artist || cf.inquired_technician || 'unknown';
+            const assignedArtist = resolveArtistUserId(contact) || 'unknown';
+            if (assignedArtist === 'unknown') {
+              console.warn(`[Financial] Could not resolve artist user ID for contact ${contactId} — recording as 'unknown'. assignedTo=${contact?.assignedTo} cf.assigned_artist=${cf.assigned_artist} cf.inquired_technician=${cf.inquired_technician}`);
+            }
             await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
             if (!COMPACT_MODE) {
               const checkStatus = canCheckDuplicates ? 'duplicate-checked' : 'duplicate-check-failed';
@@ -1340,7 +1371,7 @@ function createApp() {
 
         // === NOTIFY iOS APP: Deposit paid event ===
         const paymentId = payment.id || payment.payment_id || null;
-        const assignedArtist = cf.assigned_artist || cf.inquired_technician || null;
+        const assignedArtist = resolveArtistUserId(contact);
         await notifyDepositPaid(contactId, {
           amount,
           paymentId,
