@@ -123,7 +123,39 @@ async function getContactLanguage(contactId) {
  * No SMS is sent — the first text the lead receives is the artist's personal reply.
  * The iOS app reads the custom field and displays it as an inbound bubble.
  */
-async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source, files = [] }) {
+/**
+ * Normalize the form's `language` choice + `pageLang` into:
+ *   - `stored`: the value to write to the GHL `language_preference` custom
+ *     field. Verbatim from the form ("English" | "Spanish" | "Bilingual"), or
+ *     null when no choice was made.
+ *   - `outbound`: the language code ("en" | "es") used for the auto-SMS body
+ *     and the fill-page initial render. "Bilingual" collapses to `pageLang`.
+ *
+ * Returns `null` shape when the form didn't send a `language` (older clients,
+ * direct API callers) so the caller can fall back to the existing
+ * `getContactLanguage()` lookup.
+ */
+function resolveInquiryLanguage(language, pageLang) {
+  if (!language || typeof language !== "string") {
+    return { stored: null, outbound: null };
+  }
+  const fallback = pageLang === "es" ? "es" : "en";
+  switch (language) {
+    case "Spanish":
+      return { stored: "Spanish", outbound: "es" };
+    case "English":
+      return { stored: "English", outbound: "en" };
+    case "Bilingual":
+      return { stored: "Bilingual", outbound: fallback };
+    default:
+      // Unknown value — log but don't block submission. Fall through to the
+      // legacy detection path.
+      console.warn(`⚠️ resolveInquiryLanguage: unknown choice "${language}"`);
+      return { stored: null, outbound: null };
+  }
+}
+
+async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source, language, pageLang, files = [] }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
@@ -177,11 +209,52 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
     }
   }
 
-  // 2d. Detect contact language preference (set during the original inquiry
-  // flow if the lead used the Spanish landing page). Falls back to EN.
-  // Read this BEFORE token mint so the fill page renders in the right
-  // language on first paint.
-  const detectedLanguage = (await getContactLanguage(contactId)) || "en";
+  // 2d. Resolve the lead's language preference.
+  //
+  // Order of precedence:
+  //   1. Explicit choice from the inquiry form (`language` + `pageLang`).
+  //      "English" / "Spanish" / "Bilingual" — fresh signal, beats anything
+  //      stored on the contact from a prior interaction. Bilingual collapses
+  //      to whatever language the lead's UI was in at submit time.
+  //   2. Existing `language_preference` on the contact (legacy path, e.g.,
+  //      contacts that came in before this field existed).
+  //   3. Default to "en".
+  //
+  // We persist the form's verbatim choice ("English" / "Spanish" /
+  // "Bilingual") to the GHL custom field so artists can see "Bilingual" in
+  // the iOS contact profile — that's the whole point of the choice (it tells
+  // a Spanish-only artist they can communicate directly with a bilingual
+  // lead). The outbound code is what we use for SMS + fill page rendering.
+  const resolvedLanguage = resolveInquiryLanguage(language, pageLang);
+  let detectedLanguage = resolvedLanguage.outbound;
+  if (!detectedLanguage) {
+    detectedLanguage = (await getContactLanguage(contactId)) || "en";
+  }
+
+  // Persist the form's stored value (when present) to the GHL custom field.
+  // Skipped when the form didn't send a choice — leaves any existing value
+  // alone so we don't clobber legacy contacts.
+  if (resolvedLanguage.stored) {
+    try {
+      await ghlSdk.contacts.updateContact(
+        { contactId },
+        {
+          customFields: [
+            { id: LANGUAGE_PREFERENCE_FIELD_ID, field_value: resolvedLanguage.stored },
+          ],
+        }
+      );
+      console.log(
+        `🌐 [LANGUAGE] Set language_preference="${resolvedLanguage.stored}" for ${contactId} (outbound=${detectedLanguage})`
+      );
+    } catch (langErr) {
+      console.error(
+        `❌ Failed to write language_preference for ${contactId}:`,
+        langErr.message
+      );
+      // Non-fatal — continue with the outbound code we resolved.
+    }
+  }
 
   // 2e. Mint a fill-flow token. Lets the lead deep-link into the pre-filled
   // consultation page via the auto-confirmation SMS. Non-fatal: if minting

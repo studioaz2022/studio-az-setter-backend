@@ -3553,7 +3553,7 @@ function createApp() {
         payload = req.body || {};
       }
 
-      const { firstName, lastName, phone, message, artistSlug, source } = payload;
+      const { firstName, lastName, phone, message, artistSlug, source, language, pageLang } = payload;
 
       if (!firstName || !lastName || !phone || !message || !artistSlug) {
         return res.status(400).json({
@@ -3570,7 +3570,7 @@ function createApp() {
       }
 
       const fileCount = req.files?.length || 0;
-      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone}) via ${source || "unknown"} — ${fileCount} file(s) attached`);
+      console.log(`[Inquiry] New inquiry for artist ${artistSlug} from ${firstName} ${lastName} (${phone}) via ${source || "unknown"} — ${fileCount} file(s) attached, language=${language || "unset"} pageLang=${pageLang || "unset"}`);
 
       const result = await processArtistInquiry({
         firstName,
@@ -3579,6 +3579,8 @@ function createApp() {
         message,
         artistSlug,
         source,
+        language,
+        pageLang,
         files: req.files || [],
       });
 
