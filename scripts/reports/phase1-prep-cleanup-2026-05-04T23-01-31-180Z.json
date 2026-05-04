@@ -1,0 +1,221 @@
+{
+  "runAt": "2026-05-04T23:01:29.730Z",
+  "dryRun": false,
+  "rateUpdates": [
+    {
+      "artist_ghl_id": "O8ChoMYj1BmMWJJsDlvC",
+      "name": "Andrew",
+      "set": "30/70"
+    },
+    {
+      "artist_ghl_id": "Wl24x1ZrucHuHatM0ODD",
+      "name": "Claudia",
+      "set": "30/70"
+    }
+  ],
+  "txFixes": [
+    {
+      "id": "2090acbd-e6ea-4854-9046-779122d1ea71",
+      "name": "Amelia Cervantes",
+      "gross": 50,
+      "shop_pct": 50,
+      "artist_pct": 50,
+      "shop_amount": 25,
+      "artist_amount": 25,
+      "artist_ghl_id": "unknown",
+      "set": {
+        "artist_ghl_id": "O8ChoMYj1BmMWJJsDlvC",
+        "shop_pct": 30,
+        "artist_pct": 70,
+        "shop_amount": 15,
+        "artist_amount": 35
+      }
+    },
+    {
+      "id": "1b44fbbe-1c18-4840-8c60-2f7a0aad1d4d",
+      "name": "Joseph Keomanyvong",
+      "gross": 100,
+      "shop_pct": 50,
+      "artist_pct": 50,
+      "shop_amount": 50,
+      "artist_amount": 50,
+      "artist_ghl_id": "unknown",
+      "set": {
+        "artist_ghl_id": "O8ChoMYj1BmMWJJsDlvC",
+        "shop_pct": 30,
+        "artist_pct": 70,
+        "shop_amount": 30,
+        "artist_amount": 70
+      }
+    },
+    {
+      "id": "422dd319-9f35-4614-86f3-57622f1f43c3",
+      "name": "Jeff Skibitsky",
+      "gross": 50,
+      "shop_pct": 50,
+      "artist_pct": 50,
+      "shop_amount": 25,
+      "artist_amount": 25,
+      "artist_ghl_id": "Soonest Available",
+      "set": {
+        "artist_ghl_id": "O8ChoMYj1BmMWJJsDlvC",
+        "shop_pct": 30,
+        "artist_pct": 70,
+        "shop_amount": 15,
+        "artist_amount": 35
+      }
+    }
+  ],
+  "deletes": [
+    {
+      "id": "84155385-9b3e-40f1-9588-11c0ccba696e",
+      "session_date": "2026-01-29",
+      "contact_name": "Render Test User 2",
+      "transaction_type": "deposit",
+      "gross_amount": 50
+    },
+    {
+      "id": "61d21f74-cc80-435f-aa7b-6e49b943dd7b",
+      "session_date": "2026-01-28",
+      "contact_name": "David Martinez",
+      "transaction_type": "touch_up",
+      "gross_amount": 75
+    },
+    {
+      "id": "a296e672-66cb-4cf5-b3aa-e032aa205a0f",
+      "session_date": "2026-01-27",
+      "contact_name": "Sarah Johnson",
+      "transaction_type": "session_payment",
+      "gross_amount": 500
+    },
+    {
+      "id": "1ee42bab-fd28-414d-9848-4e8134c9489a",
+      "session_date": "2026-01-27",
+      "contact_name": "Sarah Johnson",
+      "transaction_type": "tip",
+      "gross_amount": 100
+    },
+    {
+      "id": "ed2402ed-6973-42d5-a530-abf186ce0794",
+      "session_date": "2026-01-25",
+      "contact_name": "Emma Williams",
+      "transaction_type": "session_payment",
+      "gross_amount": 800
+    },
+    {
+      "id": "fd85139b-64ad-4d9d-b8fd-8652cffee9e9",
+      "session_date": "2026-01-25",
+      "contact_name": "Emma Williams",
+      "transaction_type": "tip",
+      "gross_amount": 150
+    },
+    {
+      "id": "7d376530-a485-4776-bc8a-c23e65e00761",
+      "session_date": "2026-01-22",
+      "contact_name": "Michael Chen",
+      "transaction_type": "session_payment",
+      "gross_amount": 300
+    },
+    {
+      "id": "5f72197d-5ce9-49a3-adbf-1ebf88232c8a",
+      "session_date": "2026-01-20",
+      "contact_name": "Sarah Johnson",
+      "transaction_type": "session_payment",
+      "gross_amount": 450
+    },
+    {
+      "id": "8f6e0c8c-bea4-410e-b9bd-788ea1575298",
+      "session_date": "2026-01-20",
+      "contact_name": "Sarah Johnson",
+      "transaction_type": "tip",
+      "gross_amount": 80
+    },
+    {
+      "id": "e0790919-cea7-4eaf-9106-15eda6e32b31",
+      "session_date": "2026-01-18",
+      "contact_name": "Michael Chen",
+      "transaction_type": "deposit",
+      "gross_amount": 50
+    },
+    {
+      "id": "0857d0bf-39ee-4b65-8db0-231c7729ec51",
+      "session_date": "2026-01-15",
+      "contact_name": "Sarah Johnson",
+      "transaction_type": "deposit",
+      "gross_amount": 50
+    },
+    {
+      "id": "78dd3401-62b9-4cc6-b6e0-2dbdef0e2a80",
+      "session_date": "2026-01-10",
+      "contact_name": "Emma Williams",
+      "transaction_type": "deposit",
+      "gross_amount": 100
+    },
+    {
+      "id": "8b652902-49b3-4520-afef-04a73e48aa65",
+      "session_date": "2026-01-08",
+      "contact_name": "Jessica Brown",
+      "transaction_type": "refund",
+      "gross_amount": 50
+    },
+    {
+      "id": "75574c74-c466-4473-a44d-baffe1866d29",
+      "session_date": "2026-01-05",
+      "contact_name": "Jessica Brown",
+      "transaction_type": "deposit",
+      "gross_amount": 50
+    }
+  ],
+  "skipped": [
+    {
+      "id": "9c59feb8-6c76-4078-b222-d53613882c3a",
+      "session_date": "2026-04-09",
+      "square_payment_id": "zZc8bSbCYdue7WdVPkagNSig4JOZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "48e52e57-f141-443d-8df4-8d9e4e277be2",
+      "session_date": "2026-04-09",
+      "square_payment_id": "dmY24coKzRAsOxeca3yiq4zobJLZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "ef513636-969a-4b14-b591-a4d30004459b",
+      "session_date": "2026-04-07",
+      "square_payment_id": "FYBTCzahBFUx27X6awRGJyQMI1cZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "fe9dcf55-89b4-4007-ab25-6cf3cfc9cc54",
+      "session_date": "2026-04-07",
+      "square_payment_id": "FYBTCzahBFUx27X6awRGJyQMI1cZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "7e0a70af-8e8d-4db2-946c-299eade1d34f",
+      "session_date": "2026-04-07",
+      "square_payment_id": "FYBTCzahBFUx27X6awRGJyQMI1cZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "9e8dd17b-2d97-48a3-8300-fdf801fc5bca",
+      "session_date": "2026-04-07",
+      "square_payment_id": "FYBTCzahBFUx27X6awRGJyQMI1cZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    },
+    {
+      "id": "847903bb-8b3d-4648-8243-9f13110a055e",
+      "session_date": "2026-04-07",
+      "square_payment_id": "FYBTCzahBFUx27X6awRGJyQMI1cZY",
+      "gross_amount": 40,
+      "reason": "anonymous Square tip — handled in separate dedup pass"
+    }
+  ],
+  "errors": []
+}
