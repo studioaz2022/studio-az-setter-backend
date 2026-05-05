@@ -173,27 +173,71 @@ After Phase 5 setup, write these to `~/.claude/projects/-Users-studioaz-Document
 3. **`search_console_access.md`** — verified domain, sitemap URL, OAuth refresh token location, working endpoints (search analytics + URL inspection)
 4. **`cloudflare_credentials.md`** — env vars, zone ID per domain, existing redirect rules, GraphQL Analytics example query
 ### 12. `ga4-conversion-events.md`
-Configure GA4 to recognize the custom funnel events as conversions. Required for value-weighted reporting + the future stats dashboard.
+Configure GA4 to recognize the custom funnel events as conversions. **Use the GA4 Admin API — don't click through the dashboard.** Custom dimensions and conversion events are both API-creatable. Only Funnel Explorations remain a manual UI step (Google has never exposed Explore reports as a write API).
 
-For every site that has a form/funnel, do this in the GA4 dashboard:
-- [ ] **Admin → Custom definitions → Custom dimensions** — register every custom param sent by `analytics.ts` so they're queryable in Explore + the Data API:
-  - `form_name` (event-scoped)
-  - `step_name`, `step_index` (event-scoped)
-  - `language`, `artist`, `entry_source` (event-scoped)
-  - `tattoo_size` / `service_type` (event-scoped, depends on site)
-  - `cta_text`, `cta_location` (event-scoped)
-  - **Note:** GA4 free tier allows 50 event-scoped custom dimensions per property — plenty
-- [ ] **Admin → Events → Mark as conversion**:
-  - `{form_name}_submitted` — primary conversion (weighted by `value` parameter)
-  - `{form_name}_lead_captured` — soft conversion (mid-funnel)
-  - `cta_click` — leave as event (high volume, not all CTAs convert)
-- [ ] **Build a funnel exploration**: GA4 → Explore → Funnel exploration:
+**Prerequisite:** OAuth refresh token must include `https://www.googleapis.com/auth/analytics.edit` scope (in addition to `analytics.readonly`). Re-issue via `node src/seo/generateRefreshToken.js`.
+
+#### Step 1 — Custom Dimensions (via API)
+Endpoint: `POST https://analyticsadmin.googleapis.com/v1beta/properties/{PROPERTY_ID}/customDimensions`
+
+Payload per dimension:
+```json
+{
+  "parameterName": "form_name",
+  "displayName": "Form Name",
+  "description": "Which form (consultation_widget, artist_inquiry, contact)",
+  "scope": "EVENT"
+}
+```
+
+Standard custom dimensions to register for any site with a form/funnel (17 total):
+
+| Parameter | Display Name | Used in events |
+|-----------|--------------|----------------|
+| `form_name` | Form Name | All form events |
+| `step_name` | Step Name | Step events |
+| `step_index` | Step Index | Step events |
+| `step_total` | Step Total | Step events |
+| `language` | Language | All form events |
+| `artist` (or service-equivalent) | Artist | All form events |
+| `entry_source` | Entry Source | Started events |
+| `tattoo_size` (or service-specific equivalent) | Tattoo Size | Submit events |
+| `timeline` | Timeline | Submit events |
+| `has_photos` | Has Photos | Submit events |
+| `cta_text` | CTA Text | CTA click events |
+| `cta_location` | CTA Location | CTA click events |
+| `destination` | CTA Destination | CTA click events |
+| `selected_value` | Selected Value | Step events |
+| `from_step` | From Step | Back events |
+| `to_step` | To Step | Back events |
+| `last_step` | Last Step | Abandoned events |
+
+(Adjust service-specific names per site — e.g. for a barbershop, `tattoo_size` becomes `service_type`, `artist` becomes `barber`, etc.)
+
+GA4 free tier allows 50 event-scoped custom dimensions per property — plenty.
+
+#### Step 2 — Conversion Events (via API)
+Endpoint: `POST https://analyticsadmin.googleapis.com/v1beta/properties/{PROPERTY_ID}/conversionEvents`
+
+Payload per event:
+```json
+{ "eventName": "consultation_submitted" }
+```
+
+Mark these as conversions:
+- `{form_name}_submitted` — primary conversion (value-weighted via the `value` parameter)
+- `{form_name}_lead_captured` — soft conversion (mid-funnel)
+
+Don't mark `cta_click` as a conversion — too noisy, defeats the purpose of conversion tracking.
+
+#### Step 3 — Funnel Exploration (manual UI — only step that requires the dashboard)
+- [ ] GA4 → Explore → New → Funnel exploration
   - Step 1: `consultation_started`
-  - Step 2: `consultation_step_complete` where `step_index = 0` (language pick)
-  - Step 3: `consultation_step_complete` where `step_index = 1` (timeline)
-  - ...continue for all 12 steps
+  - Step 2: `consultation_step_complete` filtered to `step_index = 0` (language pick)
+  - Step 3: `consultation_step_complete` filtered to `step_index = 1` (timeline)
+  - ...continue for all the steps
   - Final step: `consultation_submitted`
-  - Save as a shared exploration so it persists in the dashboard
+- [ ] Save as shared exploration so the team/dashboard can use it
 - [ ] Verify events fire by visiting the live site → trigger the form → check GA4 Realtime within 30s
 
 ### 13. `funnel-report-api.md`
