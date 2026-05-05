@@ -404,15 +404,21 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
   const currency = squarePayment.amount_money?.currency || "USD";
   const createdAt = squarePayment.created_at;
 
-  // Check if we've already recorded this payment to avoid duplicates
-  // Use maybeSingle() — .single() throws when 0 rows match, bypassing the check
-  const { data: existing } = await supabase
+  // Check if we've already recorded this payment to avoid duplicates.
+  // Note: .maybeSingle() returns an error (PGRST116) when ≥2 rows match, with
+  // data:null — silently treated as "no match" → causes the next sync to insert
+  // ANOTHER duplicate, compounding every time. Use a plain select that tolerates
+  // multiple rows so dedup remains correct even if duplicates somehow accumulate.
+  const { data: existing, error: existingErr } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", paymentId)
-    .maybeSingle();
+    .limit(1);
 
-  if (existing) {
+  if (existingErr) {
+    console.warn(`[SquareSync] Dedup lookup failed for ${paymentId}: ${existingErr.message}`);
+  }
+  if (existing && existing.length > 0) {
     return { matched: true, payment: null, autoMatchDetail: null }; // Already synced
   }
 
@@ -1218,12 +1224,15 @@ async function updateLastSynced(barberGhlId, cursor) {
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
 async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents, cashTipCents }) {
-  // Check if already recorded — if so, update instead of insert (handles re-assignment)
-  const { data: existing } = await supabase
+  // Check if already recorded — if so, update instead of insert (handles re-assignment).
+  // Use plain select with limit(1): .maybeSingle() returns an error when ≥2 rows match,
+  // which gets silently ignored and causes the next call to insert another duplicate.
+  const { data: existingRows } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", squarePaymentId)
-    .maybeSingle();
+    .limit(1);
+  const existing = existingRows && existingRows.length > 0 ? existingRows[0] : null;
 
   // Resolve contact name if not provided (use barber SDK for barbershop contacts)
   let resolvedName = contactName || "";
@@ -1366,14 +1375,15 @@ async function unmatchPayment({ barberGhlId, squarePaymentId }) {
  * The payment still counts toward earnings.
  */
 async function recordWalkIn({ barberGhlId, squarePaymentId, amountCents, createdAt }) {
-  // Check not already recorded (maybeSingle to avoid throw on 0 rows)
-  const { data: existing } = await supabase
+  // Check not already recorded. Use plain select with limit(1): .maybeSingle() errors
+  // silently when ≥2 rows match, which would let duplicate inserts compound.
+  const { data: existingRows } = await supabase
     .from("transactions")
     .select("id")
     .eq("square_payment_id", squarePaymentId)
-    .maybeSingle();
+    .limit(1);
 
-  if (existing) return { alreadyRecorded: true };
+  if (existingRows && existingRows.length > 0) return { alreadyRecorded: true };
 
   const grossAmount = amountCents / 100;
 
