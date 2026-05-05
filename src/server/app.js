@@ -1311,18 +1311,17 @@ function createApp() {
         // === FINANCIAL TRACKING: Record deposit payment ===
         try {
           let alreadyProcessed = false;
-          let canCheckDuplicates = true;
-          
-          // Try to check for duplicates
+
+          // Dedup check: if it throws, SKIP the insert (safer than double-recording).
+          // Square retries webhooks aggressively; the previous "proceed despite failure"
+          // policy turned a single payment into 5 rows when retries raced the dedup check.
           try {
-            alreadyProcessed = await isPaymentAlreadyProcessed(payment.id);
+            alreadyProcessed = await isPaymentAlreadyProcessed(payment.id, process.env.GHL_LOCATION_ID);
           } catch (checkErr) {
-            console.error('[Financial] Cannot check for duplicates due to database error:', checkErr.message);
-            console.warn('[Financial] Proceeding with payment recording despite duplicate check failure');
-            canCheckDuplicates = false;
-            // Don't throw - we'll proceed with recording and log the duplicate check failure
+            console.error(`[Financial] Dedup check failed for payment ${payment.id} — SKIPPING insert to avoid duplicates. err=${checkErr.message}`);
+            alreadyProcessed = true;
           }
-          
+
           if (alreadyProcessed) {
             console.log(`[Financial] Payment ${payment.id} already processed, skipping`);
           } else {
@@ -1330,10 +1329,19 @@ function createApp() {
             if (assignedArtist === 'unknown') {
               console.warn(`[Financial] Could not resolve artist user ID for contact ${contactId} — recording as 'unknown'. assignedTo=${contact?.assignedTo} cf.assigned_artist=${cf.assigned_artist} cf.inquired_technician=${cf.inquired_technician}`);
             }
-            await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
-            if (!COMPACT_MODE) {
-              const checkStatus = canCheckDuplicates ? 'duplicate-checked' : 'duplicate-check-failed';
-              console.log(`[Financial] Successfully recorded payment for contact ${contactId} (${checkStatus})`);
+            try {
+              await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
+              if (!COMPACT_MODE) {
+                console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
+              }
+            } catch (insertErr) {
+              // Postgres unique-violation (code 23505) means a concurrent webhook beat us to it.
+              // That's the desired outcome of the unique index — log and move on.
+              if (insertErr?.message?.includes('23505') || /duplicate key/i.test(insertErr?.message || '')) {
+                console.log(`[Financial] Payment ${payment.id} race won by concurrent webhook (unique constraint), skipping`);
+              } else {
+                throw insertErr;
+              }
             }
           }
 
@@ -2420,6 +2428,310 @@ function createApp() {
 
     } catch (error) {
       console.error("[API] Error fetching unpaid appointments:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 1 · Reconciliation engine
+  // See TATTOO_FINANCE_PLAN.md and src/services/reconciliationService.js
+  // ────────────────────────────────────────────────────────────────────────
+  const {
+    computeContactReconciliation,
+    computeWeeklyReconciliation,
+    generateVenmoCode,
+  } = require("../services/reconciliationService");
+  const { getWeekStart, getWeekEnd } = require("../utils/dateUtils");
+
+  // Internal helper: fetch the contract quote (final_price) for a contact.
+  // Returns a number in dollars, or null if not set.
+  async function fetchContractQuote(contactId) {
+    try {
+      const contact = await getContact(contactId);
+      const cf = contact?.customField || {};
+      const raw = cf.final_price ?? cf.quote_to_client;
+      if (raw == null || raw === "") return null;
+      const n = parseFloat(String(raw).replace(/[^0-9.]/g, ""));
+      return Number.isFinite(n) && n > 0 ? n : null;
+    } catch (err) {
+      console.warn(`[Reconciliation] could not fetch quote for ${contactId}: ${err.message}`);
+      return null;
+    }
+  }
+
+  // Internal helper: look up an artist's display name + current commission rate.
+  async function fetchArtistContext(artistGhlId, locationId) {
+    let artistName = null;
+    let shopPercentage = 30; // policy default
+    if (!supabase) return { artistName, shopPercentage };
+    const { data } = await supabase
+      .from("artist_commission_rates")
+      .select("artist_name, shop_percentage, artist_percentage")
+      .eq("artist_ghl_id", artistGhlId)
+      .eq("location_id", locationId)
+      .is("effective_to", null)
+      .maybeSingle();
+    if (data) {
+      artistName = data.artist_name;
+      shopPercentage = Number(data.shop_percentage);
+    }
+    return { artistName, shopPercentage };
+  }
+
+  // GET /api/contacts/:contactId/financial-summary
+  // Returns the per-contact reconciliation snapshot used by the contact ledger.
+  app.get("/api/contacts/:contactId/financial-summary", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const [quote, { data: txs, error: txErr }] = await Promise.all([
+        fetchContractQuote(contactId),
+        supabase
+          .from("transactions")
+          .select("*")
+          .eq("contact_id", contactId)
+          .order("session_date", { ascending: true }),
+      ]);
+      if (txErr) {
+        return res.status(500).json({ success: false, error: txErr.message });
+      }
+
+      // Use the rate snapshotted on the most recent transaction (matches what
+      // was in force when the work was actually done). Fall back to 30 if no
+      // transactions yet.
+      let shopPercentage = 30;
+      const latestTx = (txs || []).slice(-1)[0];
+      if (latestTx && latestTx.shop_percentage != null) {
+        shopPercentage = Number(latestTx.shop_percentage);
+      }
+
+      const summary = computeContactReconciliation({
+        quote,
+        shopPercentage,
+        transactions: txs || [],
+      });
+
+      // Check whether this contact has been marked complete by any artist.
+      const { data: completions } = await supabase
+        .from("project_completions")
+        .select("artist_ghl_id, completed_at, reconciliation_id")
+        .eq("contact_id", contactId);
+
+      res.json({
+        success: true,
+        contactId,
+        ...summary,
+        isComplete: (completions || []).length > 0,
+        completions: completions || [],
+        transactions: txs || [],
+      });
+    } catch (error) {
+      console.error("[Reconciliation] financial-summary error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/contacts/:contactId/mark-complete
+  // Marks a project complete for the given artist; snapshots quote + collected.
+  app.post("/api/contacts/:contactId/mark-complete", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const { artistGhlId, completedBy } = req.body || {};
+      if (!artistGhlId) {
+        return res.status(400).json({ success: false, error: "artistGhlId required" });
+      }
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const locationId = process.env.GHL_LOCATION_ID;
+      const [quote, { data: txs, error: txErr }, { shopPercentage }] = await Promise.all([
+        fetchContractQuote(contactId),
+        supabase
+          .from("transactions")
+          .select("*")
+          .eq("contact_id", contactId)
+          .eq("artist_ghl_id", artistGhlId),
+        fetchArtistContext(artistGhlId, locationId),
+      ]);
+      if (txErr) return res.status(500).json({ success: false, error: txErr.message });
+
+      const summary = computeContactReconciliation({
+        quote,
+        shopPercentage,
+        transactions: txs || [],
+      });
+
+      if (quote == null) {
+        return res.status(400).json({
+          success: false,
+          error: "Contact has no final_price; cannot reconcile a project without a contract quote.",
+        });
+      }
+
+      const row = {
+        contact_id: contactId,
+        artist_ghl_id: artistGhlId,
+        completed_by: completedBy || null,
+        quote_at_completion: summary.quote,
+        collected_at_completion: summary.collected,
+        net_to_artist: summary.netToArtist,
+        shop_percentage_at_completion: summary.shopPercentage,
+        artist_percentage_at_completion: summary.artistPercentage,
+      };
+
+      // Idempotent insert: unique (contact_id, artist_ghl_id).
+      const { data, error } = await supabase
+        .from("project_completions")
+        .upsert(row, { onConflict: "contact_id,artist_ghl_id" })
+        .select()
+        .single();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      res.json({ success: true, completion: data, summary });
+    } catch (error) {
+      console.error("[Reconciliation] mark-complete error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // DELETE /api/contacts/:contactId/mark-complete?artistGhlId=...
+  // Reopen a completed project. Refuses if already settled.
+  app.delete("/api/contacts/:contactId/mark-complete", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      const artistGhlId = req.query.artistGhlId;
+      if (!artistGhlId) {
+        return res.status(400).json({ success: false, error: "artistGhlId required" });
+      }
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const { data: existing } = await supabase
+        .from("project_completions")
+        .select("id, reconciliation_id")
+        .eq("contact_id", contactId)
+        .eq("artist_ghl_id", artistGhlId)
+        .maybeSingle();
+
+      if (!existing) {
+        return res.status(404).json({ success: false, error: "Not marked complete" });
+      }
+      if (existing.reconciliation_id) {
+        return res.status(409).json({
+          success: false,
+          error: "Already settled in a reconciliation; cannot reopen automatically.",
+        });
+      }
+
+      const { error } = await supabase.from("project_completions").delete().eq("id", existing.id);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      res.json({ success: true, reopened: true });
+    } catch (error) {
+      console.error("[Reconciliation] reopen error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/artists/:artistId/reconciliation/current
+  // Pending reconciliation for the current week (Mon-Sun, America/Chicago).
+  app.get("/api/artists/:artistId/reconciliation/current", async (req, res) => {
+    try {
+      const { artistId } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const now = new Date();
+      const weekStart = getWeekStart(now);
+      const weekEnd = getWeekEnd(now);
+      const locationId = process.env.GHL_LOCATION_ID;
+      const { artistName } = await fetchArtistContext(artistId, locationId);
+
+      // Pull all unsettled completions for this artist that fall in the week.
+      const { data: completions, error } = await supabase
+        .from("project_completions")
+        .select("*")
+        .eq("artist_ghl_id", artistId)
+        .is("reconciliation_id", null)
+        .gte("completed_at", weekStart.toISOString())
+        .lte("completed_at", weekEnd.toISOString())
+        .order("completed_at", { ascending: true });
+      if (error) return res.status(500).json({ success: false, error: error.message });
+
+      const result = computeWeeklyReconciliation({
+        artistGhlId: artistId,
+        artistName: artistName || artistId,
+        weekStart,
+        weekEnd,
+        completions: completions || [],
+      });
+      res.json({ success: true, status: "pending", ...result });
+    } catch (error) {
+      console.error("[Reconciliation] current error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/artists/:artistId/reconciliation/history?limit=20
+  app.get("/api/artists/:artistId/reconciliation/history", async (req, res) => {
+    try {
+      const { artistId } = req.params;
+      const limit = Math.min(parseInt(req.query.limit || "20", 10), 100);
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const { data, error } = await supabase
+        .from("reconciliations")
+        .select("*")
+        .eq("artist_ghl_id", artistId)
+        .order("week_start", { ascending: false })
+        .limit(limit);
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      res.json({ success: true, reconciliations: data || [] });
+    } catch (error) {
+      console.error("[Reconciliation] history error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/reconciliations/:reconciliationId/settle
+  // Marks an existing reconciliation row as settled. Used for cash/Zelle/manual
+  // payouts; Phase 5 adds Venmo auto-detection.
+  app.post("/api/reconciliations/:reconciliationId/settle", async (req, res) => {
+    try {
+      const { reconciliationId } = req.params;
+      const { method, settlementPaymentId } = req.body || {};
+      const validMethods = ["venmo_auto", "venmo_manual", "cash", "other"];
+      if (!validMethods.includes(method)) {
+        return res.status(400).json({
+          success: false,
+          error: `method must be one of: ${validMethods.join(", ")}`,
+        });
+      }
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const { data, error } = await supabase
+        .from("reconciliations")
+        .update({
+          status: "settled",
+          settled_at: new Date().toISOString(),
+          settled_via: method,
+          settlement_payment_id: settlementPaymentId || null,
+        })
+        .eq("id", reconciliationId)
+        .select()
+        .single();
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      res.json({ success: true, reconciliation: data });
+    } catch (error) {
+      console.error("[Reconciliation] settle error:", error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
