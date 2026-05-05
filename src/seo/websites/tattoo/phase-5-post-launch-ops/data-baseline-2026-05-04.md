@@ -108,23 +108,117 @@ This is the most accurate visitor measurement we have. Check back in 7 days for 
 
 ---
 
-## 5. GA4 (collecting, but Data API not connected)
+## 5. GA4 Data API (NOW CONNECTED — May 5, 2026)
 
-GA4 is collecting traffic via `G-XYEDL03XZR` since April 15. Data is visible in the GA4 dashboard but not yet pullable via API.
+**Property:** `properties/511557077` (Studio AZ Tattoo)
+**Measurement ID:** `G-XYEDL03XZR`
+**Connected:** May 5, 2026 after enabling Analytics Admin API + Analytics Data API on the project + reissuing OAuth refresh token with `analytics.readonly` scope.
 
-**Reason:** The OAuth refresh token only has `webmasters.readonly` and `business.manage` scopes. GA4 needs `analytics.readonly`.
+### Last 30 days totals (Apr 5 – May 5)
+| Metric | Value |
+|--------|-------|
+| Sessions | **321** |
+| Total users | **236** |
+| New users | 232 (98% new) |
+| Page views | **784** |
+| Engaged sessions | 175 (54.5% engagement rate) |
+| Bounce rate | 45.5% |
+| Avg session duration | 2:03 |
 
-**To enable:** Re-run `node src/seo/generateRefreshToken.js` (script already updated to include the new scope) and replace `GOOGLE_SEO_REFRESH_TOKEN` in `.env`. After that:
-- GA4 Admin API → list properties
-- GA4 Data API → query metrics (sessions, users, events, conversions, traffic sources)
+**Solid early numbers** — 236 users in 30 days for a brand-new local site is healthy. The 98% new-user ratio is expected for a newly launched site (no return visitors yet), and the 54.5% engagement rate is good (above 50% is the GA4 health threshold).
 
-Once connected we'll have:
-- Sessions, users, page views, bounce rate
-- Real source/medium attribution (organic / direct / social / paid / referral)
-- Events (form submissions, button clicks, scroll depth)
-- Geographic breakdown of visitors
-- Device + browser data
-- Real-time visitor count
+### Traffic sources (where visitors come from)
+| Channel | Sessions | Users |
+|---------|----------|-------|
+| **Direct** | 154 | 117 |
+| Organic Search | 76 | 36 |
+| Organic Social | 67 | 61 |
+| Referral | 18 | 17 |
+| Unassigned | 7 | 6 |
+
+**Insight:** Direct traffic is dominant — meaning people are typing the URL or clicking saved links. Organic Search is growing (76 sessions in 30 days from a 19-day-old site is good). Organic Social is also strong — Instagram referrals.
+
+### Top referrers (raw source)
+| Source | Sessions |
+|--------|----------|
+| (direct) | 154 |
+| google | 75 |
+| **ig (Instagram)** | 65 |
+| book.studioaz.us | 12 |
+| **chatgpt.com** | 6 |
+| studioaz.us | 6 |
+| facebook.com | 2 |
+| bing | 1 |
+
+**Notable:** **6 sessions from ChatGPT** — AI search is now sending real traffic to your site. The `llms.txt` file is paying off. Continue to invest there.
+
+### Top pages
+| Page | Views | Users |
+|------|-------|-------|
+| / (homepage) | 239 | 135 |
+| **/andrew** (Meta ad landing) | 97 | 65 |
+| /artists | 92 | 53 |
+| /consultation | 79 | 38 |
+| /artists/joan | 49 | 26 |
+| /gallery | 43 | 27 |
+| /services | 31 | 15 |
+| /joan-martinez (Spanish landing) | 27 | 20 |
+| /artists/andrew | 25 | 20 |
+| /estacionamiento-y-direcciones (Spanish parking) | 20 | 16 |
+
+**Big finding:** The Andrew landing page (`/andrew`) is the **#2 most visited page**, getting 97 views from Meta ads. The Spanish-language Joan landing page (`/joan-martinez`) is also performing well at 27 views.
+
+The /aftercare page that has 3,721 Search Console impressions doesn't even crack the top 10 in actual visitors — confirming our hypothesis that aftercare traffic is researchers (high impressions, no clicks).
+
+### Geographic — Where Real Visitors Are
+| City | Users |
+|------|-------|
+| **Minneapolis, Minnesota** | 72 |
+| **Chicago, Illinois** | 36 |
+| (unset) | 15 |
+| Singapore | 14 |
+| Saint Paul, Minnesota | 10 |
+| (unset) Minnesota | 8 |
+| (unset) California | 5 |
+| Burnsville, Minnesota | 5 |
+| Watertown, Wisconsin | 5 |
+| Dallas, Texas | 4 |
+
+**Real Twin Cities visitors (Minneapolis + St Paul + Burnsville + Maple Grove + Edina + Blaine + St Louis Park + unset MN):** ~108 of 236 = **46% of all traffic is in-region**. That's strong local relevance.
+
+**Chicago at 36 users is unusual** — could be Andrew's networking from his convention work in the region, or referral traffic we should investigate.
+
+### Device breakdown
+| Device | Sessions | Users |
+|--------|----------|-------|
+| **mobile** | 242 (75%) | 163 (69%) |
+| desktop | 77 (24%) | 72 |
+| tablet | 2 | 1 |
+
+**Mobile-dominant** — 75% of traffic is mobile. Confirms our mobile-first design priorities.
+
+### Conversion events (the most important data)
+| Event | Count | Users |
+|-------|-------|-------|
+| page_view | 784 | 236 |
+| session_start | 321 | 236 |
+| user_engagement | 286 | 93 |
+| scroll | 211 | 112 |
+| click | 22 | 18 |
+| **form_start** | 13 | 12 |
+| **form_submit** | 1 | 1 |
+
+**Conversion funnel:**
+- 236 users → 38 visited /consultation = **16% reach the consultation page**
+- 38 consultation page users → 13 started the form = **34% started filling**
+- 13 started → 1 submitted = **7.7% form completion rate** (or ~0.4% overall conversion)
+
+**That's the biggest finding of this baseline.** The form completion rate is the bottleneck. Either:
+- The form is too long/complex (likely — it's 9-step bilingual)
+- The form is having technical issues
+- People are starting it from curiosity not intent
+
+Worth investigating: which step do people abandon at? Need event tracking per step.
 
 ---
 
@@ -160,8 +254,15 @@ Build a backend cron job that pulls all 5 data sources weekly and writes to `pha
 
 ## Action Items From This Baseline
 
-1. **Re-run OAuth token script with `analytics.readonly` scope** to unlock GA4 Data API
-2. **Investigate the 3,721-impression aftercare page** — these are AAD researcher queries, not buyer intent. Either accept the noise or block AAD-pattern queries from GSC reports somehow
-3. **Mobile clicks are the real signal** — the 22 mobile clicks on 963 mobile impressions is a 2.28% CTR (normal). Future copy/title optimization should focus on what converts on mobile
-4. **GBP direction requests outpace website clicks 57 vs 34** — high physical intent. Lean into "visit us" / "directions" CTAs on the GBP profile. Maybe add an offer post inviting walk-by intros
-5. **Phone calls are 2 over 34 days** — drop "Call us" CTAs lower in priority. Lead with "Text us" or "Submit consultation form"
+1. ~~**Re-run OAuth token script with `analytics.readonly` scope** to unlock GA4 Data API~~ ✅ DONE May 5
+2. **Investigate the 3,721-impression aftercare page** — these are AAD researcher queries, not buyer intent. The GA4 data confirms: aftercare doesn't even crack the top 10 actual visitors. The Search Console impressions are vanity, not value. Don't optimize.
+3. **Mobile-first decisions are validated** — 75% of GA4 sessions are mobile. Mobile clicks on Search Console (2.28% CTR) is the true CTR signal.
+4. **GBP direction requests outpace website clicks 57 vs 34** — high physical intent. Lean into "visit us" / "directions" CTAs on the GBP profile. Maybe add an offer post inviting walk-by intros.
+5. **Phone calls are 2 over 34 days** — drop "Call us" CTAs lower in priority. Lead with "Text us" or "Submit consultation form".
+6. **Form completion rate is 7.7% (1 of 13 starters submitted)** — biggest conversion bottleneck. Add per-step event tracking to see where users drop off. Consider:
+   - Shortening the form
+   - Adding a "save progress" feature
+   - Making early steps easier (image picks vs text input)
+7. **ChatGPT is sending traffic** (6 sessions). The `llms.txt` is working. Continue investing in AI-friendly content.
+8. **Andrew's Meta ad landing page is the #2 visited page** — Meta ads are working for him. Consider scaling that budget if leads are converting.
+9. **Investigate the Chicago traffic** (36 users) — is this from Andrew's convention contacts, a paid campaign, or organic discovery? If organic, find out why and exploit it.

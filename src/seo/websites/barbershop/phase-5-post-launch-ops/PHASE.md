@@ -107,10 +107,15 @@ Wire up ALL the data sources that exist for the site so we can track growth comp
 Reads visitor behavior data programmatically.
 - [ ] Create GA4 property (covered in Phase 4) with Measurement ID `G-XXXXXXXXXX`
 - [ ] Note the GA4 **property ID** (numeric, found in GA4 Admin → Property settings) — different from Measurement ID
-- [ ] Re-issue OAuth refresh token to include `https://www.googleapis.com/auth/analytics.readonly` scope (run `node src/seo/generateRefreshToken.js`)
+- [ ] **Enable two Google Cloud APIs** on the project:
+  - **Analytics Admin API** at https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project={PROJECT_NUMBER}
+  - **Analytics Data API** at https://console.developers.google.com/apis/api/analyticsdata.googleapis.com/overview?project={PROJECT_NUMBER}
+  - Both are required (Admin = list properties, Data = query metrics). OAuth scope alone is not enough — you'll get `SERVICE_DISABLED` errors otherwise.
+- [ ] Re-issue OAuth refresh token to include `https://www.googleapis.com/auth/analytics.readonly` scope (run `node src/seo/generateRefreshToken.js` — script already has all 3 scopes)
 - [ ] Update `GOOGLE_SEO_REFRESH_TOKEN` in backend `.env` AND on Render
-- [ ] Test API: `GET https://analyticsadmin.googleapis.com/v1beta/accountSummaries`
+- [ ] Test API: `GET https://analyticsadmin.googleapis.com/v1beta/accountSummaries` — returns property IDs
 - [ ] Build wrapper in `src/seo/ga4Client.js` for common queries (sessions, users, conversions, top pages, top sources)
+- [ ] **CRITICAL curl gotcha:** GA4 Data API endpoints use `:runReport` syntax. The `:` gets eaten by curl URL parsing. Use the `--url-query ""` workaround: `curl -X POST "https://...:runReport" --url-query "" -d '...'` — without the workaround you'll get a 404 with mangled URL like `/properties/123unReport`.
 
 #### 9b. Cloudflare Analytics (GraphQL)
 Edge-level visitor + threat data.
