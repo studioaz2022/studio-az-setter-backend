@@ -297,32 +297,32 @@ async function updateGHLClientFinancials(contactId, financials, locationId) {
 /**
  * Check if a Square payment has already been processed
  */
-async function isPaymentAlreadyProcessed(squarePaymentId) {
+async function isPaymentAlreadyProcessed(squarePaymentId, locationId = null) {
   if (!supabase) {
     console.log('[Financial] Supabase not initialized, cannot check for duplicate payments');
     return false;
   }
 
-  const { data, error } = await supabase
+  // Use limit(2) so we can detect both "already processed" (>=1 row) AND
+  // pre-existing duplicates (>=2 rows). .single() throws PGRST116 for both 0 and 2+ rows,
+  // which previously masked duplicates as "not found" and let new inserts pile on.
+  let query = supabase
     .from('transactions')
     .select('id')
-    .eq('square_payment_id', squarePaymentId)
-    .single();
+    .eq('square_payment_id', squarePaymentId);
+  if (locationId) query = query.eq('location_id', locationId);
+  const { data, error } = await query.limit(2);
 
-  // Handle errors properly
   if (error) {
-    // PGRST116 = "not found" - this is expected when payment hasn't been processed
-    if (error.code === 'PGRST116') {
-      return false; // Payment not found, safe to process
-    }
-    
-    // Any other error (connection, query, etc.) - throw to let caller handle it
     console.error('[Financial] Database error checking payment status:', error);
     throw new Error(`Failed to check payment status: ${error.message || error.code}`);
   }
 
-  // No error, check if we found a record
-  return !!data;
+  if ((data?.length || 0) >= 2) {
+    console.warn(`[Financial] DUPLICATE DETECTED: ${data.length} rows already exist for square_payment_id=${squarePaymentId}${locationId ? ` location=${locationId}` : ''}. Treating as processed.`);
+  }
+
+  return (data?.length || 0) > 0;
 }
 
 /**
