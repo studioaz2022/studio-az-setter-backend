@@ -111,11 +111,11 @@ Reads visitor behavior data programmatically.
   - **Analytics Admin API** at https://console.developers.google.com/apis/api/analyticsadmin.googleapis.com/overview?project={PROJECT_NUMBER}
   - **Analytics Data API** at https://console.developers.google.com/apis/api/analyticsdata.googleapis.com/overview?project={PROJECT_NUMBER}
   - Both are required (Admin = list properties, Data = query metrics). OAuth scope alone is not enough — you'll get `SERVICE_DISABLED` errors otherwise.
-- [ ] Re-issue OAuth refresh token to include `https://www.googleapis.com/auth/analytics.readonly` scope (run `node src/seo/generateRefreshToken.js` — script already has all 3 scopes)
-- [ ] Update `GOOGLE_SEO_REFRESH_TOKEN` in backend `.env` AND on Render
+- [ ] **OAuth refresh token already covers GA4** if a previous Studio AZ site has been through Phase 5 — the script `src/seo/generateRefreshToken.js` requests all 4 scopes (`webmasters.readonly`, `business.manage`, `analytics.readonly`, `analytics.edit`). One refresh token works for all properties owned by the same Google account.
+- [ ] **Only re-issue the token if** (a) this is a brand-new Google account/project, (b) you need to add a new scope, or (c) the token was revoked. To re-issue: `node src/seo/generateRefreshToken.js`, copy output to `.env` AND Render env vars.
 - [ ] Test API: `GET https://analyticsadmin.googleapis.com/v1beta/accountSummaries` — returns property IDs
 - [ ] Build wrapper in `src/seo/ga4Client.js` for common queries (sessions, users, conversions, top pages, top sources)
-- [ ] **CRITICAL curl gotcha:** GA4 Data API endpoints use `:runReport` syntax. The `:` gets eaten by curl URL parsing. Use the `--url-query ""` workaround: `curl -X POST "https://...:runReport" --url-query "" -d '...'` — without the workaround you'll get a 404 with mangled URL like `/properties/123unReport`.
+- [ ] **CRITICAL curl gotcha:** GA4 Data API endpoints use `:runReport`, `:runFunnelReport`, `:batchRunReports` syntax. The `:` gets eaten by curl URL parsing. Use the `--url-query ""` workaround: `curl -X POST "https://...:runReport" --url-query "" -d '...'` — without the workaround you'll get a 404 with mangled URL like `/properties/123unReport`.
 
 #### 9b. Cloudflare Analytics (GraphQL)
 Edge-level visitor + threat data.
@@ -230,22 +230,48 @@ Mark these as conversions:
 
 Don't mark `cta_click` as a conversion — too noisy, defeats the purpose of conversion tracking.
 
-#### Step 3 — Funnel Exploration (manual UI — only step that requires the dashboard)
-- [ ] GA4 → Explore → New → Funnel exploration
-  - Step 1: `consultation_started`
-  - Step 2: `consultation_step_complete` filtered to `step_index = 0` (language pick)
-  - Step 3: `consultation_step_complete` filtered to `step_index = 1` (timeline)
-  - ...continue for all the steps
-  - Final step: `consultation_submitted`
-- [ ] Save as shared exploration so the team/dashboard can use it
-- [ ] Verify events fire by visiting the live site → trigger the form → check GA4 Realtime within 30s
+#### Step 3 — Verify event flow (only manual step left)
+- [ ] Visit the live site → trigger the form → check GA4 Realtime within 30s to confirm events fire
+- [ ] No need to build a Funnel Exploration in the GA4 UI — see deliverable #13 below
+
+#### Note: Funnel reports run on demand via API
+The GA4 Data API exposes `runFunnelReport` at `https://analyticsdata.googleapis.com/v1alpha/properties/{id}:runFunnelReport`. We never need to save a Funnel Exploration in the GA4 UI — we can POST a funnel definition + date range + filters and get back step-by-step `activeUsers`, `funnelStepCompletionRate`, `funnelStepAbandonments`, `funnelStepAbandonmentRate` for any time period.
+
+That makes deliverable #13 (the funnel report backend endpoint) the right place to define funnels — they live as code, not as click-trail-saved Explorations.
 
 ### 13. `funnel-report-api.md`
-Build a backend endpoint that returns the funnel data programmatically (for the future stats dashboard):
-- [ ] Add `src/seo/funnelReportClient.js` that uses GA4 Data API to query the multi-step funnel
+Build a backend endpoint that returns the funnel data programmatically (for the future stats dashboard). **Funnel reports run on demand via the GA4 Data API — no saved Funnel Exploration in the GA4 UI is needed.**
+
+**API endpoint:** `POST https://analyticsdata.googleapis.com/v1alpha/properties/{PROPERTY_ID}:runFunnelReport`
+
+**Sample payload (the actual funnel for the consultation widget):**
+```json
+{
+  "dateRanges":[{"startDate":"30daysAgo","endDate":"today"}],
+  "funnel":{
+    "steps":[
+      {"name":"Started","filterExpression":{"funnelEventFilter":{"eventName":"consultation_started"}}},
+      {"name":"Step 0 — Language","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"parameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"0"}}}}}}},
+      {"name":"Step 1 — Timeline","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"parameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"1"}}}}}}},
+      {"name":"Submitted","filterExpression":{"funnelEventFilter":{"eventName":"consultation_submitted"}}}
+    ]
+  }
+}
+```
+
+**Response includes per-step:** `activeUsers`, `funnelStepCompletionRate`, `funnelStepAbandonments`, `funnelStepAbandonmentRate`. Both as `funnelTable` and `funnelVisualization` blocks.
+
+**Build:**
+- [ ] Add `src/seo/ga4FunnelClient.js` with helper functions to compose funnel definitions from a simple step list (e.g. `buildFunnel(siteKey, formName, stepNames)` returns the full payload)
 - [ ] Endpoint: `GET /api/seo/funnel/:site/:formName?days=30`
-- [ ] Returns JSON: `{ steps: [{step_index, step_name, users, drop_off_pct, avg_time_seconds}, ...], total_conversions, conversion_rate, conversion_value }`
+- [ ] Funnel definitions stored as code in `src/seo/funnelDefinitions.js` (one definition per form per site) — easy to version, share, and iterate
+- [ ] Returns JSON: `{ steps: [{name, users, drop_off_pct, abandonment_count}, ...], total_conversions, conversion_rate, conversion_value }`
 - [ ] This is the data source for the future stats dashboard's funnel visualization
+
+**Why no UI funnel exploration needed:**
+- The `:runFunnelReport` endpoint runs ad-hoc — no saved Exploration required
+- Funnel definitions live in code (versionable, comparable, automatable)
+- The future stats dashboard pulls live data on demand; doesn't query a stale saved report
 
 ---
 
