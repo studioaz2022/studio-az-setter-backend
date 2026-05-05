@@ -97,6 +97,40 @@ Code lives at: `[define path in workspace, e.g. /Users/studioaz/Documents/Studio
 
 ---
 
+## Funnel & Conversion Tracking (MANDATORY for any site with a form or multi-step flow)
+
+GA4 auto-detects basic `form_start`/`form_submit` events but provides ZERO detail on which form, which step, or what the user picked. **Every site we build must include custom event tracking** so we can build proper funnel reports + a conversion dashboard.
+
+### Stage E (in Phase 3) — Build the analytics layer
+1. **Create `src/lib/analytics.ts`** — typed wrapper around `window.gtag('event', ...)`. See [tattoo site reference implementation](../../tattoo-website/src/lib/analytics.ts) at `/Users/studioaz/Documents/Studio AZ Tattoo App/tattoo-website/src/lib/analytics.ts`.
+2. **Define typed event helpers per form/funnel** (NOT generic `trackEvent`). Each helper documents what the event means and what params it expects:
+   - `track{FormName}Started(ctx)` — fires once on form mount
+   - `track{FormName}Step({step_index, step_name, step_total, selected_value, ...ctx})` — fires on EVERY step transition
+   - `track{FormName}LeadCaptured(ctx)` — fires after partial lead is created (mid-form contact info save)
+   - `track{FormName}Submitted({estimated_value, ...ctx})` — fires on full primary submission, with conversion value
+   - `track{FormName}Back({from_step, to_step})` — fires when user clicks back, helps find confusing steps
+   - `track{FormName}Abandoned({last_step, step_index, ...ctx})` — fires on `beforeunload` if not finished
+3. **Include estimated value where possible** — map user selections to a USD value band so GA4 can do value-weighted conversion reports. Tattoo example: `Fine Line=$150, Small=$250, Medium Low=$500, Medium High=$700, Large=$1500`.
+4. **Add a `trackCtaClick({cta_text, cta_location, destination})` helper** for site-wide button click tracking. Use `cta_location` to distinguish "homepage_hero" from "services_page_bottom" so we know which placements convert.
+
+### Stage F (in Phase 3) — Wire events into the form
+1. In the form component, import the helpers
+2. Fire `Started` event on mount in a `useEffect` with empty deps. Detect entry source from `document.referrer` (homepage / artist_page / instagram / external) and pass as `entry_source`.
+3. Fire `Step` event on EVERY transition — pass `step_index`, `step_name`, `step_total`, and the `selected_value` user picked
+4. Fire `LeadCaptured` event right after the partial-lead API call succeeds
+5. Fire `Submitted` event right after the primary-submit API call succeeds, including `estimated_value`
+6. Fire `Back` event in the back handler
+7. Fire `Abandoned` event in a `beforeunload` listener (use refs to access latest state — closure captures stale state otherwise)
+8. **Wire site-wide CTA buttons** — every "Book a Consultation" / "Inquire" button calls `trackCtaClick` with its location
+
+### What this unlocks
+- **Step-level funnel report** in GA4 Explore: see exact drop-off rate at each step
+- **Per-form attribution**: distinguish consultation widget vs artist landing page form vs contact form
+- **Value-weighted conversions**: not all submissions are equal — large tattoos ≈ $1500, fine line ≈ $150
+- **Foundation for the future stats dashboard** (separate web app, planned)
+
+---
+
 ## Approval Gates
 
 - After Stage A: design direction + homepage approval

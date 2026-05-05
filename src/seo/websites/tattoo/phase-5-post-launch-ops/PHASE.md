@@ -172,6 +172,39 @@ After Phase 5 setup, write these to `~/.claude/projects/-Users-studioaz-Document
 2. **`serpapi_setup.md`** — key location, baseline keywords, GPS coordinates
 3. **`search_console_access.md`** — verified domain, sitemap URL, OAuth refresh token location, working endpoints (search analytics + URL inspection)
 4. **`cloudflare_credentials.md`** — env vars, zone ID per domain, existing redirect rules, GraphQL Analytics example query
+### 12. `ga4-conversion-events.md`
+Configure GA4 to recognize the custom funnel events as conversions. Required for value-weighted reporting + the future stats dashboard.
+
+For every site that has a form/funnel, do this in the GA4 dashboard:
+- [ ] **Admin → Custom definitions → Custom dimensions** — register every custom param sent by `analytics.ts` so they're queryable in Explore + the Data API:
+  - `form_name` (event-scoped)
+  - `step_name`, `step_index` (event-scoped)
+  - `language`, `artist`, `entry_source` (event-scoped)
+  - `tattoo_size` / `service_type` (event-scoped, depends on site)
+  - `cta_text`, `cta_location` (event-scoped)
+  - **Note:** GA4 free tier allows 50 event-scoped custom dimensions per property — plenty
+- [ ] **Admin → Events → Mark as conversion**:
+  - `{form_name}_submitted` — primary conversion (weighted by `value` parameter)
+  - `{form_name}_lead_captured` — soft conversion (mid-funnel)
+  - `cta_click` — leave as event (high volume, not all CTAs convert)
+- [ ] **Build a funnel exploration**: GA4 → Explore → Funnel exploration:
+  - Step 1: `consultation_started`
+  - Step 2: `consultation_step_complete` where `step_index = 0` (language pick)
+  - Step 3: `consultation_step_complete` where `step_index = 1` (timeline)
+  - ...continue for all 12 steps
+  - Final step: `consultation_submitted`
+  - Save as a shared exploration so it persists in the dashboard
+- [ ] Verify events fire by visiting the live site → trigger the form → check GA4 Realtime within 30s
+
+### 13. `funnel-report-api.md`
+Build a backend endpoint that returns the funnel data programmatically (for the future stats dashboard):
+- [ ] Add `src/seo/funnelReportClient.js` that uses GA4 Data API to query the multi-step funnel
+- [ ] Endpoint: `GET /api/seo/funnel/:site/:formName?days=30`
+- [ ] Returns JSON: `{ steps: [{step_index, step_name, users, drop_off_pct, avg_time_seconds}, ...], total_conversions, conversion_rate, conversion_value }`
+- [ ] This is the data source for the future stats dashboard's funnel visualization
+
+---
+
 5. **`ga4_data_api.md`** — GA4 property ID per site, OAuth scope (`analytics.readonly`), example queries
 6. **`vercel_analytics.md`** — which sites have it enabled, where to view dashboards
 7. **`data-sources-summary.md`** — cross-source reconciliation guide (which source measures what, why they disagree, which to prioritize for which question)
