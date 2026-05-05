@@ -115,13 +115,22 @@ GA4 auto-detects basic `form_start`/`form_submit` events but provides ZERO detai
 
 ### Stage F (in Phase 3) — Wire events into the form
 1. In the form component, import the helpers
-2. Fire `Started` event on mount in a `useEffect` with empty deps. Detect entry source from `document.referrer` (homepage / artist_page / instagram / external) and pass as `entry_source`.
-3. Fire `Step` event on EVERY transition — pass `step_index`, `step_name`, `step_total`, and the `selected_value` user picked
-4. Fire `LeadCaptured` event right after the partial-lead API call succeeds
+2. Fire `Started` event on mount in a `useEffect` with empty deps. Detect entry source from `document.referrer` or in-app browser UA (homepage / artist_page / instagram / tiktok / external) and pass as `entry_source`.
+3. **For multi-step forms only:** Fire `Step` event on EVERY transition — pass `step_index`, `step_name`, `step_total`, and the `selected_value` user picked
+4. Fire `LeadCaptured` event right after any partial-lead API call succeeds
 5. Fire `Submitted` event right after the primary-submit API call succeeds, including `estimated_value`
-6. Fire `Back` event in the back handler
-7. Fire `Abandoned` event in a `beforeunload` listener (use refs to access latest state — closure captures stale state otherwise)
-8. **Wire site-wide CTA buttons** — every "Book a Consultation" / "Inquire" button calls `trackCtaClick` with its location
+6. **For multi-step forms only:** Fire `Back` event in the back handler + `Abandoned` event in a `beforeunload` listener (use refs to access latest state — closure captures stale state otherwise)
+7. **For single-page forms:** Add a `FirstInteraction` event that fires on the first focus/change of any field (use a `useRef` flag to ensure it only fires once). Distinguishes "saw the form" from "started filling but bailed."
+8. Fire `Failed` event in submit error handlers — pass `error_message` so we can spot recurring failures.
+
+### Stage G (in Phase 3) — Wire site-wide CTA buttons (MANDATORY)
+Every "Book a Consultation" / "Inquire" / "Contact" button must call `trackCtaClick({ cta_text, cta_location, destination })`. Don't track only the form CTAs — the buttons across the site that LEAD to forms are how we know which placement converts best.
+
+**Pattern: extend the shared `Button` component** with optional `trackingLocation` and `trackingText` props that, when set, wire `onClick` to call `trackCtaClick`. Then every `<Button>` instance just adds `trackingLocation="homepage_hero"` (or wherever it lives). For raw `<a>` / `<Link>` tags in nav/footer/hero, call `trackCtaClick` directly in `onClick`.
+
+**Naming convention for `cta_location`:** `{page}_{section}` — e.g. `homepage_final_cta`, `services_spanish_section`, `nav_desktop`, `footer`, `artist_detail_{slug}_cta`. Stay consistent so the GA4 reports group meaningfully.
+
+**Special case: header/footer CTAs visible on every page.** Use one location label (e.g. `nav_desktop`, `footer`) — don't try to capture the source page from the location. The `page_location` parameter GA4 sends automatically gives us that.
 
 ### What this unlocks
 - **Step-level funnel report** in GA4 Explore: see exact drop-off rate at each step
