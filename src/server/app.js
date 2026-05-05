@@ -2443,6 +2443,132 @@ function createApp() {
   } = require("../services/reconciliationService");
   const { getWeekStart, getWeekEnd } = require("../utils/dateUtils");
 
+  // GET /api/artists/:artistId/outstanding-contacts
+  // Phase 3 — drives the "Outstanding from Clients" section of the Finance tab.
+  // For every contact this artist has transactions on, compute outstanding =
+  // final_price - collected. Filter to outstanding > 0 (or quote === null with
+  // any collected, treated as "no quote yet" and excluded). Returns sorted by
+  // largest outstanding. Each row includes amendmentCount so the iOS row can
+  // render the AMENDED pill without a follow-up call.
+  app.get("/api/artists/:artistId/outstanding-contacts", async (req, res) => {
+    try {
+      const { artistId } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      // 1. Fetch all transactions for this artist (group by contact later)
+      const { data: txs, error: txErr } = await supabase
+        .from("transactions")
+        .select("contact_id, contact_name, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type")
+        .eq("artist_ghl_id", artistId);
+      if (txErr) {
+        return res.status(500).json({ success: false, error: txErr.message });
+      }
+
+      // Group transactions by contact
+      const byContact = {};
+      for (const tx of txs || []) {
+        if (!tx.contact_id || tx.contact_id === "walk_in") continue;
+        if (!byContact[tx.contact_id]) {
+          byContact[tx.contact_id] = { contactName: tx.contact_name || "", transactions: [] };
+        }
+        byContact[tx.contact_id].transactions.push(tx);
+        if (!byContact[tx.contact_id].contactName && tx.contact_name) {
+          byContact[tx.contact_id].contactName = tx.contact_name;
+        }
+      }
+
+      const contactIds = Object.keys(byContact);
+      if (contactIds.length === 0) {
+        return res.json({ success: true, outstandingContacts: [], totalOutstanding: 0 });
+      }
+
+      // 2. Batch-fetch GHL contacts (final_price, contact name) — concurrency capped
+      const { getContactsBatch } = require("../clients/ghlClient");
+      const contactMap = await getContactsBatch(contactIds, { concurrency: 5 });
+
+      // 3. Batch-fetch amendment counts per contact (single query)
+      const amendmentCounts = {};
+      try {
+        const { data: amendmentRows, error: amendErr } = await supabase
+          .from("consent_amendments")
+          .select("contact_id")
+          .in("contact_id", contactIds);
+        if (!amendErr && amendmentRows) {
+          for (const row of amendmentRows) {
+            amendmentCounts[row.contact_id] = (amendmentCounts[row.contact_id] || 0) + 1;
+          }
+        }
+      } catch (e) {
+        console.warn(`[Outstanding] amendment count fetch failed (non-fatal): ${e.message}`);
+      }
+
+      // 4. For each contact, compute reconciliation and emit row if outstanding > 0
+      const rows = [];
+      for (const [contactId, info] of Object.entries(byContact)) {
+        const ghlContact = contactMap[contactId];
+        const cf = ghlContact?.customField || {};
+        const rawQuote = cf.final_price ?? cf.quote_to_client;
+        let quote = null;
+        if (rawQuote != null && rawQuote !== "") {
+          const parsed = parseFloat(String(rawQuote).replace(/[^0-9.]/g, ""));
+          if (Number.isFinite(parsed) && parsed > 0) quote = parsed;
+        }
+
+        // Skip contacts without a quote — outstanding is undefined
+        if (quote == null) continue;
+
+        // Use the rate snapshotted on the most-recent transaction (matches Phase 1 financial-summary)
+        let shopPercentage = 30;
+        const latestTx = info.transactions[info.transactions.length - 1];
+        if (latestTx && latestTx.shop_percentage != null) {
+          shopPercentage = Number(latestTx.shop_percentage);
+        }
+
+        const summary = computeContactReconciliation({
+          quote,
+          shopPercentage,
+          transactions: info.transactions,
+        });
+
+        if (summary.outstanding == null || summary.outstanding <= 0) continue;
+
+        // Resolve name: prefer GHL, fall back to denormalized contact_name
+        const resolvedName =
+          ghlContact?.contactName ||
+          (ghlContact ? `${ghlContact.firstName || ""} ${ghlContact.lastName || ""}`.trim() : "") ||
+          info.contactName ||
+          "Unknown";
+
+        rows.push({
+          contactId,
+          contactName: resolvedName,
+          quote: summary.quote,
+          collected: summary.collected,
+          outstanding: summary.outstanding,
+          isFullyPaid: summary.isFullyPaid,
+          amendmentCount: amendmentCounts[contactId] || 0,
+        });
+      }
+
+      // 5. Sort largest outstanding first
+      rows.sort((a, b) => b.outstanding - a.outstanding);
+
+      const totalOutstanding = rows.reduce((sum, r) => sum + r.outstanding, 0);
+
+      res.json({
+        success: true,
+        outstandingContacts: rows,
+        totalOutstanding: Math.round(totalOutstanding * 100) / 100,
+        count: rows.length,
+      });
+    } catch (error) {
+      console.error("[Outstanding] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // Internal helper: fetch the contract quote (final_price) for a contact.
   // Returns a number in dollars, or null if not set.
   async function fetchContractQuote(contactId) {
