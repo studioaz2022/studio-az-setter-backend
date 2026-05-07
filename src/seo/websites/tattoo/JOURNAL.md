@@ -461,6 +461,9 @@ Things worth investigating once we have more data.
 - **Do reviews actually unlock Map Pack?** — natural experiment as review count grows; correlate review count milestones with Local Falcon SoLV
 - **Did the May 4 GBP services cleanup cause the WoW impression drop?** — first noticed 2026-05-06. Cleaning bloat services should make us LESS findable for irrelevant queries. If true, we'd expect quantity ↓ + quality ↑ — which is exactly what we saw. Monitor 2-3 more weeks to confirm.
 - **Can we push `tattoo shops near me` from page 2 to page 1?** — currently pos 18.8 on /. Already converts at 12.5% CTR. Hypothesis: adding "tattoo shops near me" as an exact phrase 1-2× on / + an internal link from a high-authority page could nudge it. Test fix after consultation framing experiment is verified.
+- **"tattoo shops minneapolis walk ins" demand** — surfaced in Google Autocomplete on 2026-05-07. There's real search demand for walk-in tattoo shops in Minneapolis. Studio AZ is appointment-only by design. Hypothesis: an FAQ entry like "Do you accept walk-ins?" that explains the policy + redirects to the consultation form could capture this traffic + qualify the leads. Worth a content experiment.
+- **PAA "How much tip for $300 tattoo?"** — surfaced under "tattoo aftercare" PAA on 2026-05-07. Google connects pricing curiosity to aftercare research. Hypothesis: a single FAQ entry on tipping etiquette could capture this question across both pricing AND aftercare contexts. Cheap to ship, potential high-CTR.
+- **Studio AZ not in Yelp top 10 for "tattoo" in Minneapolis** — surfaced 2026-05-07 via Yelp engine. Top 10 dominated by Sacred Siren, Guns N' Needles, Leviticus, Hung's, Bee Ink, Jackalope, etc. Studio AZ may not have a claimed Yelp listing. Hypothesis: claiming/optimizing the Yelp listing could move us into top 10 (or higher). Phase 5 deliverable #8 (citation tracker) should address this — currently un-checked.
 
 ---
 
