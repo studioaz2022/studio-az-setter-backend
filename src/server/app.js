@@ -2488,13 +2488,17 @@ function createApp() {
       const { getContactsBatch } = require("../clients/ghlClient");
       const contactMap = await getContactsBatch(contactIds, { concurrency: 5 });
 
-      // 3. Batch-fetch amendment counts per contact (single query)
+      // 3. Batch-fetch amendment counts per contact (single query).
+      // Phase 4 fold-in: only count amendments where status='completed' so the
+      // AMENDED pill represents an actual contract change, not a sent-but-unsigned
+      // amendment. Matches Phase 4's inline indicator semantics for consistency.
       const amendmentCounts = {};
       try {
         const { data: amendmentRows, error: amendErr } = await supabase
           .from("consent_amendments")
           .select("contact_id")
-          .in("contact_id", contactIds);
+          .in("contact_id", contactIds)
+          .eq("status", "completed");
         if (!amendErr && amendmentRows) {
           for (const row of amendmentRows) {
             amendmentCounts[row.contact_id] = (amendmentCounts[row.contact_id] || 0) + 1;
@@ -8664,6 +8668,39 @@ function createApp() {
       res.json(result);
     } catch (err) {
       console.error("❌ POST /api/consent-form/amendment/:token/submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Phase 4 — amendment history for a contact's signed amendments.
+  // Returns chronological list (newest first) of completed amendments only.
+  // The iOS QuotePaymentLedger uses this to render the inline "↳ Amended..."
+  // subline + expandable history under the QUOTE total.
+  app.get("/api/contacts/:contactId/amendment-history", async (req, res) => {
+    try {
+      const { contactId } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      const { data, error } = await supabase
+        .from("consent_amendments")
+        .select("id, contact_id, consent_form_id, changes, status, sent_at, completed_at, created_at")
+        .eq("contact_id", contactId)
+        .eq("status", "completed")
+        .order("completed_at", { ascending: false });
+
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      res.json({
+        success: true,
+        amendments: data || [],
+        count: (data || []).length,
+      });
+    } catch (err) {
+      console.error("[AmendmentHistory] error:", err);
       res.status(500).json({ success: false, error: err.message });
     }
   });
