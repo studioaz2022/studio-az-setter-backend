@@ -2975,20 +2975,30 @@ function createApp() {
   });
 
   // ────────────────────────────────────────────────────────────────────────
-  // Phase 6a · Shop Settlements Board (Lionel's owner view)
+  // Phase 6a + 6b · Shop Settlements / Owner Surfaces
   // ────────────────────────────────────────────────────────────────────────
+  //
+  // SECURITY POSTURE (Phase 6b 2026-05-07):
+  // These shop endpoints are intentionally NOT auth-gated to match the rest
+  // of the iOS↔backend layer (URL-trusted, no JWT). The Render URL is public
+  // and aggregate financial data IS exposed to anyone who guesses the routes.
+  // Tracked as Known Security Debt — Phase 8 hardening will add proper auth.
+  //
+  // requireOwner() is kept defined-but-unused so we can reinstate the gate
+  // in Phase 8 without refactoring callers.
+  //
+  // The "owner" identity for excluding Lionel from cross-artist lists comes
+  // from the LIONEL_GHL_ID constant (also used by serviceIncomeWriter.js)
+  // OR from x-ghl-user-id header if iOS sends it. Web (Rent Tracker) calls
+  // without the header → falls back to LIONEL_GHL_ID.
+
+  const { LIONEL_GHL_ID } = require("../rentTracker/serviceIncomeWriter");
 
   /**
-   * Owner-only auth gate. iOS sends the GHL user id of the logged-in user
-   * via x-ghl-user-id; backend verifies they have profiles.role = "owner".
-   * Returns true if authorized, otherwise responds with 401/403 and returns
-   * false so the caller can early-return.
-   *
-   * Same posture as the rest of the iOS↔backend layer (header is not a
-   * cryptographic credential — the GHL ID isn't a secret), but server-side
-   * gating still enforces role separation. Phase 8 security hardening will
-   * upgrade this to JWT-validated when the broader auth pass happens.
+   * Reserved for Phase 8 hardening. Currently unused — left in place so the
+   * gate can be reinstated without refactoring every shop endpoint.
    */
+  // eslint-disable-next-line no-unused-vars
   async function requireOwner(req, res) {
     const ghlUserId = req.get("x-ghl-user-id");
     if (!ghlUserId) {
@@ -3032,10 +3042,12 @@ function createApp() {
    */
   app.get("/api/shop/settlements-board", async (req, res) => {
     try {
-      if (!(await requireOwner(req, res))) return;
-
+      // Phase 6b: open endpoint (Phase 8 will reinstate requireOwner).
       const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
-      const ownerGhlUserId = req.get("x-ghl-user-id");
+      // Owner identity for excluding Lionel from the cross-artist list.
+      // Prefer the iOS-provided header; fall back to the LIONEL_GHL_ID
+      // constant when called from the Rent Tracker web (no header).
+      const ownerGhlUserId = req.get("x-ghl-user-id") || LIONEL_GHL_ID;
 
       const now = new Date();
       const weekStart = getWeekStart(now);
@@ -3227,6 +3239,381 @@ function createApp() {
       });
     } catch (error) {
       console.error("[ShopBoard] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 6b · Rent Tracker Web — Owner Audit Surfaces
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/shop/fee-revenue?period=YYYY
+   *
+   * Returns month-by-month + YTD financing fee revenue (Stripe 6%).
+   * The fee is parsed from `transactions.notes` matching:
+   *     "(incl. $XX financing fee → shop)"
+   * Only Stripe-method transactions are considered. Refunded amounts
+   * are NOT yet subtracted (Phase 7 polish — needs a `refunded_at`
+   * filter once refund handling lands).
+   *
+   * Response: {
+   *   success: true,
+   *   period: "2026",
+   *   months: [{ month: "2026-04", label: "April 2026", feeRevenue, transactionCount }, ...],
+   *   ytdFeeRevenue: number,
+   *   ytdTransactionCount: number,
+   *   parseFailures: number  // rows that looked Stripe but didn't match the regex
+   * }
+   */
+  app.get("/api/shop/fee-revenue", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const period = String(req.query.period || new Date().getFullYear());
+      const yearNum = parseInt(period, 10);
+      if (!Number.isFinite(yearNum) || yearNum < 2020 || yearNum > 2100) {
+        return res.status(400).json({ success: false, error: "Invalid period" });
+      }
+
+      const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
+      const startOfYear = `${yearNum}-01-01T00:00:00Z`;
+      const endOfYear = `${yearNum + 1}-01-01T00:00:00Z`;
+
+      // Pull all Stripe-method tattoo transactions in the year. We filter
+      // by payment_method LIKE 'stripe%' to capture stripe_affirm,
+      // stripe_klarna, stripe_card, etc. Notes column carries the fee.
+      const { data: txs, error } = await supabase
+        .from("transactions")
+        .select("id, gross_amount, payment_method, notes, created_at, session_date")
+        .eq("location_id", locationId)
+        .gte("created_at", startOfYear)
+        .lt("created_at", endOfYear)
+        .like("payment_method", "stripe%");
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      // Bucket by month
+      const monthsByKey = {};
+      let parseFailures = 0;
+      const feeRegex = /\(incl\. \$?([\d.]+) financing fee/i;
+
+      for (const t of txs || []) {
+        const match = (t.notes || "").match(feeRegex);
+        const fee = match ? parseFloat(match[1]) : null;
+        if (!match) {
+          parseFailures += 1;
+          continue;
+        }
+        const date = t.session_date || t.created_at;
+        const d = new Date(date);
+        if (isNaN(d.getTime())) continue;
+        const monthKey = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}`;
+        if (!monthsByKey[monthKey]) {
+          monthsByKey[monthKey] = { feeRevenue: 0, transactionCount: 0 };
+        }
+        monthsByKey[monthKey].feeRevenue += fee;
+        monthsByKey[monthKey].transactionCount += 1;
+      }
+
+      const monthLabel = (key) => {
+        const [y, m] = key.split("-");
+        const monthNames = ["January", "February", "March", "April", "May", "June",
+          "July", "August", "September", "October", "November", "December"];
+        return `${monthNames[parseInt(m, 10) - 1]} ${y}`;
+      };
+
+      const months = Object.keys(monthsByKey)
+        .sort((a, b) => b.localeCompare(a)) // newest first
+        .map((key) => ({
+          month: key,
+          label: monthLabel(key),
+          feeRevenue: Number(monthsByKey[key].feeRevenue.toFixed(2)),
+          transactionCount: monthsByKey[key].transactionCount,
+        }));
+
+      const ytdFeeRevenue = months.reduce((s, m) => s + m.feeRevenue, 0);
+      const ytdTransactionCount = months.reduce((s, m) => s + m.transactionCount, 0);
+
+      res.json({
+        success: true,
+        period,
+        months,
+        ytdFeeRevenue: Number(ytdFeeRevenue.toFixed(2)),
+        ytdTransactionCount,
+        parseFailures,
+      });
+    } catch (error) {
+      console.error("[FeeRevenue] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/shop/outstanding-receivables
+   *
+   * Returns the cross-artist outstanding-client pipeline. Iterates every
+   * active tattoo artist, calls computeContactReconciliation per contact
+   * with final_price set, then dedupes contacts by id (a contact tied to
+   * multiple artists picks the most-recent assignment).
+   *
+   * Response: {
+   *   success: true,
+   *   total: number,            // sum of outstanding across all contacts
+   *   activeProjectCount: number,
+   *   topContacts: [{ contactId, contactName, artistName, quote, collected, outstanding }, ...20]
+   * }
+   */
+  app.get("/api/shop/outstanding-receivables", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
+
+      // 1. Get all tattoo transactions; group by contact_id; for each contact
+      //    pick the artist_ghl_id from the LATEST transaction (canonical owner).
+      const { data: txs, error: txErr } = await supabase
+        .from("transactions")
+        .select("contact_id, contact_name, artist_ghl_id, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type, created_at")
+        .eq("location_id", locationId);
+      if (txErr) return res.status(500).json({ success: false, error: txErr.message });
+
+      // Group transactions by contact_id, recording latest artist + name
+      const byContact = {};
+      for (const t of txs || []) {
+        if (!t.contact_id) continue;
+        if (!byContact[t.contact_id]) {
+          byContact[t.contact_id] = {
+            contactId: t.contact_id,
+            contactName: t.contact_name || "",
+            latestArtistGhlId: t.artist_ghl_id,
+            latestCreatedAt: t.created_at,
+            transactions: [],
+          };
+        }
+        const c = byContact[t.contact_id];
+        if (!c.contactName && t.contact_name) c.contactName = t.contact_name;
+        if (t.created_at && (!c.latestCreatedAt || t.created_at > c.latestCreatedAt)) {
+          c.latestCreatedAt = t.created_at;
+          c.latestArtistGhlId = t.artist_ghl_id;
+        }
+        c.transactions.push(t);
+      }
+
+      // 2. Pull artist names + commission rates so we can label rows.
+      const { data: rates } = await supabase
+        .from("artist_commission_rates")
+        .select("artist_ghl_id, artist_name, shop_percentage")
+        .eq("location_id", locationId)
+        .is("effective_to", null);
+      const artistNames = {};
+      for (const r of rates || []) {
+        artistNames[r.artist_ghl_id] = r.artist_name;
+      }
+
+      // 3. For each contact, compute outstanding via Phase 1 math engine.
+      //    Skip contacts with null final_price (no contract quote → undefined).
+      const contactIds = Object.keys(byContact);
+      const rows = [];
+
+      // Concurrency limit — 5 GHL contact lookups in flight at once
+      const concurrency = 5;
+      let cursor = 0;
+      async function next() {
+        while (cursor < contactIds.length) {
+          const idx = cursor++;
+          const contactId = contactIds[idx];
+          const c = byContact[contactId];
+          try {
+            const quote = await fetchContractQuote(contactId);
+            if (quote == null) continue;
+            const latestTx = c.transactions[c.transactions.length - 1];
+            const shopPercentage = latestTx?.shop_percentage != null
+              ? Number(latestTx.shop_percentage)
+              : 30;
+            const summary = computeContactReconciliation({
+              quote,
+              shopPercentage,
+              transactions: c.transactions,
+            });
+            if (summary.outstanding <= 0) continue;
+            rows.push({
+              contactId,
+              contactName: c.contactName || "Unknown Client",
+              artistGhlId: c.latestArtistGhlId,
+              artistName: artistNames[c.latestArtistGhlId] || c.latestArtistGhlId,
+              quote: summary.quote,
+              collected: summary.collected,
+              outstanding: summary.outstanding,
+            });
+          } catch (e) {
+            console.error(`[Receivables] contact ${contactId} error:`, e.message);
+          }
+        }
+      }
+      await Promise.all(Array.from({ length: concurrency }, () => next()));
+
+      // 4. Aggregate + sort top 20
+      const total = rows.reduce((s, r) => s + Number(r.outstanding || 0), 0);
+      const topContacts = rows
+        .sort((a, b) => Number(b.outstanding) - Number(a.outstanding))
+        .slice(0, 20);
+
+      res.json({
+        success: true,
+        total: Number(total.toFixed(2)),
+        activeProjectCount: rows.length,
+        topContacts,
+      });
+    } catch (error) {
+      console.error("[Receivables] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * GET /api/shop/audit-log?startDate=...&endDate=...&artistId=...&type=...&limit=100&offset=0
+   *
+   * Unified time-ordered audit log combining:
+   *   - reconciliations (settled rows with settled_at)
+   *   - reconciliation_email_log (every parser decision)
+   *
+   * Each row is normalized to { id, eventType, occurredAt, artistGhlId, artistName, amount, code, decision, decisionNote, sourceTable, settledVia, reconciliationId }.
+   *
+   * Filters:
+   *   startDate / endDate — ISO strings, applied to occurredAt
+   *   artistId — optional, restricts to one artist
+   *   type — optional, restricts to one eventType
+   *   limit (default 100, max 500), offset (default 0)
+   *
+   * Response: { success, events: [...], total, limit, offset }
+   */
+  app.get("/api/shop/audit-log", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
+
+      const limit = Math.min(parseInt(req.query.limit || "100", 10), 500);
+      const offset = Math.max(parseInt(req.query.offset || "0", 10), 0);
+      const artistId = req.query.artistId || null;
+      const startDate = req.query.startDate || null;
+      const endDate = req.query.endDate || null;
+      const typeFilter = req.query.type || null;
+
+      // Fetch artist name map for labeling
+      const { data: rates } = await supabase
+        .from("artist_commission_rates")
+        .select("artist_ghl_id, artist_name")
+        .eq("location_id", locationId)
+        .is("effective_to", null);
+      const artistNames = {};
+      for (const r of rates || []) {
+        artistNames[r.artist_ghl_id] = r.artist_name;
+      }
+
+      // Fetch settlements
+      let settlementsQuery = supabase
+        .from("reconciliations")
+        .select("id, artist_ghl_id, week_start, week_end, net_amount, direction, status, venmo_code, settled_at, settled_via, settlement_payment_id, created_at")
+        .eq("status", "settled");
+      if (artistId) settlementsQuery = settlementsQuery.eq("artist_ghl_id", artistId);
+      if (startDate) settlementsQuery = settlementsQuery.gte("settled_at", startDate);
+      if (endDate) settlementsQuery = settlementsQuery.lte("settled_at", endDate);
+      const { data: settlements, error: settlementsErr } = await settlementsQuery;
+      if (settlementsErr) {
+        return res.status(500).json({ success: false, error: settlementsErr.message });
+      }
+
+      // Fetch parser log
+      let logQuery = supabase
+        .from("reconciliation_email_log")
+        .select("id, artist_ghl_id, parsed_amount, parsed_code, decision, decision_note, reconciliation_id, created_at");
+      if (artistId) logQuery = logQuery.eq("artist_ghl_id", artistId);
+      if (startDate) logQuery = logQuery.gte("created_at", startDate);
+      if (endDate) logQuery = logQuery.lte("created_at", endDate);
+      const { data: logs, error: logsErr } = await logQuery;
+      if (logsErr) {
+        return res.status(500).json({ success: false, error: logsErr.message });
+      }
+
+      // Normalize into a unified event array
+      const events = [];
+
+      for (const s of settlements || []) {
+        events.push({
+          id: `settle:${s.id}`,
+          eventType: s.settled_via === "venmo_auto" ? "settled_auto" : "settled_manual",
+          occurredAt: s.settled_at,
+          artistGhlId: s.artist_ghl_id,
+          artistName: artistNames[s.artist_ghl_id] || s.artist_ghl_id,
+          amount: Number(s.net_amount),
+          code: s.venmo_code,
+          decision: s.status,
+          decisionNote: s.settlement_payment_id
+            ? `Tx ${s.settlement_payment_id}`
+            : `Settled via ${s.settled_via || "unknown"}`,
+          sourceTable: "reconciliations",
+          settledVia: s.settled_via,
+          reconciliationId: s.id,
+          weekStart: s.week_start,
+          weekEnd: s.week_end,
+          direction: s.direction,
+        });
+      }
+
+      for (const l of logs || []) {
+        // Skip "settled" rows from the log if we already have the settlement
+        // (avoid duplicate entries — the settlement row above is canonical).
+        if (l.decision === "settled" && l.reconciliation_id &&
+            (settlements || []).some((s) => s.id === l.reconciliation_id)) {
+          continue;
+        }
+        events.push({
+          id: `log:${l.id}`,
+          eventType: `parser_${l.decision}`,
+          occurredAt: l.created_at,
+          artistGhlId: l.artist_ghl_id,
+          artistName: l.artist_ghl_id ? (artistNames[l.artist_ghl_id] || l.artist_ghl_id) : null,
+          amount: l.parsed_amount != null ? Number(l.parsed_amount) : null,
+          code: l.parsed_code,
+          decision: l.decision,
+          decisionNote: l.decision_note,
+          sourceTable: "reconciliation_email_log",
+          settledVia: null,
+          reconciliationId: l.reconciliation_id,
+        });
+      }
+
+      // Optional eventType filter (after normalization so users can filter
+      // by 'settled_auto', 'settled_manual', or any 'parser_*').
+      const filtered = typeFilter
+        ? events.filter((e) => e.eventType === typeFilter || e.decision === typeFilter)
+        : events;
+
+      // Sort newest first
+      filtered.sort((a, b) => {
+        const ta = a.occurredAt ? new Date(a.occurredAt).getTime() : 0;
+        const tb = b.occurredAt ? new Date(b.occurredAt).getTime() : 0;
+        return tb - ta;
+      });
+
+      const total = filtered.length;
+      const page = filtered.slice(offset, offset + limit);
+
+      res.json({
+        success: true,
+        events: page,
+        total,
+        limit,
+        offset,
+      });
+    } catch (error) {
+      console.error("[AuditLog] error:", error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
