@@ -11,6 +11,11 @@ const {
   searchGoogleMaps,
   searchLocalPack,
   getReviews,
+  googleAutocomplete,
+  googleRelatedQuestions,
+  googleTrends,
+  searchYelp,
+  searchYouTube,
   findRankingPosition,
   trackKeywordRankings,
   competitorAnalysis,
@@ -447,6 +452,96 @@ router.get("/maps/reviews/:placeId", async (req, res) => {
     res.json({ success: true, ...reviews });
   } catch (err) {
     console.error("[SEO] reviews error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+// ──────────────────────────────────────
+// Keyword research + trends + cross-platform discoverability
+// ──────────────────────────────────────
+
+/**
+ * GET /api/seo/serp/autocomplete?q=tattoo+shop+minneap
+ * Returns Google's autocomplete suggestions for a partial query.
+ */
+router.get("/serp/autocomplete", async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q param" });
+    const data = await googleAutocomplete(q);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error("[SEO] autocomplete error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/serp/related-questions?q=tattoo+aftercare
+ * Returns Google's "People Also Ask" + related searches for a query.
+ */
+router.get("/serp/related-questions", async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q param" });
+    const data = await googleRelatedQuestions(q);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error("[SEO] related-questions error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/serp/trends?q=tattoo+minneapolis&geo=US-MN&date=today+12-m
+ * Returns Google Trends interest-over-time and related queries for a keyword.
+ * Comma-separated multiple keywords supported (max 5).
+ */
+router.get("/serp/trends", async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q param" });
+    const keywords = q.includes(",") ? q.split(",").map((s) => s.trim()) : q;
+    const data = await googleTrends(keywords, {
+      geo: req.query.geo,
+      dateRange: req.query.date,
+      dataType: req.query.data_type,
+    });
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error("[SEO] trends error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/serp/yelp?q=tattoo&location=Minneapolis,+MN
+ * Returns Yelp business listings for a search query in a location.
+ */
+router.get("/serp/yelp", async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q param" });
+    const data = await searchYelp(q, { location: req.query.location });
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error("[SEO] yelp error:", err.response?.data || err.message);
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+/**
+ * GET /api/seo/serp/youtube?q=fine+line+tattoo+minneapolis
+ * Returns YouTube video and channel results for a query.
+ */
+router.get("/serp/youtube", async (req, res) => {
+  try {
+    const q = req.query.q;
+    if (!q) return res.status(400).json({ success: false, error: "Missing q param" });
+    const data = await searchYouTube(q);
+    res.json({ success: true, ...data });
+  } catch (err) {
+    console.error("[SEO] youtube error:", err.response?.data || err.message);
     res.status(500).json({ success: false, error: err.message });
   }
 });

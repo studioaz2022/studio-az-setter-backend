@@ -132,6 +132,187 @@ async function getReviews(placeId) {
 }
 
 /**
+ * Get Google search autocomplete suggestions for a partial query.
+ * Reveals what real people type when they start a search — gold mine for
+ * keyword research and content topic discovery.
+ *
+ * @param {string} partial - Partial query, e.g. "tattoo shop minneap"
+ * @param {object} options
+ * @param {string} options.location - Geo bias (default: Minneapolis)
+ */
+async function googleAutocomplete(partial, options = {}) {
+  const params = {
+    engine: "google_autocomplete",
+    q: partial,
+    gl: "us",
+    hl: "en",
+    api_key: API_KEY,
+  };
+
+  const resp = await axios.get(BASE_URL, { params, timeout: 30000 });
+  const suggestions = resp.data.suggestions || [];
+
+  return {
+    query: partial,
+    suggestions: suggestions.map((s, idx) => ({
+      position: idx + 1,
+      value: s.value,
+      relevance: s.relevance,
+      type: s.type, // "QUERY" or "NAVIGATION" etc.
+    })),
+  };
+}
+
+/**
+ * Get "People Also Ask" related questions for a Google search.
+ * Each question is a content opportunity — Google literally tells you
+ * what your audience wants answered.
+ *
+ * @param {string} query - The search query
+ * @param {object} options
+ */
+async function googleRelatedQuestions(query, options = {}) {
+  const params = {
+    engine: "google",
+    q: query,
+    location: options.location || "Minneapolis, Minnesota, United States",
+    google_domain: "google.com",
+    gl: "us",
+    hl: "en",
+    api_key: API_KEY,
+  };
+
+  const resp = await axios.get(BASE_URL, { params, timeout: 30000 });
+  const paa = resp.data.related_questions || [];
+  const relatedSearches = resp.data.related_searches || [];
+
+  return {
+    query,
+    peopleAlsoAsk: paa.map((q) => ({
+      question: q.question,
+      snippet: q.snippet,
+      title: q.title,
+      link: q.link,
+      source: q.displayed_link,
+    })),
+    relatedSearches: relatedSearches.map((r) => r.query).filter(Boolean),
+  };
+}
+
+/**
+ * Get Google Trends data for one or more keywords.
+ * Useful for catching seasonality (when does tattoo demand spike?) and
+ * timing campaigns / content launches.
+ *
+ * @param {string|string[]} keywords - One or up to 5 keywords (Google Trends limit)
+ * @param {object} options
+ * @param {string} options.geo - Geographic restriction (default: "US-MN" for Minnesota)
+ * @param {string} options.dateRange - "today 1-m" | "today 3-m" | "today 12-m" | "today 5-y"
+ * @param {string} options.dataType - "TIMESERIES" (default), "GEO_MAP", "RELATED_QUERIES"
+ */
+async function googleTrends(keywords, options = {}) {
+  const q = Array.isArray(keywords) ? keywords.join(",") : keywords;
+  const params = {
+    engine: "google_trends",
+    q,
+    geo: options.geo || "US-MN",
+    date: options.dateRange || "today 12-m",
+    data_type: options.dataType || "TIMESERIES",
+    api_key: API_KEY,
+  };
+
+  const resp = await axios.get(BASE_URL, { params, timeout: 30000 });
+  return {
+    keywords: Array.isArray(keywords) ? keywords : [keywords],
+    geo: params.geo,
+    dateRange: params.date,
+    interestOverTime: resp.data.interest_over_time || null,
+    interestByRegion: resp.data.interest_by_region || null,
+    relatedQueries: resp.data.related_queries || null,
+    relatedTopics: resp.data.related_topics || null,
+  };
+}
+
+/**
+ * Search Yelp and return business listings + Studio AZ's position if found.
+ *
+ * @param {string} keyword - e.g. "tattoo"
+ * @param {object} options
+ * @param {string} options.location - default "Minneapolis, MN, USA"
+ * @param {string} options.findDesc - Find description (defaults to keyword)
+ */
+async function searchYelp(keyword, options = {}) {
+  const params = {
+    engine: "yelp",
+    find_desc: options.findDesc || keyword,
+    find_loc: options.location || "Minneapolis, MN, USA",
+    api_key: API_KEY,
+  };
+
+  const resp = await axios.get(BASE_URL, { params, timeout: 30000 });
+  const results = resp.data.organic_results || [];
+
+  return {
+    keyword,
+    location: params.find_loc,
+    totalResults: results.length,
+    results: results.map((r, idx) => ({
+      position: idx + 1,
+      name: r.title,
+      yelpUrl: r.link,
+      rating: r.rating,
+      reviewCount: r.reviews,
+      neighborhoods: r.neighborhoods,
+      categories: r.categories,
+      phone: r.phone,
+      price: r.price,
+      placeIdsId: r.place_ids?.[0],
+    })),
+  };
+}
+
+/**
+ * Search YouTube for a query and return video results. Useful for checking
+ * whether your social/portfolio video content is discoverable in YouTube
+ * search (and Google Video search by extension).
+ *
+ * @param {string} keyword - e.g. "fine line tattoo minneapolis"
+ */
+async function searchYouTube(keyword) {
+  const params = {
+    engine: "youtube",
+    search_query: keyword,
+    api_key: API_KEY,
+  };
+
+  const resp = await axios.get(BASE_URL, { params, timeout: 30000 });
+  const videos = resp.data.video_results || [];
+  const channels = resp.data.channel_results || [];
+
+  return {
+    keyword,
+    videoCount: videos.length,
+    videos: videos.slice(0, 20).map((v, idx) => ({
+      position: idx + 1,
+      title: v.title,
+      link: v.link,
+      channel: v.channel?.name,
+      channelLink: v.channel?.link,
+      views: v.views,
+      published: v.published_date,
+      length: v.length,
+      description: v.description,
+    })),
+    channels: channels.slice(0, 5).map((c) => ({
+      name: c.title,
+      link: c.link,
+      subscribers: c.subscribers,
+      verified: c.verified,
+    })),
+  };
+}
+
+/**
  * Find Studio AZ's position in Google Maps results for a keyword.
  *
  * @param {string} keyword - Search keyword
@@ -249,6 +430,11 @@ module.exports = {
   searchGoogleMaps,
   searchLocalPack,
   getReviews,
+  googleAutocomplete,
+  googleRelatedQuestions,
+  googleTrends,
+  searchYelp,
+  searchYouTube,
   findRankingPosition,
   trackKeywordRankings,
   competitorAnalysis,
