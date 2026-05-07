@@ -2783,8 +2783,34 @@ function createApp() {
       const locationId = process.env.GHL_LOCATION_ID;
       const { artistName } = await fetchArtistContext(artistId, locationId);
 
-      // Pull all unsettled completions for this artist that fall in the week.
-      const { data: completions, error } = await supabase
+      // Phase 5 — pending row may already exist for this (artist, week_start).
+      // We pull completions in two passes so the running total stays accurate
+      // even after the row is eager-created mid-week:
+      //   pass 1: completions linked to an existing PENDING row for this week
+      //   pass 2: unsettled completions (reconciliation_id IS NULL) in this week
+      // The two sets are disjoint (FK is set when linking, NULL otherwise).
+      const { toShopDateString } = require("../utils/dateUtils");
+      const weekStartStr = toShopDateString(weekStart);
+
+      const { data: existingRecon } = await supabase
+        .from("reconciliations")
+        .select("id, status, settled_at")
+        .eq("artist_ghl_id", artistId)
+        .eq("week_start", weekStartStr)
+        .maybeSingle();
+
+      const linkedCompletions = existingRecon
+        ? (
+            await supabase
+              .from("project_completions")
+              .select("*")
+              .eq("artist_ghl_id", artistId)
+              .eq("reconciliation_id", existingRecon.id)
+              .order("completed_at", { ascending: true })
+          ).data || []
+        : [];
+
+      const { data: unlinkedCompletions, error: unlinkedErr } = await supabase
         .from("project_completions")
         .select("*")
         .eq("artist_ghl_id", artistId)
@@ -2792,16 +2818,97 @@ function createApp() {
         .gte("completed_at", weekStart.toISOString())
         .lte("completed_at", weekEnd.toISOString())
         .order("completed_at", { ascending: true });
-      if (error) return res.status(500).json({ success: false, error: error.message });
+      if (unlinkedErr) return res.status(500).json({ success: false, error: unlinkedErr.message });
+
+      const completions = [...linkedCompletions, ...(unlinkedCompletions || [])];
 
       const result = computeWeeklyReconciliation({
         artistGhlId: artistId,
         artistName: artistName || artistId,
         weekStart,
         weekEnd,
-        completions: completions || [],
+        completions,
       });
-      res.json({ success: true, status: "pending", ...result });
+
+      // Phase 5 — Eager-create or update the pending reconciliations row so:
+      //   (a) Phase 3's "Mark Settled" button has a real id to settle, and
+      //   (b) when Lionel sends a Venmo with [a:XXXNNNN], the parser finds
+      //       a row to settle against immediately.
+      //
+      // Only create if there are completions AND direction != "settled"
+      // (a zero-net week shouldn't generate a phantom row).
+      let reconciliationId = existingRecon?.id || null;
+      let status = existingRecon?.status || "pending";
+
+      if (result.projectCount > 0 && result.direction !== "settled") {
+        if (existingRecon) {
+          // Refresh totals on the existing PENDING row (idempotent for SETTLED).
+          if (existingRecon.status === "pending") {
+            await supabase
+              .from("reconciliations")
+              .update({
+                net_amount: result.netAmount,
+                direction: result.direction,
+                venmo_note: result.venmoNote,
+                project_count: result.projectCount,
+              })
+              .eq("id", existingRecon.id);
+          }
+        } else {
+          // Insert new pending row. UNIQUE(venmo_code) collision retried with -2 suffix.
+          const insertPayload = {
+            artist_ghl_id: artistId,
+            week_start: result.weekStart,
+            week_end: result.weekEnd,
+            net_amount: result.netAmount,
+            direction: result.direction,
+            status: "pending",
+            venmo_code: result.venmoCode,
+            venmo_note: result.venmoNote,
+            project_count: result.projectCount,
+          };
+          const { data: inserted, error: insertErr } = await supabase
+            .from("reconciliations")
+            .insert(insertPayload)
+            .select("id")
+            .maybeSingle();
+
+          if (insertErr) {
+            if (String(insertErr.message || "").toLowerCase().includes("unique")) {
+              const retryCode = `${result.venmoCode}-2`;
+              const { data: retryInserted } = await supabase
+                .from("reconciliations")
+                .insert({ ...insertPayload, venmo_code: retryCode })
+                .select("id")
+                .maybeSingle();
+              reconciliationId = retryInserted?.id || null;
+            } else {
+              console.error("[Reconciliation] eager insert failed:", insertErr.message);
+            }
+          } else {
+            reconciliationId = inserted?.id || null;
+          }
+
+          // Link the unsettled completions we just rolled into this row so we
+          // don't double-count on the next /current call. Linked completions
+          // continue to be included via pass-1 above, so subsequent additions
+          // (new projects completed this week) still aggregate correctly.
+          if (reconciliationId && unlinkedCompletions && unlinkedCompletions.length > 0) {
+            const completionIds = unlinkedCompletions.map((c) => c.id);
+            await supabase
+              .from("project_completions")
+              .update({ reconciliation_id: reconciliationId })
+              .in("id", completionIds);
+          }
+        }
+      }
+
+      res.json({
+        success: true,
+        status,
+        id: reconciliationId,
+        ...result,
+      });
     } catch (error) {
       console.error("[Reconciliation] current error:", error);
       res.status(500).json({ success: false, error: error.message });
@@ -7058,6 +7165,25 @@ function createApp() {
       if (!parsed.senderName || !parsed.amount) {
         console.log("  ⚠️ Could not parse sender or amount, skipping");
         return res.status(200).json({ ok: true, skipped: "parse-failed" });
+      }
+
+      // 2.5 Tattoo reconciliation routing (Phase 5)
+      // Before tenant matching, check if this is a tattoo-finance reconciliation
+      // payment (note has [a:XXXNNNN] code or "StudioAZ Recon" text). If so,
+      // route to the recon handler. Otherwise fall through to rent/barber logic.
+      const { looksLikeReconciliation } = require("../services/reconciliationVenmoParser");
+      const noteAndBody = `${parsed.note || ""} ${payload?.plain || ""}`;
+      if (looksLikeReconciliation(noteAndBody)) {
+        console.log("  💰 [Recon] Reconciliation candidate detected — routing to handler");
+        const { handleReconciliationVenmoEmail } = require("../services/reconciliationVenmoHandler");
+        const result = await handleReconciliationVenmoEmail({
+          parsed,
+          rawPlain: payload?.plain || "",
+          rawHtml: payload?.html || "",
+          emailDate,
+          rawPayload: payload,
+        });
+        return res.status(200).json({ ok: true, recon: true, ...result });
       }
 
       // 3. Load tenants and match
