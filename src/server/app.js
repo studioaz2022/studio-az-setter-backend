@@ -2974,6 +2974,263 @@ function createApp() {
     }
   });
 
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 6a · Shop Settlements Board (Lionel's owner view)
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Owner-only auth gate. iOS sends the GHL user id of the logged-in user
+   * via x-ghl-user-id; backend verifies they have profiles.role = "owner".
+   * Returns true if authorized, otherwise responds with 401/403 and returns
+   * false so the caller can early-return.
+   *
+   * Same posture as the rest of the iOS↔backend layer (header is not a
+   * cryptographic credential — the GHL ID isn't a secret), but server-side
+   * gating still enforces role separation. Phase 8 security hardening will
+   * upgrade this to JWT-validated when the broader auth pass happens.
+   */
+  async function requireOwner(req, res) {
+    const ghlUserId = req.get("x-ghl-user-id");
+    if (!ghlUserId) {
+      res.status(401).json({ success: false, error: "x-ghl-user-id header required" });
+      return false;
+    }
+    if (!supabase) {
+      res.status(503).json({ success: false, error: "Supabase not configured" });
+      return false;
+    }
+    const { data: profile, error } = await supabase
+      .from("profiles")
+      .select("role")
+      .eq("ghl_user_id", ghlUserId)
+      .maybeSingle();
+    if (error) {
+      res.status(500).json({ success: false, error: error.message });
+      return false;
+    }
+    if (!profile || profile.role !== "owner") {
+      res.status(403).json({ success: false, error: "Owner access required" });
+      return false;
+    }
+    return true;
+  }
+
+  /**
+   * GET /api/shop/settlements-board
+   *
+   * Lionel-only. Returns the cross-artist settlement summary for the iOS
+   * Shop Settlements section. For each active tattoo artist (excluding
+   * Lionel himself, who has his own personal Finance tab below):
+   *   - currentReconciliation: the pending Mon-Sun week (eager-creates row)
+   *   - lastSettledReconciliation: the most recently settled week, if
+   *     within the last 14 days (per Phase 6a decision)
+   *   - venmoUsername: artist_commission_rates.venmo_username if populated
+   *
+   * The pending row creation is intentionally identical to GET /current —
+   * same eager-create + two-pass completion query — so the artist's iOS
+   * view and the owner's iOS view see the exact same id, net, and code.
+   */
+  app.get("/api/shop/settlements-board", async (req, res) => {
+    try {
+      if (!(await requireOwner(req, res))) return;
+
+      const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
+      const ownerGhlUserId = req.get("x-ghl-user-id");
+
+      const now = new Date();
+      const weekStart = getWeekStart(now);
+      const weekEnd = getWeekEnd(now);
+      const weekStartStr = require("../utils/dateUtils").toShopDateString(weekStart);
+
+      // Active tattoo artists. Exclude the owner — their personal Finance tab
+      // shows their own row below.
+      const { data: artists, error: artistsErr } = await supabase
+        .from("artist_commission_rates")
+        .select("artist_ghl_id, artist_name, shop_percentage, artist_percentage, venmo_username")
+        .eq("location_id", locationId)
+        .is("effective_to", null)
+        .neq("artist_ghl_id", ownerGhlUserId);
+      if (artistsErr) {
+        return res.status(500).json({ success: false, error: artistsErr.message });
+      }
+
+      // Lookback boundary for "recently settled" — last 14 days.
+      const fourteenDaysAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+      const rows = [];
+      for (const artist of artists || []) {
+        const artistId = artist.artist_ghl_id;
+        const artistName = artist.artist_name || artistId;
+
+        // ── Current week: re-run the same eager-create flow as /current ──
+        const { data: existingRecon } = await supabase
+          .from("reconciliations")
+          .select("id, status")
+          .eq("artist_ghl_id", artistId)
+          .eq("week_start", weekStartStr)
+          .maybeSingle();
+
+        const linkedCompletions = existingRecon
+          ? (
+              await supabase
+                .from("project_completions")
+                .select("*")
+                .eq("artist_ghl_id", artistId)
+                .eq("reconciliation_id", existingRecon.id)
+                .order("completed_at", { ascending: true })
+            ).data || []
+          : [];
+
+        const { data: unlinkedCompletions } = await supabase
+          .from("project_completions")
+          .select("*")
+          .eq("artist_ghl_id", artistId)
+          .is("reconciliation_id", null)
+          .gte("completed_at", weekStart.toISOString())
+          .lte("completed_at", weekEnd.toISOString())
+          .order("completed_at", { ascending: true });
+
+        const completions = [...linkedCompletions, ...(unlinkedCompletions || [])];
+
+        const currentResult = computeWeeklyReconciliation({
+          artistGhlId: artistId,
+          artistName,
+          weekStart,
+          weekEnd,
+          completions,
+        });
+
+        let currentRow = null;
+        if (currentResult.projectCount > 0 && currentResult.direction !== "settled") {
+          let reconciliationId = existingRecon?.id || null;
+          let status = existingRecon?.status || "pending";
+
+          if (existingRecon) {
+            if (existingRecon.status === "pending") {
+              await supabase
+                .from("reconciliations")
+                .update({
+                  net_amount: currentResult.netAmount,
+                  direction: currentResult.direction,
+                  venmo_note: currentResult.venmoNote,
+                  project_count: currentResult.projectCount,
+                })
+                .eq("id", existingRecon.id);
+            }
+          } else {
+            const insertPayload = {
+              artist_ghl_id: artistId,
+              week_start: currentResult.weekStart,
+              week_end: currentResult.weekEnd,
+              net_amount: currentResult.netAmount,
+              direction: currentResult.direction,
+              status: "pending",
+              venmo_code: currentResult.venmoCode,
+              venmo_note: currentResult.venmoNote,
+              project_count: currentResult.projectCount,
+            };
+            const { data: inserted, error: insertErr } = await supabase
+              .from("reconciliations")
+              .insert(insertPayload)
+              .select("id")
+              .maybeSingle();
+            if (insertErr) {
+              if (String(insertErr.message || "").toLowerCase().includes("unique")) {
+                const retryCode = `${currentResult.venmoCode}-2`;
+                const { data: retryInserted } = await supabase
+                  .from("reconciliations")
+                  .insert({ ...insertPayload, venmo_code: retryCode })
+                  .select("id")
+                  .maybeSingle();
+                reconciliationId = retryInserted?.id || null;
+              } else {
+                console.error("[ShopBoard] eager insert failed:", insertErr.message);
+              }
+            } else {
+              reconciliationId = inserted?.id || null;
+            }
+            if (reconciliationId && unlinkedCompletions && unlinkedCompletions.length > 0) {
+              await supabase
+                .from("project_completions")
+                .update({ reconciliation_id: reconciliationId })
+                .in("id", unlinkedCompletions.map((c) => c.id));
+            }
+          }
+
+          currentRow = {
+            id: reconciliationId,
+            status,
+            ...currentResult,
+          };
+        }
+
+        // ── Last settled within 14 days ──
+        const { data: lastSettled } = await supabase
+          .from("reconciliations")
+          .select("*")
+          .eq("artist_ghl_id", artistId)
+          .eq("status", "settled")
+          .gte("settled_at", fourteenDaysAgo.toISOString())
+          .order("settled_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+
+        rows.push({
+          artistGhlId: artistId,
+          artistName,
+          venmoUsername: artist.venmo_username || null,
+          shopPercentage: Number(artist.shop_percentage),
+          artistPercentage: Number(artist.artist_percentage),
+          currentReconciliation: currentRow,
+          lastSettledReconciliation: lastSettled || null,
+        });
+      }
+
+      // Sort rows: pending shop_owes_artist first (action items), then
+      // pending artist_owes_shop (awaiting), then settled-only at the bottom.
+      rows.sort((a, b) => {
+        const score = (r) => {
+          if (r.currentReconciliation?.direction === "shop_owes_artist") return 0;
+          if (r.currentReconciliation?.direction === "artist_owes_shop") return 1;
+          if (r.lastSettledReconciliation) return 2;
+          return 3;
+        };
+        return score(a) - score(b);
+      });
+
+      // Aggregate top-line totals for the section header
+      const totalToPayOut = rows.reduce((sum, r) => {
+        if (r.currentReconciliation?.direction === "shop_owes_artist") {
+          return sum + Number(r.currentReconciliation.netAmount || 0);
+        }
+        return sum;
+      }, 0);
+      const totalAwaiting = rows.reduce((sum, r) => {
+        if (r.currentReconciliation?.direction === "artist_owes_shop") {
+          return sum + Number(r.currentReconciliation.netAmount || 0);
+        }
+        return sum;
+      }, 0);
+      const pendingArtistCount = rows.filter((r) => r.currentReconciliation != null).length;
+
+      res.json({
+        success: true,
+        weekStart: weekStartStr,
+        weekEnd: require("../utils/dateUtils").toShopDateString(weekEnd),
+        artists: rows,
+        totals: {
+          toPayOut: totalToPayOut,
+          awaiting: totalAwaiting,
+          pendingArtistCount,
+          totalArtistCount: rows.length,
+        },
+      });
+    } catch (error) {
+      console.error("[ShopBoard] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // GET /api/contacts/:contactId/financials - Get client LTV data
   app.get("/api/contacts/:contactId/financials", async (req, res) => {
     try {
