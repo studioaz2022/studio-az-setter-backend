@@ -162,6 +162,28 @@ Build a recurring backend job that pulls and saves all data sources monthly:
 - [ ] Includes month-over-month delta tables for key metrics
 - [ ] Optional: send a summary email/Slack notification with the headline numbers
 
+### 11a. `JOURNAL.md` — site improvement journal (long-term log, append-only)
+The single source of truth for "what's working / what's not / how the site is evolving over time" for THIS specific site. Lives at the site's root: `<site>/JOURNAL.md`.
+
+**Append-only design.** Never edit/delete past entries. If a past claim turns out wrong, add a new dated entry that supersedes it — don't rewrite history. Patterns only emerge if we can see how our understanding evolved.
+
+**Three rolling sections that get appended to over time:**
+1. **Snapshots** — point-in-time data captures (newest at top). Each snapshot links to the deeper analysis file (e.g. `data-baseline-{date}.md`, `local-falcon-rescan-{date}.md`) rather than copy-pasting it.
+2. **Experiments** — changes shipped + hypothesis + verification window + verdict. Each entry has a "Verdict update" line appended once data is in.
+3. **Working / Not Working / Inconclusive tables** — running tallies, one dated row per evidence-update. Don't graduate items by deleting; add a new dated row in the new table.
+
+**When to update:**
+- **Weekly (Monday Insight Loop):** new snapshot row + experiment verdict updates
+- **After every fix shipped:** new experiment entry
+- **Monthly review:** scan trends, append "graduated from X to Y" rows where applicable
+
+**What NOT to do:**
+- Don't compress old months (audit trail is the value)
+- Don't edit historical claims (we want to see how understanding evolved)
+- Don't duplicate what's in `data-baseline-*.md` / `insights/*.md` files — link to them
+
+**Reference example:** [`tattoo/JOURNAL.md`](../../tattoo/JOURNAL.md) — the canonical implementation with a backfill of the first 3 weeks post-launch.
+
 ### 11b. `insight-loop-cadence.md`
 **The most important deliverable in Phase 5.** Establish the analyze→hypothesize→investigate→fix→verify loop as an ongoing weekly practice. Without this, every other deliverable in Phase 5 is just data collection — the loop is what compounds.
 
