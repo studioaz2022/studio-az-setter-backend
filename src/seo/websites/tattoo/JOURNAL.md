@@ -49,6 +49,68 @@ When adding a new entry, copy this template into the appropriate section:
 
 Each snapshot is a frozen "here's what the numbers said on this date." Use them as comparison anchors.
 
+### 2026-05-06 — Quick checks: GBP WoW, schema audit, near-ranking keywords
+
+**Sources:** GBP Performance API, live HTML scraping, Search Console, PageSpeed API
+**Time window:** Multiple — see below per check
+
+#### GBP Performance — week-over-week
+
+| Metric | Prior 7d (Apr 22-28) | Recent 7d (Apr 29-May 5) | Change |
+|---|---|---|---|
+| Mobile Maps impressions | 53 | 28 | **−47%** |
+| Mobile Search impressions | 30 | 22 | −27% |
+| Desktop Search impressions | 28 | 17 | −39% |
+| Desktop Maps impressions | 5 | 13 | **+160%** |
+| **Total impressions** | 116 | 80 | **−31%** |
+| Direction requests | 4 | 11 | **+175%** |
+| Website clicks | 6 | 9 | +50% |
+| Phone calls | 0 | 1 | +1 |
+
+**Interpretation:** Total impressions dropped 31% week-over-week, BUT high-intent actions (directions, website clicks, calls) all climbed. Fewer eyeballs, higher quality eyeballs — could be a category/services optimization effect (cleaned up bloat May 4) routing better-fit traffic. Could also just be a small-sample noise blip — the volumes are too low (80-116 impressions/wk) to draw strong conclusions yet.
+
+**Verdict:** ⚠️ inconclusive — quality up, quantity down. Watch next week to see if quality holds while quantity rebuilds.
+
+#### Schema validation — every page has JSON-LD EXCEPT /consultation
+
+| Page | Schema entities | Status |
+|---|---|---|
+| / | TattooParlor, WebSite, BreadcrumbList | ✓ |
+| /services | 4 × Service, BreadcrumbList | ✓ |
+| /artists | ItemList, BreadcrumbList | ✓ |
+| /artists/joan | Person, ImageGallery, BreadcrumbList | ✓ |
+| /artists/andrew | Person, ImageGallery, BreadcrumbList | ✓ |
+| /gallery | ImageGallery, BreadcrumbList | ✓ |
+| /aftercare | Article, HowTo, BreadcrumbList | ✓ |
+| /parking | Article, BreadcrumbList | ✓ |
+| /faq | FAQPage, BreadcrumbList | ✓ |
+| /contact | TattooParlor, BreadcrumbList | ✓ |
+| **/consultation** | **NONE** | **⚠️ MISSING** |
+
+**Verdict:** 10 pages perfect, 1 gap. /consultation should have at least a `BreadcrumbList` + maybe `FAQPage` or `WebPage` schema. Worth fixing — the page is the conversion endpoint, so search rich-results would help.
+
+#### Search Console — near-ranking keywords (last 30d)
+
+**Position 6-10 (close to top 5 — high leverage):** 28 keywords with 5+ impressions. **The brutal finding:** ~20 of the 28 are AAD-aftercare research queries that go to /aftercare and convert at 0%. Real buyer keywords in this band:
+- **`tattoo shops near me`** — pos 18.8, 24 impressions, **3 clicks** (12.5% CTR — strong) → /
+- **`studio az`** — pos 8.4, 13 impressions → /contact
+- **`az studio minneapolis`** — pos 6.2, 10 impressions → /
+- **`studio a tattoo`** — pos 9.3, 6 impressions → /
+
+**Position 11-20 (page 2 — promotion candidates):** Only **2** — and one is more AAD junk. The single buyer keyword on page 2 is `tattoo shops near me` at 18.8.
+
+**Verdict:** The "easy promotion" pool is shallow. AAD researcher traffic dominates the impression list. The brand-name keywords (`studio az`, `az studio minneapolis`, `studio a tattoo`) are already at acceptable positions for low-volume brand queries. The biggest opportunity is `tattoo shops near me` — if we can move it from position 18.8 to top 5, the CTR could 4-5×.
+
+#### PageSpeed re-run
+
+**Verdict:** ⚠️ blocked — PageSpeed Insights API quota exhausted on project 578174142047. Run manually at https://pagespeed.web.dev/analysis/https-tattooshopminneapolis-com/?form_factor=mobile and add results to a follow-up entry.
+
+**Links:**
+- Schema gap: needs a small fix at `tattoo-website/src/app/(site)/consultation/page.tsx`
+- Near-ranking opportunity: target `tattoo shops near me` with content + internal links to /
+
+---
+
 ### 2026-05-06 — First custom-event data populated
 
 **Sources:** GA4
@@ -264,6 +326,8 @@ Append a new dated row each time data confirms something is working. Don't delet
 | 2026-05-04 | **`llms.txt` for AI crawlers** | 6 sessions from `chatgpt.com` in 30 days. AI search is now sending real traffic. Continue investing. |
 | 2026-05-04 | **Andrew's Meta ad landing page** | `/andrew` is the #2 most-visited page (97 views, 65 users). Meta ads working for him. |
 | 2026-05-04 | **Hero LCP optimization** | Site migration didn't cause a ranking dip in Local Falcon — partially because performance was improved during migration. |
+| 2026-05-06 | **GBP high-intent actions climbing WoW** | Direction requests +175% (4→11), website clicks +50% (6→9), calls +1 even as total impressions dropped 31%. Quality up, quantity down. |
+| 2026-05-06 | **`tattoo shops near me` at pos 18.8 with 12.5% CTR** | 24 impressions / 3 clicks in 30 days — already converting better than industry average for that position. If we can push to page 1, this becomes a major source. |
 | 2026-04-15 | **Domain migration approach** | Held center ranks for tattoo shop minneapolis (#3), tattoo shop near me (#4), tattoo artist minneapolis (#8) through DNS cutover. Most migrations cost 5-10 positions. |
 
 ---
@@ -275,6 +339,8 @@ Append a new dated row each time data shows something isn't working. The "yet" m
 | Date | What | Evidence | Action |
 |---|---|---|---|
 | 2026-05-06 | **/consultation form-start rate (5.3%)** | Only 1 of 19 visitors starts the form despite 80% non-bounce rate and 2:43 avg session duration. People treat the page as info content. | Shipping above-the-fold framing fix on 2026-05-06. Verify 2026-05-13. |
+| 2026-05-06 | **/consultation missing JSON-LD schema** | All 10 other pages have schema; /consultation has NONE. Page is the primary conversion endpoint — should at least have BreadcrumbList + WebPage schema. | Add schema in next commit. Low effort, high value. |
+| 2026-05-06 | **GBP impressions down 31% WoW** | Mobile Maps impressions dropped 53→28, total impressions 116→80. Could be sample noise (low volume) or post-services-cleanup effect. | Monitor next 2 weeks. If sustained drop, re-investigate. |
 | 2026-05-04 | **Aftercare CTR (0% on 3,721 impressions)** | Page ranks well (#7.3 avg position) for AAD aftercare research queries — but those people are researchers, not buyers. Not your audience. | Don't optimize. Treat as vanity impressions. Skip in future analyses. |
 | 2026-05-04 | **High-intent commercial keywords** | "best tattoo shop minneapolis" + "custom tattoo minneapolis" still invisible (rank 21+) | Need authority — primarily reviews. Pace of 1/week is too slow to compete. |
 | 2026-05-04 | **Phone-call CTAs** | Only 2 clicks in 34 days on GBP phone-call action. People don't want to call. | De-prioritize "Call us" CTAs in favor of text/form CTAs. |
@@ -289,6 +355,7 @@ Append a new dated row each time data shows something isn't working. The "yet" m
 | 2026-05-06 | **CTA placement rankings** | Only 1 day of cta_click data + 1 event total. Need ~14 days of multi-CTA traffic. |
 | 2026-05-06 | **Inquiry form (artist landing pages)** | Zero events because no Meta ad traffic in the window. Will populate when ads run again. |
 | 2026-05-06 | **GBP post impact** | Only 1 GBP post created (May 4). Need 4-6 weekly posts before we can say if posting cadence affects Map Pack. |
+| 2026-05-06 | **PageSpeed score after May 4 LCP fix** | API quota exhausted; needs manual run at pagespeed.web.dev. Compare to last test (Performance 76, LCP 5.0s). Expected: Performance 85+, LCP < 3s. |
 | 2026-05-04 | **Ranking trends** | Sites typically need 60-90 days for ranking patterns to stabilize. We're at ~22 days. Anything we infer now is noise. |
 | 2026-05-04 | **Vercel real-world Core Web Vitals** | Just enabled May 4. Need 14+ days of real-visitor LCP/CLS distributions. |
 
@@ -302,6 +369,8 @@ Things worth investigating once we have more data.
 - **Does the Andrew Meta ad landing page convert at a higher rate than the consultation widget?** — wait for inquiry form data + run ads to compare
 - **Which CTA placement converts best on this site specifically?** — placeholder for the 14-day verdict on `cta_location` data
 - **Do reviews actually unlock Map Pack?** — natural experiment as review count grows; correlate review count milestones with Local Falcon SoLV
+- **Did the May 4 GBP services cleanup cause the WoW impression drop?** — first noticed 2026-05-06. Cleaning bloat services should make us LESS findable for irrelevant queries. If true, we'd expect quantity ↓ + quality ↑ — which is exactly what we saw. Monitor 2-3 more weeks to confirm.
+- **Can we push `tattoo shops near me` from page 2 to page 1?** — currently pos 18.8 on /. Already converts at 12.5% CTR. Hypothesis: adding "tattoo shops near me" as an exact phrase 1-2× on / + an internal link from a high-authority page could nudge it. Test fix after consultation framing experiment is verified.
 
 ---
 
