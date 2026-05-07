@@ -235,6 +235,45 @@ Each snapshot is a frozen "here's what the numbers said on this date." Use them 
 
 Each experiment is a deliberate change with a measurable hypothesis. Verdict appears once enough time has passed to verify.
 
+### 2026-05-07 — Target "tattoo shops near me" on homepage + FAQ
+
+**Type:** experiment
+**Hypothesis:** This keyword sits at position 18.8 with 24 impressions and a 12.5% CTR (3 clicks) over the last 30 days. CTR is already strong for that position. Adding the exact phrase to high-authority pages (homepage 2×, FAQ 1× with internal link to home) should nudge the ranking onto page 1 (positions 1-10), potentially 4-5×ing the volume.
+
+**Change shipped:** Commit on 2026-05-07.
+- Homepage: added "tattoo shops near me" exact phrase to two existing paragraphs — the "what you're searching for" hook in the artists intro section (1×) and the final CTA copy (1×). Both naturally placed, no awkward keyword stuffing.
+- FAQ: added a contextual link `<Link href="/">tattoo shops near me</Link>` inside the "Where is Studio AZ located?" answer. This is the highest-authority internal link on the site (FAQ is linked by every page) pointing to / with the target anchor text.
+
+**Verification window:** 2-3 weeks. Search Console position takes time to update.
+
+**Success criteria:** Position moves from 18.8 → top 10 on /. Anything still > 15 means we need bigger levers (backlinks).
+
+**Verdict:** ⏳ pending verification
+
+**Why this might work:** Combination of (a) exact-match keyword frequency on the target page with (b) internal anchor text from a high-authority page is one of the strongest on-page signals. We have no backlink strategy yet, so on-page is our biggest available lever.
+
+**Why this might NOT work:** "tattoo shops near me" is a hyper-competitive query dominated by Google's Local Pack — the organic position 18.8 might be capped by sheer competition no matter what we do on-page. If position doesn't move, we'd need to invest in citations + reviews (Map Pack signals) instead of trying to win the organic listing.
+
+---
+
+### 2026-05-07 — Add JSON-LD schema to /consultation page
+
+**Type:** experiment (technical SEO fix)
+
+**Hypothesis:** The /consultation page had ZERO schema in the live HTML — the `<JsonLd>` was rendered inside a client component wrapped in Suspense, so the script tag only appeared after JS loaded (too late for crawlers). Moving schema to the server-rendered `layout.tsx` adds it to the initial HTML response, so Google sees it.
+
+**Change shipped:** Commit on 2026-05-07.
+- Moved `JsonLd` from `consultation/page.tsx` (client) to `consultation/layout.tsx` (server)
+- Upgraded the schema while moving: was just `BreadcrumbList`; now also `WebPage` with `inLanguage: ["en", "es"]`, `potentialAction: ReserveAction`, and proper `@graph` linkage to the existing site WebSite + Organization entities.
+
+**Verification:** Live HTML now shows 2 entities: WebPage + BreadcrumbList ✓
+
+**Verdict:** ✅ technical fix landed. Ranking impact (if any) is hard to measure — schema's effect is gradual, mostly improves rich-result eligibility.
+
+**Lesson learned:** Any future client component wrapped in Suspense (e.g. for `useSearchParams`) needs its schema rendered in the parent server-side layout/page, NOT inside the client component itself. **Adding this gotcha to the Phase 3 SEO Fix Pass 4 (schema verification) instructions** so future site audits catch this on first pass.
+
+---
+
 ### 2026-05-06 — Add above-the-fold framing to /consultation language picker
 
 **Type:** experiment

@@ -52,6 +52,7 @@ After all pages are built, run these 4 hardening passes — each fixes one SEO l
 - Verify every page has the right JSON-LD types (TattooParlor/HairSalon, Service, Person, FAQPage, HowTo, ImageGallery, BreadcrumbList)
 - Add missing fields like `knowsAbout`, `knowsLanguage`, `sameAs` arrays
 - Run a 12-point verification on every page (title, H1, meta, canonical, breadcrumb, page schema, authority link, target anchor link, internal links present, word count, primary keyword count, locale section if bilingual)
+- **CRITICAL: Verify schema appears in the INITIAL HTML response, not only after JS loads.** Use `curl -s <url> | grep "application/ld+json"` for every page. If a page is missing schema in the curl output but has `<JsonLd>` in source code, the schema is being rendered inside a client component (likely wrapped in `<Suspense>` for `useSearchParams` or similar) — Suspense fallbacks SSR but the actual content does not, so the schema is JS-only and crawlers miss it. **Fix: move the `<JsonLd>` from the client `page.tsx` into the server-rendered `layout.tsx`** so it ships in the initial HTML. (Tattoo site `/consultation` page had this bug — caught in Phase 5 audit.)
 
 ### Stage D — Post-Audit Fixes
 After Pass 4 produces a punch list of remaining issues, fix them in a single batch session.
