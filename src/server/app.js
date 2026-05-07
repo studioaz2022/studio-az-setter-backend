@@ -41,6 +41,7 @@ const {
   assignUnmatchedPayment,
   unmatchPayment,
   recordWalkIn,
+  SquareReauthRequiredError,
 } = require("../payments/squareTransactionSync");
 const { getServicePriceMap } = require("../config/barberServicePrices");
 const { processArtistInquiry, ARTIST_USER_IDS } = require("../services/tattooInquiryService");
@@ -4851,6 +4852,13 @@ function createApp() {
       });
       res.json({ success: true, ...result });
     } catch (error) {
+      if (error instanceof SquareReauthRequiredError) {
+        return res.status(401).json({
+          success: false,
+          errorCode: "square_reauth_required",
+          error: "Square connection expired — please reconnect.",
+        });
+      }
       console.error("[API] Error syncing barber transactions:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
@@ -4873,7 +4881,34 @@ function createApp() {
       });
       res.json({ success: true, ...result });
     } catch (error) {
+      if (error instanceof SquareReauthRequiredError) {
+        return res.status(401).json({
+          success: false,
+          errorCode: "square_reauth_required",
+          error: "Square connection expired — please reconnect.",
+        });
+      }
       console.error("[API] Error backfilling barber transactions:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/has-transactions
+  // Returns whether a barber has ANY existing transaction rows. Used by the iOS
+  // app to distinguish first-time setup (needs backfill) from a re-auth scenario
+  // (already has data, skip the backfill prompt).
+  app.get("/api/barbers/:barberGhlId/has-transactions", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { supabase } = require("../clients/supabaseClient");
+      const { count, error } = await supabase
+        .from("transactions")
+        .select("id", { count: "exact", head: true })
+        .eq("artist_ghl_id", barberGhlId);
+      if (error) throw error;
+      res.json({ success: true, hasTransactions: (count || 0) > 0, count: count || 0 });
+    } catch (error) {
+      console.error("[API] Error checking has-transactions:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });

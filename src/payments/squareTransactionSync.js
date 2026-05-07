@@ -25,6 +25,22 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
+/**
+ * Thrown when a barber's Square access AND refresh tokens are both invalid,
+ * meaning the barber must complete the OAuth flow again from the iOS app.
+ * Route handlers turn this into { errorCode: "square_reauth_required" } so
+ * the client can prompt the user with a reconnect wizard.
+ */
+class SquareReauthRequiredError extends Error {
+  constructor(barberGhlId, cause) {
+    super(`Square re-authentication required for barber ${barberGhlId}`);
+    this.name = "SquareReauthRequiredError";
+    this.barberGhlId = barberGhlId;
+    this.cause = cause;
+    this.errorCode = "square_reauth_required";
+  }
+}
+
 const SYNC_ENV = process.env.SQUARE_SYNC_ENVIRONMENT || process.env.SQUARE_ENVIRONMENT || "sandbox";
 const IS_PROD = SYNC_ENV === "production";
 const SQUARE_BASE_URL = IS_PROD
@@ -112,7 +128,7 @@ function toLocalDate(utcIsoString) {
 async function syncBarberTransactions(barberGhlId, options = {}) {
   const tokenRow = await getBarberToken(barberGhlId);
   if (!tokenRow) {
-    throw new Error(`No Square account connected for barber ${barberGhlId}`);
+    throw new SquareReauthRequiredError(barberGhlId);
   }
 
   let { access_token } = tokenRow;
@@ -147,7 +163,7 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
         `[SquareSync] Square token refresh failed for barber ${barberGhlId}: ${refreshErr.message}. ` +
         `Barber needs to re-connect Square in the iOS app.`
       );
-      throw refreshErr;
+      throw new SquareReauthRequiredError(barberGhlId, refreshErr);
     }
     payments = await fetchSquarePayments(access_token, square_location_id, {
       startDate,
@@ -1419,4 +1435,5 @@ module.exports = {
   unmatchPayment,
   recordWalkIn,
   toLocalDate,
+  SquareReauthRequiredError,
 };
