@@ -251,13 +251,15 @@ Build a backend endpoint that returns the funnel data programmatically (for the 
   "funnel":{
     "steps":[
       {"name":"Started","filterExpression":{"funnelEventFilter":{"eventName":"consultation_started"}}},
-      {"name":"Step 0 — Language","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"parameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"0"}}}}}}},
-      {"name":"Step 1 — Timeline","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"parameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"1"}}}}}}},
+      {"name":"Step 0 — Language","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"eventParameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"0"}}}}}}},
+      {"name":"Step 1 — Timeline","filterExpression":{"funnelEventFilter":{"eventName":"consultation_step_complete","funnelParameterFilterExpression":{"funnelParameterFilter":{"eventParameterName":"step_index","numericFilter":{"operation":"EQUAL","value":{"int64Value":"1"}}}}}}},
       {"name":"Submitted","filterExpression":{"funnelEventFilter":{"eventName":"consultation_submitted"}}}
     ]
   }
 }
 ```
+
+**Schema gotcha:** Use `eventParameterName` (NOT `parameterName`) for parameter filters in `runFunnelReport`. The `runReport` endpoint uses `parameterName` for custom dimension filters; `runFunnelReport` uses `eventParameterName`. Same filter type, different field name. Easy to miss.
 
 **Response includes per-step:** `activeUsers`, `funnelStepCompletionRate`, `funnelStepAbandonments`, `funnelStepAbandonmentRate`. Both as `funnelTable` and `funnelVisualization` blocks.
 
