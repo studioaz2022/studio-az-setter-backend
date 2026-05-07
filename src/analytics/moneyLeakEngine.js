@@ -13,6 +13,7 @@ const {
   getChairUtilization,
 } = require("./analyticsQueries");
 const { getServicePriceMap } = require("../config/barberServicePrices");
+const { centralDayStartIso, centralDayEndIso } = require("../utils/dateUtils");
 const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
 
 // Rolling window for utilization summary aggregation (weeks)
@@ -131,7 +132,7 @@ async function computeRebookAttemptRate(barberGhlId, locationId, periodDays = 90
 
   // Filter to period appointments
   const periodAppointments = allAppointments.filter(
-    a => a.start_time >= startDateStr + "T00:00:00Z"
+    a => a.start_time >= centralDayStartIso(startDateStr)
   );
 
   let bookedNextVisit = 0;
@@ -401,8 +402,8 @@ async function computeCurrentPace(barberGhlId, locationId) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ["confirmed", "booked"])
-    .gt("start_time", centralDateStr + "T00:00:00Z")
-    .lte("start_time", sundayStr + "T23:59:59Z");
+    .gt("start_time", centralDayStartIso(centralDateStr))
+    .lte("start_time", centralDayEndIso(sundayStr));
 
   if (apptError) {
     console.warn(`[Pace] Upcoming appointments query failed: ${apptError.message}`);
@@ -554,7 +555,7 @@ async function computeOverflowDemand(barberGhlId, locationId) {
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", COMPLETED_STATUSES)
-    .gte("start_time", ninetyStr + "T00:00:00Z")
+    .gte("start_time", centralDayStartIso(ninetyStr))
     .order("start_time", { ascending: true }));
 
   if (apptErr) throw new Error(`Overflow demand appointments query failed: ${apptErr.message}`);

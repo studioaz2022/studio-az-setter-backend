@@ -7,6 +7,7 @@
 //   - barber_service_prices: calendar_id, service_type, barber_name
 
 const { supabase, fetchAllRows } = require("../clients/supabaseClient");
+const { centralDayStartIso, centralDayEndIso } = require("../utils/dateUtils");
 
 // Service-type evaluation windows (days)
 const EVALUATION_WINDOWS = {
@@ -55,7 +56,7 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
 
   // Filter out appointments after asOfDate for historical accuracy
   const appointments = asOfDate
-    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    ? rawAppointments.filter(a => a.start_time <= centralDayEndIso(asOfDate))
     : rawAppointments;
   if (appointments.length === 0) {
     return { strict: null, forgiving: null, total: 0, rebooked: 0, pending: 0, notRebooked: 0, nonRegularCount: 0 };
@@ -63,7 +64,7 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
 
   // Load service type mappings
   const serviceTypeMap = await getServiceTypeMap();
-  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const now = asOfDate ? new Date(centralDayEndIso(asOfDate)) : new Date();
 
   // 90-day window cutoff — only consider contacts whose first visit is within this window
   const ninetyDaysAgo = new Date(now);
@@ -153,7 +154,7 @@ async function getRebookingRate(barberGhlId, locationId, asOfDate = null) {
  * Returns: { total, newClients, returningClients }
  */
 async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
-  const ref = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const ref = asOfDate ? new Date(centralDayEndIso(asOfDate)) : new Date();
   const sixtyDaysAgo = new Date(ref);
   sixtyDaysAgo.setDate(sixtyDaysAgo.getDate() - 60);
 
@@ -173,7 +174,7 @@ async function getActiveClientCount(barberGhlId, locationId, asOfDate = null) {
 
   // Filter out appointments after asOfDate for historical accuracy
   const allAppts = asOfDate
-    ? rawAppts.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    ? rawAppts.filter(a => a.start_time <= centralDayEndIso(asOfDate))
     : rawAppts;
   if (allAppts.length === 0) {
     return { total: 0, newClients: 0, returningClients: 0 };
@@ -239,14 +240,14 @@ async function getRegularsCount(barberGhlId, locationId, asOfDate = null) {
 
   // Filter out appointments after asOfDate for historical accuracy
   const appointments = asOfDate
-    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    ? rawAppointments.filter(a => a.start_time <= centralDayEndIso(asOfDate))
     : rawAppointments;
   if (appointments.length === 0) {
     return { count: 0, totalBookings: 0, regularBookingPercentage: null };
   }
 
   const serviceTypeMap = await getServiceTypeMap();
-  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const now = asOfDate ? new Date(centralDayEndIso(asOfDate)) : new Date();
 
   // Group by contact
   const byContact = {};
@@ -400,10 +401,10 @@ async function getNoShowRate(barberGhlId, locationId, periodDays = 30, endDate =
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .gte("start_time", centralDayStartIso(startDate))
     .limit(10000);
 
-  if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
+  if (endDate) query = query.lt("start_time", centralDayStartIso(endDate));
 
   const { data: appointments, error } = await query;
 
@@ -471,10 +472,10 @@ async function getCancellationRate(barberGhlId, locationId, periodDays = 30, end
     .eq("assigned_user_id", barberGhlId)
     .eq("location_id", locationId)
     .in("status", ALL_BOOKED_STATUSES)
-    .gte("start_time", new Date(startDate + "T00:00:00Z").toISOString())
+    .gte("start_time", centralDayStartIso(startDate))
     .limit(10000);
 
-  if (endDate) query = query.lt("start_time", new Date(endDate + "T00:00:00Z").toISOString());
+  if (endDate) query = query.lt("start_time", centralDayStartIso(endDate));
 
   const { data: appointments, error } = await query;
 
@@ -553,14 +554,14 @@ async function getAttritionRate(barberGhlId, locationId, asOfDate = null) {
 
   // Filter out appointments after asOfDate for historical accuracy
   const appointments = asOfDate
-    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    ? rawAppointments.filter(a => a.start_time <= centralDayEndIso(asOfDate))
     : rawAppointments;
   if (appointments.length === 0) {
     return { strict: null, forgiving: null, atritedCount: 0, atRiskCount: 0, totalClients: 0 };
   }
 
   const serviceTypeMap = await getServiceTypeMap();
-  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const now = asOfDate ? new Date(centralDayEndIso(asOfDate)) : new Date();
 
   // Group by contact — take most recent appointment
   const byContact = {};
@@ -624,7 +625,7 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate
 
   // Filter out appointments after asOfDate for historical accuracy
   const appointments = asOfDate
-    ? rawAppointments.filter(a => a.start_time <= asOfDate + "T23:59:59Z")
+    ? rawAppointments.filter(a => a.start_time <= centralDayEndIso(asOfDate))
     : rawAppointments;
   if (appointments.length === 0) {
     return { weeks: [], movingAverage: null, total: 0 };
@@ -639,7 +640,7 @@ async function getNewClientTrend(barberGhlId, locationId, numWeeks = 8, asOfDate
   }
 
   // Build week buckets (going back numWeeks from asOfDate or today)
-  const now = asOfDate ? new Date(asOfDate + "T23:59:59Z") : new Date();
+  const now = asOfDate ? new Date(centralDayEndIso(asOfDate)) : new Date();
   const weeks = [];
   for (let i = numWeeks - 1; i >= 0; i--) {
     const weekEnd = new Date(now);
