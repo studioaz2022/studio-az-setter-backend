@@ -21,6 +21,7 @@ const { backfillAppointments } = require("./appointmentBackfill");
 const { backfillCreatedAtForBarber } = require("./backfillCreatedAt");
 const { supabase } = require("../clients/supabaseClient");
 const { BARBER_DATA } = require("../config/kioskConfig");
+const { getCentralDayBounds } = require("../utils/dateUtils");
 
 const router = express.Router();
 
@@ -193,8 +194,8 @@ router.post("/analytics/backfill-appointments", async (req, res) => {
       });
     }
 
-    const startMs = new Date(start + "T00:00:00Z").getTime();
-    const endMs = new Date(end + "T23:59:59Z").getTime();
+    const { startMs } = getCentralDayBounds(start);
+    const { endMs } = getCentralDayBounds(end);
     const dayCount = Math.ceil((endMs - startMs) / (1000 * 60 * 60 * 24));
 
     const barberGhlId = req.query.barberGhlId || null;

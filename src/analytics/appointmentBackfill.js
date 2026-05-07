@@ -6,6 +6,7 @@ const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { mapGHLAppointmentToSupabase } = require("../clients/appointmentWebhooks");
 const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
+const { getCentralDayBounds, toShopDateString } = require("../utils/dateUtils");
 
 /**
  * Backfill appointments from GHL into Supabase for a date range.
@@ -24,20 +25,26 @@ async function backfillAppointments(startDate, endDate, barberGhlId = null) {
     throw new Error("GHL Barber SDK not configured — set GHL_BARBER_SHOP_TOKEN env var");
   }
 
-  const start = new Date(startDate + "T00:00:00Z");
-  const end = new Date(endDate + "T23:59:59Z");
+  // Iterate day-by-day in shop-local (Central) time, not UTC.
+  // Querying GHL with UTC midnight bounds causes cross-day bleed because UTC
+  // midnight = 6/7pm CST the previous day. Shop dates are Central business days.
   const results = { appointmentsInserted: 0, appointmentsSkipped: 0, daysProcessed: 0, errors: [], totalFetched: 0 };
 
-  const currentDate = new Date(start);
+  // Build the list of Central-time YYYY-MM-DD dates between startDate and endDate (inclusive).
+  const dateList = [];
+  {
+    let cursor = startDate;
+    while (cursor <= endDate) {
+      dateList.push(cursor);
+      // Advance cursor by one day in Central time.
+      const { startMs } = getCentralDayBounds(cursor);
+      const next = new Date(startMs + 25 * 60 * 60 * 1000); // +25h to safely cross DST springs
+      cursor = toShopDateString(next);
+    }
+  }
 
-  while (currentDate <= end) {
-    const dayStart = new Date(currentDate);
-    dayStart.setUTCHours(0, 0, 0, 0);
-
-    const dayEnd = new Date(currentDate);
-    dayEnd.setUTCHours(23, 59, 59, 999);
-
-    const dateStr = currentDate.toISOString().split("T")[0];
+  for (const dateStr of dateList) {
+    const { startMs: dayStartMs, endMs: dayEndMs } = getCentralDayBounds(dateStr);
 
     try {
       // GHL API requires userId — fetch per-barber and deduplicate by event ID
@@ -49,8 +56,8 @@ async function backfillAppointments(startDate, endDate, barberGhlId = null) {
         try {
           const barberEvents = await fetchAppointmentsForDateRange({
             locationId: BARBER_LOCATION_ID,
-            startTime: dayStart.getTime(),
-            endTime: dayEnd.getTime(),
+            startTime: dayStartMs,
+            endTime: dayEndMs,
             userId: barber.ghlUserId,
             sdkInstance: ghlBarber,
           });
@@ -107,8 +114,10 @@ async function backfillAppointments(startDate, endDate, barberGhlId = null) {
               results.errors.push({ date: dateStr, error: upsertError.message, count: batch.length });
               console.error(`[Appt Backfill] Upsert error on ${dateStr}:`, upsertError.message);
             } else {
-              // ignoreDuplicates: rows that already existed are skipped (not returned in data)
-              const inserted = data ? data.length : batch.length;
+              // With ignoreDuplicates: true, `data` contains only the rows that were actually inserted.
+              // Pre-existing rows (skipped due to id conflict) are not returned, so data.length === insertedCount.
+              // If data is null/undefined for any reason, treat as 0 inserted (safer than assuming full batch).
+              const inserted = Array.isArray(data) ? data.length : 0;
               results.appointmentsInserted += inserted;
               results.appointmentsSkipped += batch.length - inserted;
             }
@@ -126,8 +135,6 @@ async function backfillAppointments(startDate, endDate, barberGhlId = null) {
 
     // Rate limit: small delay between days to avoid GHL API throttling
     await new Promise((resolve) => setTimeout(resolve, 200));
-
-    currentDate.setDate(currentDate.getDate() + 1);
   }
 
   console.log(

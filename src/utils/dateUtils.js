@@ -123,11 +123,53 @@ function formatWeekRange(weekStart, weekEnd) {
   return `${monthName(startParts.month)} ${startParts.day}-${monthName(endParts.month)} ${endParts.day}`;
 }
 
+/**
+ * Returns { startMs, endMs } UTC epoch bounds for the given YYYY-MM-DD date in
+ * the shop's timezone (America/Chicago). DST-aware via shopMidnightUtc.
+ *
+ * Use this anywhere we query GHL APIs by date — passing UTC midnight bounds
+ * causes cross-day bleed because UTC midnight = 6/7pm CST the previous day.
+ *
+ * Example: getCentralDayBounds("2026-04-22") returns:
+ *   startMs = April 22 00:00:00 CST = April 22 05:00 UTC (during DST)
+ *   endMs   = April 22 23:59:59.999 CST = April 23 04:59:59.999 UTC
+ */
+function getCentralDayBounds(dateStr) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+    throw new Error(`getCentralDayBounds: dateStr must be YYYY-MM-DD, got "${dateStr}"`);
+  }
+  const [year, month, day] = dateStr.split("-").map(Number);
+  const startDate = shopMidnightUtc(year, month, day);
+  const endDate = new Date(startDate.getTime() + 24 * 60 * 60 * 1000 - 1);
+  return { startMs: startDate.getTime(), endMs: endDate.getTime() };
+}
+
+/**
+ * Returns the ISO timestamp string (e.g. "2026-04-22T05:00:00.000Z") for
+ * Central-time midnight on the given YYYY-MM-DD. Useful for Supabase filters
+ * like .gte("start_time", centralDayStartIso(dateStr)).
+ */
+function centralDayStartIso(dateStr) {
+  return new Date(getCentralDayBounds(dateStr).startMs).toISOString();
+}
+
+/**
+ * Returns the ISO timestamp string for Central-time end-of-day (23:59:59.999)
+ * on the given YYYY-MM-DD. Useful for Supabase .lte/.lt filters.
+ */
+function centralDayEndIso(dateStr) {
+  return new Date(getCentralDayBounds(dateStr).endMs).toISOString();
+}
+
 module.exports = {
   SHOP_TZ,
   shopParts,
+  shopMidnightUtc,
   getWeekStart,
   getWeekEnd,
   toShopDateString,
   formatWeekRange,
+  getCentralDayBounds,
+  centralDayStartIso,
+  centralDayEndIso,
 };
