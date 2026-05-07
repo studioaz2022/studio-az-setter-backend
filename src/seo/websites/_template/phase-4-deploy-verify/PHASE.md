@@ -139,6 +139,8 @@ Hit the Core Web Vitals thresholds. Test at [pagespeed.web.dev](https://pagespee
 - [ ] Add `<link rel="preload" as="image" type="image/webp" href="<hero-poster-url>" />` in root layout `<head>`
 - [ ] Source the hero image from a CDN (R2, Cloudfront, etc.) — preconnect to it in root layout
 - [ ] Remove unused preconnects (PageSpeed flags these)
+- [ ] Hero image dimensions: serve at the actual displayed size (e.g. 1280×720 for desktop hero, smaller for mobile) — don't ship a 1080×1080 image to display in 1280×720
+- **Measured result on tattoo site (April 2026):** these fixes moved Performance 76 → 91 and LCP 5.0s → 3.2s. Expect similar magnitude on any site that started with Next.js `Image` for the hero element.
 
 **CSS render-blocking:**
 - [ ] Tailwind v4 chunks should be inlined where possible (Next.js handles this automatically)

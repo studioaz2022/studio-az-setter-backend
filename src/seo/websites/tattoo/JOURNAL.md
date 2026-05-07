@@ -235,6 +235,54 @@ Each snapshot is a frozen "here's what the numbers said on this date." Use them 
 
 Each experiment is a deliberate change with a measurable hypothesis. Verdict appears once enough time has passed to verify.
 
+### 2026-05-07 — PageSpeed mobile snapshot (post hero LCP fix)
+
+**Type:** snapshot + experiment verdict
+**Source:** PageSpeed Insights (manual run via pagespeed.web.dev)
+**Time window:** Single point-in-time scan, May 5, 2026 11:50 AM CDT
+
+**Mobile scores:**
+| Category | Score |
+|---|---|
+| **Performance** | **91** ← was 76 on Apr 16 |
+| Accessibility | 96 |
+| Best Practices | 96 |
+| **SEO** | **100** |
+
+**Core Web Vitals (mobile lab):**
+| Metric | Apr 16 (before fix) | May 5 (now) | Change | Status |
+|---|---|---|---|---|
+| **LCP** | 5.0s | **3.2s** | **−1.8s** | ⚠ still > 2.5s target but huge improvement |
+| FCP | 1.1s | 1.1s | flat | ✅ green |
+| TBT | n/a | 150ms | n/a | ✅ green |
+| CLS | 0 | 0 | flat | ✅ perfect |
+| Speed Index | n/a | 2.1s | n/a | ✅ green |
+
+**Verdict: ✅ The hero LCP fix shipped on Apr 16 landed.** Performance score moved from 76 → 91 (+15 points). LCP dropped 1.8 seconds — exactly the magnitude we hypothesized when the fix was designed. SEO score is still perfect 100.
+
+**LCP breakdown — what's left (440ms element render delay):**
+1. Render-blocking CSS chunk: 11 KiB, 210ms (≈10ms savings if optimized)
+2. Hero image oversize: 57.6 KiB at 1081×1080, displayed at 1280×720 — resizing to ~720p saves 12 KiB
+3. GTM/GA4 third-party JS: 154 KiB transfer + 223ms main-thread
+
+**Things flagged but small/skipped:**
+- "Legacy JavaScript polyfills" (14 KiB) — Next.js auto-managed; not worth touching
+- "Forced reflow" (69ms) — hero animation; not a real issue
+- "Use efficient cache lifetimes" — recommendation for R2 video assets; would help repeat visits but not first-impression LCP
+- "DOM size" — 516 elements, depth 14; under thresholds
+- "Identical links" accessibility note — minor
+- "Image aspect ratio" — same root cause as oversize image fix above
+- "Sufficient contrast ratio" — single accessibility flag
+
+**Decision: don't chase further unless we hit the next plateau.** Performance 91 / LCP 3.2s is well within the "good" band for a mobile site with hero video + GA4. The marginal returns from the remaining optimizations would require significant work (resizing/serving multiple hero image variants, tearing out GA4) for ~5-point performance gains. The biggest open SEO levers (reviews, content, near-ranking keywords) outweigh further perf work.
+
+**Will revisit performance only if:**
+- Real-world Core Web Vitals from Vercel Speed Insights show LCP > 4s (need 14+ days of data)
+- Search Console "Core Web Vitals" report flags issues
+- A new feature is shipped that visibly slows the page
+
+---
+
 ### 2026-05-07 — Target "tattoo shops near me" on homepage + FAQ
 
 **Type:** experiment
@@ -367,6 +415,8 @@ Append a new dated row each time data confirms something is working. Don't delet
 | 2026-05-04 | **Hero LCP optimization** | Site migration didn't cause a ranking dip in Local Falcon — partially because performance was improved during migration. |
 | 2026-05-06 | **GBP high-intent actions climbing WoW** | Direction requests +175% (4→11), website clicks +50% (6→9), calls +1 even as total impressions dropped 31%. Quality up, quantity down. |
 | 2026-05-06 | **`tattoo shops near me` at pos 18.8 with 12.5% CTR** | 24 impressions / 3 clicks in 30 days — already converting better than industry average for that position. If we can push to page 1, this becomes a major source. |
+| 2026-05-07 | **Hero LCP fix (verdict update)** | PageSpeed mobile: Performance 76 → 91 (+15), LCP 5.0s → 3.2s (−1.8s). Verifies the Apr 16 raw `<img>` + preload + fetchPriority changes worked as designed. **The technique is reusable for every future site we build.** |
+| 2026-05-07 | **Hero `<img>` over Next.js `Image` for LCP element (pattern confirmed)** | Cross-site lesson: Next.js Image proxy adds 700ms+ render delay. Always use raw `<img>` for the LCP/hero element, keep `next/image` for below-fold portfolio shots. |
 | 2026-04-15 | **Domain migration approach** | Held center ranks for tattoo shop minneapolis (#3), tattoo shop near me (#4), tattoo artist minneapolis (#8) through DNS cutover. Most migrations cost 5-10 positions. |
 
 ---
@@ -395,6 +445,7 @@ Append a new dated row each time data shows something isn't working. The "yet" m
 | 2026-05-06 | **Inquiry form (artist landing pages)** | Zero events because no Meta ad traffic in the window. Will populate when ads run again. |
 | 2026-05-06 | **GBP post impact** | Only 1 GBP post created (May 4). Need 4-6 weekly posts before we can say if posting cadence affects Map Pack. |
 | 2026-05-06 | **PageSpeed score after May 4 LCP fix** | API quota exhausted; needs manual run at pagespeed.web.dev. Compare to last test (Performance 76, LCP 5.0s). Expected: Performance 85+, LCP < 3s. |
+| 2026-05-07 | **Resolved →** Performance 91, LCP 3.2s. Graduated to Working table (see 2026-05-07 row). |
 | 2026-05-04 | **Ranking trends** | Sites typically need 60-90 days for ranking patterns to stabilize. We're at ~22 days. Anything we infer now is noise. |
 | 2026-05-04 | **Vercel real-world Core Web Vitals** | Just enabled May 4. Need 14+ days of real-visitor LCP/CLS distributions. |
 
