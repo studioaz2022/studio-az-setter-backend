@@ -162,6 +162,28 @@ Build a recurring backend job that pulls and saves all data sources monthly:
 - [ ] Includes month-over-month delta tables for key metrics
 - [ ] Optional: send a summary email/Slack notification with the headline numbers
 
+### 11b. `insight-loop-cadence.md`
+**The most important deliverable in Phase 5.** Establish the analyze→hypothesize→investigate→fix→verify loop as an ongoing weekly practice. Without this, every other deliverable in Phase 5 is just data collection — the loop is what compounds.
+
+**Process (do every Monday):**
+1. **Pull a week of data** across all 5 sources (GA4, GBP, Search Console, Vercel, Cloudflare)
+2. **Spot ONE anomaly** worth investigating — significantly above or below expected ranges
+3. **List 3-5 hypotheses** for why the anomaly exists
+4. **Investigate each hypothesis** with targeted API queries (different dimensions, time ranges, filters)
+5. **Pick the best-supported hypothesis** and recommend ONE fix
+6. **Ship the fix** within the same week
+7. **Verify in the next week's pull** whether the metric moved
+
+**Save as:** `phase-5-post-launch-ops/insights/{YYYY-MM-DD}-{slug}.md` for each loop iteration. Format: anomaly statement, hypotheses table, investigation results per hypothesis, fix recommended, fix shipped (date + commit), verification result.
+
+This builds an improvement journal over months. Patterns emerge. The site compounds.
+
+**Reference example:** May 6, 2026 — the `/consultation` page form-start drop-off investigation. See [`tattoo/phase-5-post-launch-ops/insights/`](../../tattoo/phase-5-post-launch-ops/insights/) once written.
+
+**Memory file pointer:** [insight_loop_pattern.md](../../../../.claude/projects/-Users-studioaz-Documents-Studio-AZ-Tattoo-App/memory/insight_loop_pattern.md) — captures the pattern for future Claude conversations.
+
+**Future automation:** This loop will eventually be automated and surfaced in the Studio AZ Stats Dashboard as the "Insights" page. See [STATS_DASHBOARD_PLAN.md](../../../STATS_DASHBOARD_PLAN.md). Until that ships, run the loop manually with Claude.
+
 ---
 
 ## Memory Files to Create / Update
