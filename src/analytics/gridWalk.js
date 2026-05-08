@@ -341,10 +341,11 @@ function gridWalkDay({
     perCalendarSlotStatus.set(calId, calSlotMap);
   }
 
-  // ── HC-based primary denominator (Option B framing) ──
-  // Use the haircut calendar's grid for utilization & shop impact.
-  // Per the plan, manually-blocked slots STAY in the denominator (not removed),
-  // so the barber sees the real cost of personal blocks on their score.
+  // ── HC primary slot classification (used for free-slot detection in breakdowns) ──
+  // We still walk the HC interval grid to classify each time marker, because
+  // the cancellation/no-show "is this slot now free?" check uses it. But the
+  // headline utilization number is computed from duration-based capacity below
+  // (Option B: real-capacity denominator), not from counting these markers.
   const primaryGrid = calendarGrids[primaryCalId] || [];
   const primarySlotStatus = new Map();
   if (primaryGrid.length > 0 && primaryConfig) {
@@ -368,28 +369,89 @@ function gridWalkDay({
     }
   }
 
-  // ── Overtime detection ──
-  // Overtime ONLY counts when a GHL-booked appointment STARTS outside the schedule grid.
-  // Synced/informal appointments are excluded — they can include personal blocks
-  // that the classifier marks as appointments (e.g. parenthetical titles), and we
-  // don't want those inflating utilization.
-  let overtimeSlots = 0;
+  // ── Step 6: Real-capacity metrics (Option B: capacity = work_minutes / HC_duration) ──
+  //
+  // Why not slot-marker count: barbers with HC interval < HC duration (e.g. Liam
+  // 15-min interval, 45-min duration) get their day chopped into 32+ overlapping
+  // markers when their actual capacity is only ~10 haircuts. Counting markers
+  // inflates the denominator, making the same level of bookings produce different
+  // utilization numbers across barbers. Real-capacity normalizes this so a 100%
+  // means "you booked your full physical capacity" regardless of widget config.
+  //
+  // - capacityMinutes  = work window minus break time minus manual-block time
+  //                      (manual blocks don't reduce the denominator — they show up
+  //                       as `manuallyBlocked` capacity which Option B keeps in the
+  //                       total. We compute "real available" capacity and "total
+  //                       capacity including blocks" separately.)
+  //
+  // Numerators are duration-based "haircut equivalents":
+  //   - occupied = sum(min(appt.endMin, workEnd) - max(appt.startMin, workStart)) / HC_duration
+  //   - overtime = sum(appt_duration / HC_duration) for appts STARTING past workEnd
+  // Cancelled/no-show appointments don't appear here (they freed up their slot).
+
+  const HC_DURATION = primaryDuration || 30;
+
+  // Total work minutes in schedule (union of all calendars' bookable windows)
+  // workStart/workEnd were computed earlier as the broadest window across calendars
+  const workMinutes = workEnd - workStart;
+
+  // Break minutes within work window
+  let breakMinutesInWindow = 0;
+  for (const brk of mergedBreaks) {
+    const s = Math.max(brk.startMin, workStart);
+    const e = Math.min(brk.endMin, workEnd);
+    if (e > s) breakMinutesInWindow += e - s;
+  }
+
+  // Manual block minutes within work window
+  let blockMinutesInWindow = 0;
+  for (const blk of manualBlocks) {
+    const s = Math.max(blk.startMin, workStart);
+    const e = Math.min(blk.endMin, workEnd);
+    if (e > s) blockMinutesInWindow += e - s;
+  }
+
+  // Total scheduled capacity in haircut equivalents
+  // (work minutes - breaks; blocks STAY in the denominator per Option B)
+  const totalScheduledMinutes = Math.max(0, workMinutes - breakMinutesInWindow);
+  const scheduledSlots = Math.floor(totalScheduledMinutes / HC_DURATION);
+  const manuallyBlocked = Math.floor(blockMinutesInWindow / HC_DURATION);
+
+  // Occupied haircut-equivalents from active appointments INSIDE schedule
+  let occupiedEquivalents = 0;
+  for (const appt of activeAppts) {
+    const s = Math.max(appt.startMin, workStart);
+    const e = Math.min(appt.endMin, workEnd);
+    if (e > s) {
+      occupiedEquivalents += (e - s) / HC_DURATION;
+    }
+  }
+  // Round to nearest whole equivalent for display
+  const occupied = Math.round(occupiedEquivalents);
+
+  // Free = total scheduled - occupied - blocked (clamped to >= 0)
+  const free = Math.max(0, scheduledSlots - occupied - manuallyBlocked);
+
+  // Break-blocked equivalent count (informational; not in denominator)
+  const breakBlocked = Math.floor(breakMinutesInWindow / HC_DURATION);
+
+  // ── Overtime: appointments starting past workEnd ──
+  // Counted in haircut equivalents like everything else.
+  let overtimeEquivalents = 0;
   const allGridSlotTimes = new Set();
   for (const slots of Object.values(calendarGrids)) {
     for (const s of slots) allGridSlotTimes.add(s);
   }
-  const allIntervals = Object.values(calendarConfigs).map((c) => c.slotInterval);
-  const smallestInterval = allIntervals.length > 0 ? Math.min(...allIntervals) : 30;
   for (const appt of ghlActiveAppts) {
     if (appt.startMin >= workEnd && !allGridSlotTimes.has(appt.startMin)) {
       const duration = appt.endMin - appt.startMin;
-      overtimeSlots += Math.ceil(duration / smallestInterval);
+      overtimeEquivalents += duration / HC_DURATION;
     }
   }
+  const overtimeSlots = Math.round(overtimeEquivalents);
 
-  // ── Step 6: Compute metrics ──
-
-  // All-calendar deduped counts
+  // All-calendar deduped marker counts (kept for free-slot display, cancellation
+  // impact detection, debugging — NOT used for utilization)
   let allOccupied = 0,
     allFree = 0,
     allBreakBlocked = 0,
@@ -403,26 +465,10 @@ function gridWalkDay({
     }
   }
 
-  // HC-based counts (the numbers shown to the barber)
-  let occupied = 0,
-    free = 0,
-    breakBlocked = 0,
-    manuallyBlocked = 0;
-  for (const [, status] of primarySlotStatus) {
-    switch (status) {
-      case "occupied": occupied++; break;
-      case "free": free++; break;
-      case "break-blocked": breakBlocked++; break;
-      case "manually-blocked": manuallyBlocked++; break;
-    }
-  }
-
-  // Option B: scheduledSlots = occupied + free + manuallyBlocked
-  // (break-blocked slots are excluded — necessary breaks shouldn't penalize the score)
-  const scheduledSlots = occupied + free + manuallyBlocked;
+  // Utilization (Option B real-capacity)
   const utilization =
     scheduledSlots > 0
-      ? ((occupied + overtimeSlots) / scheduledSlots) * 100
+      ? ((occupiedEquivalents + overtimeEquivalents) / scheduledSlots) * 100
       : null;
 
   // Cancellation/no-show impact: how many of these freed slots are still empty
@@ -562,7 +608,9 @@ function gridWalkDay({
     }
   }
 
-  const scheduledMinutes = scheduledSlots * (primaryInterval || 30);
+  // scheduledMinutes: total bookable minutes for the day (Option B real capacity)
+  // = scheduledSlots × HC_DURATION (matches the haircut-equivalents denominator)
+  const scheduledMinutes = scheduledSlots * HC_DURATION;
   const serviceMixEfficiency =
     scheduledMinutes > 0
       ? (1 - totalDeadSpaceMinutes / scheduledMinutes) * 100
