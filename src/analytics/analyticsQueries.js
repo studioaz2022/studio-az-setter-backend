@@ -7,7 +7,8 @@
 //   - barber_service_prices: calendar_id, service_type, barber_name
 
 const { supabase, fetchAllRows } = require("../clients/supabaseClient");
-const { centralDayStartIso, centralDayEndIso } = require("../utils/dateUtils");
+const { centralDayStartIso, centralDayEndIso, toShopDateString } = require("../utils/dateUtils");
+const { gridWalkUtilizationRange } = require("./gridWalkUtilization");
 
 // Service-type evaluation windows (days)
 const EVALUATION_WINDOWS = {
@@ -762,33 +763,18 @@ async function getChairUtilization(barberGhlId, locationId, periodDays = 60, asO
   const rangeStartsBeforeToday = startDate < centralNow;
 
   try {
-    if (rangeIncludesToday && rangeStartsBeforeToday) {
-      // HYBRID: past days use historical (openHours), today uses live (free slots)
-      // Then merge the two results
-      const yesterday = new Date(centralNow + "T12:00:00Z");
-      yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-      const yesterdayStr = yesterday.toISOString().split("T")[0];
-
-      const [historical, live] = await Promise.all([
-        startDate <= yesterdayStr
-          ? _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, yesterdayStr, periodDays)
-          : null,
-        _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, centralNow, endDateStr, periodDays),
-      ]);
-
-      if (!historical) {
-        return live; // range starts today — no past days
-      }
-
-      // Merge: sum the minutes, recalculate utilization
-      return _mergeUtilization(historical, live, periodDays);
-    } else if (rangeIncludesToday) {
-      // Range starts today or later — pure live mode
-      return await _liveUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays);
-    } else {
-      // Entirely in the past — pure historical mode
-      return await _historicalUtilization(ghlBarber, barberGhlId, locationId, calendarIds, startDate, endDateStr, periodDays);
-    }
+    // The grid-walk engine picks past-vs-live mode per-day internally based on
+    // each date relative to today. We pass the full range and it does the right
+    // thing — Supabase for past days, GHL Calendar Events for today/future.
+    // The returned `mode` will be "historical", "live", or "hybrid" based on
+    // the actual day-mode mix observed.
+    const desiredMode = !rangeIncludesToday ? "historical"
+      : !rangeStartsBeforeToday ? "live"
+      : "hybrid";
+    return await _gridWalkUtilization(
+      ghlBarber, barberGhlId, locationId,
+      startDate, endDateStr, periodDays, desiredMode,
+    );
   } catch (err) {
     console.error(`[ChairUtil] Failed for ${barberGhlId}: ${err.message}`);
     return _emptyUtilization(periodDays);
@@ -811,6 +797,11 @@ function _emptyUtilization(periodDays) {
     breakBlockedSlots: 0, manuallyBlockedSlots: 0,
     unfilledCancelledSlots: 0, unfilledNoshowSlots: 0,
     deadSpaceMinutes: 0, hcDeadSpaceMinutes: 0, slotIntervalMinutes: null,
+    // Option B fields
+    occupiedEquivalents: 0, overtimeEquivalents: 0,
+    slotDurationMinutes: null, freeSlots: 0,
+    cancelledCount: 0, noshowCount: 0,
+    syncedAppointmentCount: 0, informalAppointmentCount: 0,
   };
 }
 
@@ -1427,132 +1418,125 @@ async function _fetchBlockedSlots(httpClient, locationId, userId, startMs, endMs
 }
 
 /**
- * Shared grid-walk utilization engine. Used for both historical and live modes.
- * The only difference: historical mode gets events from Calendar Events API;
- * both modes use the same grid-walk algorithm per day.
+ * Shared grid-walk utilization engine — Option B real-capacity.
+ *
+ * Delegates to src/analytics/gridWalkUtilization.js (the modular, validated
+ * implementation) and aggregates per-day results into the period-level shape
+ * that getChairUtilization() callers expect.
+ *
+ * Mode selection:
+ *   - 'historical': all dates < today → Supabase appointments
+ *   - 'live'      : range includes today/future → GHL Calendar Events
+ *   The new module decides per-day based on the date itself, so for ranges
+ *   that span past + future, this function naturally produces a hybrid result.
+ *
+ * Pooled aggregation uses the EXACT pre-rounding equivalents
+ * (occupiedEquivalents + overtimeEquivalents) instead of rounded slot counts,
+ * preventing per-day rounding errors from accumulating across long windows.
  */
 async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDate, endDateStr, periodDays, mode) {
-  const httpClient = ghlBarber.getHttpClient();
   const { BARBER_DATA } = require("../config/kioskConfig");
-  const barberConfig = BARBER_DATA.find(b => b.ghlUserId === barberGhlId);
-
+  const barberConfig = BARBER_DATA.find((b) => b.ghlUserId === barberGhlId);
   if (!barberConfig?.calendars) {
     console.warn(`[GridWalk] No calendar config for barber ${barberGhlId}`);
     return { ..._emptyUtilization(periodDays), mode };
   }
 
-  // ── 1. Fetch calendar slot configs ──
-  const calendarSlotConfigs = await _fetchCalendarSlotConfigs(ghlBarber, barberConfig);
-
-  // ── 2. Fetch schedules ──
-  let schedules;
+  let dailyResults;
   try {
-    schedules = await _fetchSchedules(httpClient, locationId, barberGhlId);
+    dailyResults = await gridWalkUtilizationRange({
+      barberGhlUserId: barberGhlId,
+      startDateStr: startDate,
+      endDateStr: endDateStr,
+    });
   } catch (err) {
-    console.warn(`[GridWalk] Schedule fetch failed: ${err.message}`);
+    console.warn(`[GridWalk] gridWalkUtilizationRange failed: ${err.message}`);
     return { ..._emptyUtilization(periodDays), mode };
   }
 
-  if (!schedules || schedules.length === 0) {
-    console.warn(`[GridWalk] No schedules found for ${barberGhlId}`);
+  if (!dailyResults || dailyResults.length === 0) {
     return { ..._emptyUtilization(periodDays), mode };
   }
 
-  // ── 3. Fetch blocked slots for full period ──
-  const { startMs: periodStartMs } = _getCentralDayBounds(startDate);
-  const { endMs: periodEndMs } = _getCentralDayBounds(endDateStr);
-  let allBlockedSlots = [];
-  try {
-    allBlockedSlots = await _fetchBlockedSlots(httpClient, locationId, barberGhlId, periodStartMs, periodEndMs);
-  } catch (err) {
-    console.warn(`[GridWalk] Blocked slots fetch failed: ${err.message}`);
-  }
-
-  // ── 4. Day-by-day grid-walk ──
+  // Pool across days — use exact equivalents for the numerator
   let totalScheduledSlots = 0;
+  let totalOccupiedEquivalents = 0;
+  let totalOvertimeEquivalents = 0;
   let totalOccupiedSlots = 0;
   let totalOvertimeSlots = 0;
+  let totalFreeSlots = 0;
   let totalBreakBlockedSlots = 0;
   let totalManuallyBlockedSlots = 0;
+  let totalCancelledCount = 0;
+  let totalNoshowCount = 0;
   let totalUnfilledCancelled = 0;
   let totalUnfilledNoshow = 0;
   let totalDeadSpaceMinutes = 0;
   let totalHcDeadSpaceMinutes = 0;
+  let totalSyncedAppointments = 0;
+  let totalInformalAppointments = 0;
+
+  // Minute-based legacy totals (for backwards-compat fields)
   let totalCapacityMinutes = 0;
   let totalUtilizedMinutes = 0;
   let totalFreeSlotMinutes = 0;
   let totalAppointmentCount = 0;
-  let primarySlotInterval = null;
-  const byDay = {}; // dayDisplayName → { bookedMinutes, workedDates: Set }
+  let totalActualBreakMinutes = 0;
+  let totalScheduleHours = 0;
 
-  const current = new Date(startDate + "T12:00:00Z");
-  const end = new Date(endDateStr + "T12:00:00Z");
+  let slotInterval = null;
+  let slotDuration = null;
+  const dayModesSeen = new Set();
+  const byDay = {}; // dayDisplay → { bookedMinutes, workedDates: Set }
 
-  while (current <= end) {
-    const dateStr = current.toISOString().split("T")[0];
-    const dayNum = current.getUTCDay();
-    const dayDisplay = DAY_DISPLAY_NAMES[dayNum];
+  for (const r of dailyResults) {
+    totalScheduledSlots += r.scheduledSlots || 0;
+    totalOccupiedSlots += r.occupied || 0;
+    totalOvertimeSlots += r.overtimeSlots || 0;
+    totalFreeSlots += r.free || 0;
+    totalBreakBlockedSlots += r.breakBlocked || 0;
+    totalManuallyBlockedSlots += r.manuallyBlocked || 0;
+    totalCancelledCount += r.cancelledCount || 0;
+    totalNoshowCount += r.noshowCount || 0;
+    totalUnfilledCancelled += r.cancelledUnfilled || 0;
+    totalUnfilledNoshow += r.noshowUnfilled || 0;
+    totalDeadSpaceMinutes += r.deadSpaceMinutes || 0;
+    totalHcDeadSpaceMinutes += r.hcDeadSpaceMinutes || 0;
+    totalSyncedAppointments += r.syncedAppointmentCount || 0;
+    totalInformalAppointments += r.informalAppointmentCount || 0;
 
-    // Fetch calendar events for this day
-    const { startMs: dayStartMs, endMs: dayEndMs } = _getCentralDayBounds(dateStr);
-    let calendarEvents;
-    try {
-      calendarEvents = await _fetchCalendarEvents(httpClient, locationId, barberGhlId, dayStartMs, dayEndMs);
-      // Filter to events starting on this day
-      calendarEvents = calendarEvents.filter(ev => {
-        const evStart = new Date(ev.startTime).getTime();
-        return evStart >= dayStartMs && evStart < dayEndMs;
-      });
-    } catch (err) {
-      console.warn(`[GridWalk] Event fetch failed for ${dateStr}: ${err.message}`);
-      current.setUTCDate(current.getUTCDate() + 1);
-      continue;
-    }
+    // Use exact pre-rounding equivalents from the day result
+    totalOccupiedEquivalents += r.occupiedEquivalents || 0;
+    totalOvertimeEquivalents += r.overtimeEquivalents || 0;
 
-    // Filter blocked slots for this day
-    const dayBlocks = allBlockedSlots.filter(b => {
-      const bStart = new Date(b.startTime).getTime();
-      return bStart >= dayStartMs && bStart < dayEndMs;
-    });
+    if (!slotInterval) slotInterval = r.primaryInterval;
+    if (!slotDuration) slotDuration = r.primaryDuration;
 
-    // Run grid-walk
-    const gw = _gridWalkDay(dateStr, calendarSlotConfigs, schedules, barberConfig, calendarEvents, dayBlocks);
+    if (r.mode) dayModesSeen.add(r.mode);
 
-    if (!gw) {
-      // Day off — skip
-      current.setUTCDate(current.getUTCDate() + 1);
-      continue;
-    }
+    // Minute-based legacy fields (for old-shape callers like iOS / coachingService)
+    const dur = r.primaryDuration || 30;
+    const occupiedMin = (r.occupied || 0) * dur;
+    const overtimeMin = (r.overtimeSlots || 0) * dur;
+    const freeMin = (r.free || 0) * dur;
+    const blockedMin = (r.manuallyBlocked || 0) * dur;
+    totalUtilizedMinutes += occupiedMin + overtimeMin;
+    totalFreeSlotMinutes += freeMin;
+    totalCapacityMinutes += (r.scheduledSlots || 0) * dur;
+    totalAppointmentCount += (r.occupied || 0) + (r.overtimeSlots || 0);
+    totalActualBreakMinutes += r.actualBreakMinutes || 0;
+    totalScheduleHours += r.scheduleHours || 0;
 
-    // Accumulate totals
-    totalScheduledSlots += gw.scheduledSlots;
-    totalOccupiedSlots += gw.occupiedSlots;
-    totalOvertimeSlots += gw.overtimeSlots;
-    totalBreakBlockedSlots += gw.breakBlockedSlots;
-    totalManuallyBlockedSlots += gw.manuallyBlockedSlots;
-    totalUnfilledCancelled += gw.cancelledUnfilled;
-    totalUnfilledNoshow += gw.noshowUnfilled;
-    totalDeadSpaceMinutes += gw.deadSpaceMinutes;
-    totalHcDeadSpaceMinutes += gw.hcDeadSpaceMinutes;
-    totalCapacityMinutes += gw.capacityMinutes;
-    totalUtilizedMinutes += gw.utilizedMinutes;
-    totalFreeSlotMinutes += gw.freeSlotMinutes;
-    totalAppointmentCount += gw.appointmentCount;
-    if (!primarySlotInterval) primarySlotInterval = gw.primaryInterval;
-
-    // Track by day-of-week
-    if (gw.appointmentCount > 0) {
+    // Track by day-of-week (only for days with appointments)
+    if ((r.occupied || 0) + (r.overtimeSlots || 0) > 0) {
+      const dayDisplay = (r.dayName || "").charAt(0).toUpperCase() + (r.dayName || "").slice(1);
       if (!byDay[dayDisplay]) byDay[dayDisplay] = { bookedMinutes: 0, workedDates: new Set() };
-      byDay[dayDisplay].bookedMinutes += gw.utilizedMinutes;
-      byDay[dayDisplay].workedDates.add(dateStr);
+      byDay[dayDisplay].bookedMinutes += occupiedMin + overtimeMin;
+      byDay[dayDisplay].workedDates.add(r.dateStr);
     }
-
-    // Rate limit: 150ms delay between days to avoid GHL API throttling
-    await new Promise(resolve => setTimeout(resolve, 150));
-    current.setUTCDate(current.getUTCDate() + 1);
   }
 
-  // ── 5. Build byDayOfWeek summary ──
+  // Build byDayOfWeek summary
   const byDayOfWeek = {};
   for (const [dayDisplay, data] of Object.entries(byDay)) {
     const dayCount = data.workedDates.size;
@@ -1562,26 +1546,30 @@ async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDat
     };
   }
 
-  // ── 6. Compute final metrics from pooled slot counts ──
+  // Pooled utilization uses EQUIVALENTS (Option B, exact)
   const pooledUtilization = totalScheduledSlots > 0
-    ? round(((totalOccupiedSlots + totalOvertimeSlots) / totalScheduledSlots) * 100, 1)
+    ? round(((totalOccupiedEquivalents + totalOvertimeEquivalents) / totalScheduledSlots) * 100, 1)
     : null;
 
-  const totalPotential = totalScheduledSlots + totalManuallyBlockedSlots;
-  const availabilityIndex = totalPotential > 0
-    ? round((totalScheduledSlots / totalPotential) * 100, 1)
+  // With Option B, manuallyBlocked is already in scheduledSlots, so utilization
+  // already reflects the blocked-time cost. Availability index is informational.
+  const totalPotential = totalScheduledSlots; // Option B: blocks are inside scheduled
+  const availabilityIndex = totalScheduledSlots > 0
+    ? round(((totalScheduledSlots - totalManuallyBlockedSlots) / totalScheduledSlots) * 100, 1)
     : null;
-  const shopImpact = (pooledUtilization !== null && availabilityIndex !== null)
-    ? round((pooledUtilization * availabilityIndex) / 100, 1)
-    : null;
-  const blockedPercent = totalPotential > 0
-    ? round((totalManuallyBlockedSlots / totalPotential) * 100, 1)
+  const shopImpact = pooledUtilization; // Option B: shop impact === utilization
+  const blockedPercent = totalScheduledSlots > 0
+    ? round((totalManuallyBlockedSlots / totalScheduledSlots) * 100, 1)
     : 0;
 
-  // Legacy backwards-compat fields computed from grid-walk slot counts
-  const slotInterval = primarySlotInterval || 30;
-  const rawScheduleMinutes = totalPotential * slotInterval;
-  const discretionaryBlockedMinutes = totalManuallyBlockedSlots * slotInterval;
+  // Backwards-compat minute-based fields
+  const interval = slotInterval || 30;
+  const duration = slotDuration || 30;
+  const rawScheduleMinutes = totalScheduledSlots * duration;
+  const discretionaryBlockedMinutes = totalManuallyBlockedSlots * duration;
+
+  // Effective mode label (single mode if all days agreed; else "hybrid")
+  const effectiveMode = dayModesSeen.size === 1 ? [...dayModesSeen][0] : (mode || "hybrid");
 
   return {
     utilization: pooledUtilization,
@@ -1590,19 +1578,21 @@ async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDat
     freeSlotMinutes: totalFreeSlotMinutes,
     appointmentCount: totalAppointmentCount,
     periodDays,
-    mode,
+    mode: effectiveMode,
     bookedHours: round(totalUtilizedMinutes / 60, 1),
     availableHours: round(totalCapacityMinutes / 60, 1),
     byDayOfWeek,
-    scheduleSource: "grid_walk",
-    // Legacy backwards-compat availability metrics
+    scheduleSource: "grid_walk_v2",
+
+    // Availability/shop impact (Option B framing)
     rawScheduleMinutes,
     discretionaryBlockedMinutes,
     availabilityIndex,
     shopImpact,
     blockedPercent,
     atRisk: blockedPercent >= 25,
-    // Grid-walk fields
+
+    // Grid-walk slot counts (existing snapshot columns)
     scheduledSlots: totalScheduledSlots,
     occupiedSlots: totalOccupiedSlots,
     overtimeSlots: totalOvertimeSlots,
@@ -1612,7 +1602,17 @@ async function _gridWalkUtilization(ghlBarber, barberGhlId, locationId, startDat
     unfilledNoshowSlots: totalUnfilledNoshow,
     deadSpaceMinutes: totalDeadSpaceMinutes,
     hcDeadSpaceMinutes: totalHcDeadSpaceMinutes,
-    slotIntervalMinutes: slotInterval,
+    slotIntervalMinutes: interval,
+
+    // New Option B fields
+    occupiedEquivalents: round(totalOccupiedEquivalents, 3),
+    overtimeEquivalents: round(totalOvertimeEquivalents, 3),
+    slotDurationMinutes: duration,
+    freeSlots: totalFreeSlots,
+    cancelledCount: totalCancelledCount,
+    noshowCount: totalNoshowCount,
+    syncedAppointmentCount: totalSyncedAppointments,
+    informalAppointmentCount: totalInformalAppointments,
   };
 }
 

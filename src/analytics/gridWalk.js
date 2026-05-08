@@ -630,8 +630,10 @@ function gridWalkDay({
     // ── Primary metrics (HC-denominator, Option B) ──
     scheduledSlots,
     occupied,
+    occupiedEquivalents,           // exact pre-rounding numerator (haircut equivalents)
     free,
     overtimeSlots,
+    overtimeEquivalents,           // exact pre-rounding overtime
     breakBlocked,
     manuallyBlocked,
     utilization: round1(utilization),
