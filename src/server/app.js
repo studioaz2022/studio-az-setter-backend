@@ -2091,6 +2091,47 @@ function createApp() {
       const totalTips = tipLines.reduce((sum, t) => sum + t.amount, 0);
       const remainingBalance = quoteAmount != null ? quoteAmount - collected : null;
 
+      // 5. Phase 7a — Project completion + settlement state for the Settled
+      // pill. Chain: project_completions(contact_id) -> reconciliations.id ->
+      // status. We pick the row for the LATEST artist if multiple completions
+      // exist for the contact (multi-artist contacts are rare but supported).
+      let projectCompletion = null; // { id, artistGhlId, completedAt, reconciliationId }
+      let settlement = null;       // { settled: bool, settledAt, reconciliationId, weekStart, weekEnd }
+      try {
+        const { data: completions } = await supabase
+          .from("project_completions")
+          .select("id, artist_ghl_id, completed_at, reconciliation_id")
+          .eq("contact_id", contactId)
+          .order("completed_at", { ascending: false });
+        const latest = (completions || [])[0];
+        if (latest) {
+          projectCompletion = {
+            id: latest.id,
+            artistGhlId: latest.artist_ghl_id,
+            completedAt: latest.completed_at,
+            reconciliationId: latest.reconciliation_id,
+          };
+          if (latest.reconciliation_id) {
+            const { data: r } = await supabase
+              .from("reconciliations")
+              .select("id, status, settled_at, week_start, week_end")
+              .eq("id", latest.reconciliation_id)
+              .maybeSingle();
+            if (r) {
+              settlement = {
+                settled: r.status === "settled",
+                settledAt: r.settled_at,
+                reconciliationId: r.id,
+                weekStart: r.week_start,
+                weekEnd: r.week_end,
+              };
+            }
+          }
+        }
+      } catch (settleErr) {
+        console.warn(`[PaymentHistory] settlement lookup failed: ${settleErr.message}`);
+      }
+
       res.json({
         success: true,
         quoteAmount,
@@ -2099,6 +2140,9 @@ function createApp() {
         collected: parseFloat(collected.toFixed(2)),
         totalTips: parseFloat(totalTips.toFixed(2)),
         remainingBalance: remainingBalance != null ? parseFloat(remainingBalance.toFixed(2)) : null,
+        // Phase 7a/7b additions — non-breaking; older clients ignore the new fields
+        projectCompletion,
+        settlement,
       });
     } catch (err) {
       console.error(`[PaymentHistory] Error:`, err);
@@ -3615,6 +3659,290 @@ function createApp() {
     } catch (error) {
       console.error("[AuditLog] error:", error);
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 7c · Reconciliation Drill-Down (project breakdown)
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/reconciliations/:id/projects
+   *
+   * Returns the per-project breakdown for one reconciliation row. Used by
+   * the iOS Settlement History drill-down sheet (Phase 7c) to show the math
+   * reveal: each contact's gross + shop% + artist% + tip + net contribution
+   * to the week's reconciliation total.
+   *
+   * Joins server-side so the iOS sheet doesn't need per-row contact lookups.
+   * Falls back to denormalized `transactions.contact_name` when GHL returns
+   * blank (matches the pattern in /api/artists/:artistId/earnings).
+   *
+   * Response shape:
+   *   {
+   *     success: true,
+   *     reconciliation: { id, weekStart, weekEnd, netAmount, direction,
+   *                       venmoCode, venmoNote, status, settledAt, settledVia },
+   *     projects: [{ contactId, contactName, completedAt, quote, collected,
+   *                  netToArtist, shopPercentage, artistPercentage }]
+   *   }
+   */
+  app.get("/api/reconciliations/:id/projects", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const { id } = req.params;
+      if (!id) {
+        return res.status(400).json({ success: false, error: "Missing reconciliation id" });
+      }
+
+      // 1. Load the reconciliation row
+      const { data: recon, error: reconErr } = await supabase
+        .from("reconciliations")
+        .select("id, artist_ghl_id, week_start, week_end, net_amount, direction, status, venmo_code, venmo_note, settled_at, settled_via, project_count")
+        .eq("id", id)
+        .maybeSingle();
+      if (reconErr) return res.status(500).json({ success: false, error: reconErr.message });
+      if (!recon) return res.status(404).json({ success: false, error: "Reconciliation not found" });
+
+      // 2. Load all completions linked to this reconciliation
+      const { data: completions, error: compErr } = await supabase
+        .from("project_completions")
+        .select("id, contact_id, completed_at, quote_at_completion, collected_at_completion, net_to_artist, shop_percentage_at_completion, artist_percentage_at_completion")
+        .eq("reconciliation_id", id)
+        .order("completed_at", { ascending: true });
+      if (compErr) return res.status(500).json({ success: false, error: compErr.message });
+
+      const rows = completions || [];
+      const contactIds = [...new Set(rows.map((r) => r.contact_id).filter(Boolean))];
+
+      // 3. Resolve contact names — denormalized first, GHL fallback for any blanks
+      const nameMap = {};
+      if (contactIds.length > 0) {
+        const { data: txs } = await supabase
+          .from("transactions")
+          .select("contact_id, contact_name")
+          .in("contact_id", contactIds);
+        for (const t of txs || []) {
+          if (t.contact_name && !nameMap[t.contact_id]) {
+            nameMap[t.contact_id] = t.contact_name;
+          }
+        }
+        const missing = contactIds.filter((c) => !nameMap[c]);
+        if (missing.length > 0) {
+          await Promise.all(missing.map(async (cid) => {
+            try {
+              const contact = await getContact(cid);
+              const name = contact?.contactName
+                || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
+              nameMap[cid] = name || "Unknown Client";
+            } catch {
+              nameMap[cid] = "Unknown Client";
+            }
+          }));
+        }
+      }
+
+      const projects = rows.map((r) => ({
+        contactId: r.contact_id,
+        contactName: nameMap[r.contact_id] || "Unknown Client",
+        completedAt: r.completed_at,
+        quote: Number(r.quote_at_completion),
+        collected: Number(r.collected_at_completion),
+        netToArtist: Number(r.net_to_artist),
+        shopPercentage: Number(r.shop_percentage_at_completion),
+        artistPercentage: Number(r.artist_percentage_at_completion),
+      }));
+
+      res.json({
+        success: true,
+        reconciliation: {
+          id: recon.id,
+          artistGhlId: recon.artist_ghl_id,
+          weekStart: recon.week_start,
+          weekEnd: recon.week_end,
+          netAmount: Number(recon.net_amount),
+          direction: recon.direction,
+          venmoCode: recon.venmo_code,
+          venmoNote: recon.venmo_note,
+          projectCount: recon.project_count,
+          status: recon.status,
+          settledAt: recon.settled_at,
+          settledVia: recon.settled_via,
+        },
+        projects,
+      });
+    } catch (error) {
+      console.error("[ReconProjects] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 7d · Tax Export CSV (per-artist, calendar year)
+  // ────────────────────────────────────────────────────────────────────────
+
+  /**
+   * GET /api/artists/:artistId/tax-export?year=YYYY
+   *
+   * Streams a CSV of every transaction for the artist in the given calendar
+   * year (America/Chicago timezone). Columns:
+   *   Date, Client, Method, Gross, Your Share, Settled, Settled Date
+   *
+   * "Settled" derivation: the transaction's contact has a project_completion
+   * row whose reconciliation_id points to a reconciliations row with
+   * status='settled'. The settled date is reconciliations.settled_at.
+   *
+   * Refunds appear as negative Gross/Your Share rows so they net out in a
+   * spreadsheet sum. Tips are treated as part of the gross (artist keeps tips
+   * 100% — but we still record them in the same row for tax-record clarity).
+   *
+   * No auth gate (Phase 6b posture). Phase 8 will reinstate.
+   */
+  app.get("/api/artists/:artistId/tax-export", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const { artistId } = req.params;
+      const yearStr = String(req.query.year || new Date().getFullYear());
+      const yearNum = parseInt(yearStr, 10);
+      if (!Number.isFinite(yearNum) || yearNum < 2020 || yearNum > 2100) {
+        return res.status(400).json({ success: false, error: "Invalid year" });
+      }
+
+      const startISO = `${yearNum}-01-01T00:00:00-06:00`; // America/Chicago year-start
+      const endISO = `${yearNum + 1}-01-01T00:00:00-06:00`;
+
+      // 1. Pull all transactions for this artist in the year.
+      const { data: txs, error: txErr } = await supabase
+        .from("transactions")
+        .select("id, contact_id, contact_name, transaction_type, payment_method, gross_amount, tip_amount, shop_amount, artist_amount, shop_percentage, artist_percentage, session_date, notes")
+        .eq("artist_ghl_id", artistId)
+        .gte("session_date", startISO)
+        .lt("session_date", endISO)
+        .order("session_date", { ascending: true });
+      if (txErr) {
+        return res.status(500).json({ success: false, error: txErr.message });
+      }
+      const transactions = txs || [];
+
+      // 2. For each contact in those transactions, look up their settled status:
+      //    project_completion (artist_ghl_id, contact_id) → reconciliation_id → reconciliations.status
+      const contactIds = [...new Set(transactions.map((t) => t.contact_id).filter(Boolean))];
+      const settlementByContact = {}; // contactId -> { settled: bool, settledAt: ISO }
+      if (contactIds.length > 0) {
+        const { data: completions } = await supabase
+          .from("project_completions")
+          .select("contact_id, reconciliation_id")
+          .eq("artist_ghl_id", artistId)
+          .in("contact_id", contactIds);
+        const reconIds = [...new Set((completions || []).map((c) => c.reconciliation_id).filter(Boolean))];
+        let reconMap = {};
+        if (reconIds.length > 0) {
+          const { data: recons } = await supabase
+            .from("reconciliations")
+            .select("id, status, settled_at")
+            .in("id", reconIds);
+          for (const r of recons || []) reconMap[r.id] = r;
+        }
+        for (const c of completions || []) {
+          const r = c.reconciliation_id ? reconMap[c.reconciliation_id] : null;
+          settlementByContact[c.contact_id] = {
+            settled: r?.status === "settled",
+            settledAt: r?.settled_at || null,
+          };
+        }
+      }
+
+      // 3. Stream the CSV. Use America/Chicago for human-readable dates.
+      const filename = `tattoo-tax-${artistId}-${yearNum}.csv`;
+      res.setHeader("Content-Type", "text/csv; charset=utf-8");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+
+      const escape = (val) => {
+        if (val == null) return "";
+        const s = String(val);
+        // Quote if contains comma, quote, or newline
+        if (/[",\n]/.test(s)) return `"${s.replace(/"/g, '""')}"`;
+        return s;
+      };
+
+      const formatShopDate = (isoOrDate) => {
+        if (!isoOrDate) return "";
+        const d = new Date(isoOrDate);
+        if (isNaN(d.getTime())) return "";
+        const fmt = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "America/Chicago",
+          year: "numeric",
+          month: "2-digit",
+          day: "2-digit",
+        });
+        return fmt.format(d); // YYYY-MM-DD
+      };
+
+      const methodLabel = (m) => {
+        const map = {
+          square: "Square",
+          stripe_affirm: "Stripe Affirm",
+          stripe_klarna: "Stripe Klarna",
+          stripe_card: "Stripe Card",
+          venmo: "Venmo",
+          cash: "Cash",
+          zelle: "Zelle",
+          other: "Other",
+        };
+        return map[m] || m || "Unknown";
+      };
+
+      // Header
+      res.write("Date,Client,Method,Gross,Your Share,Settled,Settled Date\n");
+
+      for (const t of transactions) {
+        const isRefund = (t.transaction_type || "").toLowerCase().includes("refund")
+          || (t.gross_amount || 0) < 0;
+        // Sign: refunds keep their negative sign so a spreadsheet sum nets out
+        const grossSigned = isRefund
+          ? -Math.abs(Number(t.gross_amount || 0))
+          : Math.abs(Number(t.gross_amount || 0));
+        // Artist share: prefer the snapshotted artist_amount, fall back to
+        // gross * artist_percentage if unset.
+        let artistSigned;
+        if (t.artist_amount != null) {
+          artistSigned = isRefund
+            ? -Math.abs(Number(t.artist_amount))
+            : Math.abs(Number(t.artist_amount));
+        } else {
+          const pct = t.artist_percentage != null ? Number(t.artist_percentage) : 70;
+          artistSigned = (grossSigned * pct) / 100;
+        }
+
+        const settle = settlementByContact[t.contact_id];
+        const settled = settle?.settled ? "Yes" : "No";
+        const settledDate = settle?.settled ? formatShopDate(settle.settledAt) : "";
+
+        const row = [
+          formatShopDate(t.session_date),
+          escape(t.contact_name || ""),
+          methodLabel(t.payment_method),
+          grossSigned.toFixed(2),
+          artistSigned.toFixed(2),
+          settled,
+          settledDate,
+        ].join(",");
+        res.write(row + "\n");
+      }
+
+      res.end();
+    } catch (error) {
+      console.error("[TaxExport] error:", error);
+      // If headers were already sent (mid-stream), we can't change status.
+      if (!res.headersSent) {
+        res.status(500).json({ success: false, error: error.message });
+      } else {
+        res.end();
+      }
     }
   });
 
