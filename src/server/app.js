@@ -1981,6 +1981,291 @@ function createApp() {
     }
   });
 
+  // ────────────────────────────────────────────────────────────────────────
+  // Phase 7g · Artist Edit / Undo / Restore for manually-logged payments
+  // ────────────────────────────────────────────────────────────────────────
+  //
+  // Two restrictions enforced here:
+  //   1. payment_recipient must be "artist_direct" (cash/Venmo/Zelle in
+  //      hand). Square/Stripe rows are sourced from external systems and
+  //      must NOT be edited or undone — that would break audit trail with
+  //      the upstream provider.
+  //   2. The transaction must NOT be in a settled reconciliation. The chain
+  //      is contact_id → project_completion → reconciliation. If the
+  //      contact has a project_completion linked to a settled reconciliation,
+  //      the row is locked (409 Conflict).
+  //
+  // Audit trail behavior:
+  //   - artist-edit creates a new row and stamps superseded_by on the old
+  //     row. The old row stays in the database forever.
+  //   - artist-undo soft-deletes via deleted_at. Restorable via artist-restore.
+  //   - artist-restore clears deleted_at (undo-the-undo).
+  //
+  // Read endpoints (payment-history, financial-summary, earnings, tax-export,
+  // outstanding-contacts) all filter `superseded_by IS NULL AND deleted_at
+  // IS NULL` so the visible ledger never shows a row that's been replaced or
+  // undone, but the full history is preserved for audit.
+
+  /**
+   * Shared guard. Returns { ok: bool, status?: int, error?: string, tx?: row }.
+   * If ok=false, caller should res.status(status).json({success:false,error}).
+   */
+  async function loadArtistEditableTransaction(transactionId) {
+    if (!supabase) {
+      return { ok: false, status: 503, error: "Supabase not configured" };
+    }
+    const { data: tx, error } = await supabase
+      .from("transactions")
+      .select("*")
+      .eq("id", transactionId)
+      .maybeSingle();
+    if (error) return { ok: false, status: 500, error: error.message };
+    if (!tx) return { ok: false, status: 404, error: "Transaction not found" };
+
+    // Restriction 1: must be artist_direct (manually logged)
+    if (tx.payment_recipient !== "artist_direct") {
+      return {
+        ok: false,
+        status: 409,
+        error: "Only manually-logged payments (cash, Venmo, Zelle) can be edited or undone.",
+      };
+    }
+
+    // Restriction 2: must not be already superseded or deleted
+    if (tx.superseded_by) {
+      return { ok: false, status: 409, error: "This row has already been edited." };
+    }
+    if (tx.deleted_at) {
+      return { ok: false, status: 409, error: "This row has already been undone." };
+    }
+
+    // Restriction 3: must not be in a settled reconciliation
+    if (tx.contact_id && tx.artist_ghl_id) {
+      const { data: completion } = await supabase
+        .from("project_completions")
+        .select("id, reconciliation_id")
+        .eq("contact_id", tx.contact_id)
+        .eq("artist_ghl_id", tx.artist_ghl_id)
+        .maybeSingle();
+      if (completion?.reconciliation_id) {
+        const { data: recon } = await supabase
+          .from("reconciliations")
+          .select("status")
+          .eq("id", completion.reconciliation_id)
+          .maybeSingle();
+        if (recon?.status === "settled") {
+          return {
+            ok: false,
+            status: 409,
+            error: "This payment is part of a settled week and is locked. Only Lionel can adjust settled rows from Supabase.",
+          };
+        }
+      }
+    }
+
+    return { ok: true, tx };
+  }
+
+  /**
+   * PATCH /api/transactions/:id/artist-edit
+   *
+   * Inserts a new transaction with the edited values, marks the old row
+   * as superseded. Body accepts any subset of:
+   *   { grossAmount, paymentMethod, sessionDate, notes }
+   * (other fields are copied from the original row).
+   *
+   * Response: { success, transaction: <new row>, supersededId: <old id> }
+   */
+  app.patch("/api/transactions/:id/artist-edit", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const guard = await loadArtistEditableTransaction(id);
+      if (!guard.ok) {
+        return res.status(guard.status).json({ success: false, error: guard.error });
+      }
+      const original = guard.tx;
+      const { grossAmount, paymentMethod, sessionDate, notes } = req.body || {};
+
+      const newGross = grossAmount != null ? parseFloat(grossAmount) : Number(original.gross_amount);
+      if (!Number.isFinite(newGross) || newGross <= 0) {
+        return res.status(400).json({ success: false, error: "Invalid grossAmount" });
+      }
+      const newMethod = paymentMethod || original.payment_method;
+      const newSessionDate = sessionDate ? new Date(sessionDate) : new Date(original.session_date);
+      const newNotes = notes !== undefined ? notes : original.notes;
+
+      // Recompute shop/artist split using the snapshotted percentages from the
+      // original row (the rate that was in force when the work was done). This
+      // matches the math engine's "snapshot at completion" rule.
+      const shopPct = Number(original.shop_percentage ?? 30);
+      const artistPct = Number(original.artist_percentage ?? 70);
+      const newShopAmount = +(newGross * (shopPct / 100)).toFixed(2);
+      const newArtistAmount = +(newGross * (artistPct / 100)).toFixed(2);
+
+      // Insert the replacement row.
+      const replacementPayload = {
+        contact_id: original.contact_id,
+        contact_name: original.contact_name,
+        appointment_id: original.appointment_id,
+        artist_ghl_id: original.artist_ghl_id,
+        transaction_type: original.transaction_type,
+        payment_method: newMethod,
+        payment_recipient: "artist_direct",
+        gross_amount: newGross,
+        tip_amount: original.tip_amount,
+        service_price: original.service_price,
+        shop_amount: newShopAmount,
+        artist_amount: newArtistAmount,
+        shop_percentage: shopPct,
+        artist_percentage: artistPct,
+        session_date: newSessionDate.toISOString(),
+        notes: newNotes,
+        location_id: original.location_id,
+        // Square / Venmo external IDs deliberately not copied — the new row
+        // is the artist's record, not a re-mirror of the external payment.
+      };
+
+      const { data: newTx, error: insertErr } = await supabase
+        .from("transactions")
+        .insert(replacementPayload)
+        .select()
+        .single();
+      if (insertErr) {
+        return res.status(500).json({ success: false, error: insertErr.message });
+      }
+
+      // Stamp the original as superseded.
+      const { error: updateErr } = await supabase
+        .from("transactions")
+        .update({ superseded_by: newTx.id })
+        .eq("id", id);
+      if (updateErr) {
+        // Best-effort rollback of the insert
+        await supabase.from("transactions").delete().eq("id", newTx.id);
+        return res.status(500).json({ success: false, error: updateErr.message });
+      }
+
+      console.log(`[Phase7g] artist-edit ${id} → ${newTx.id} (gross ${original.gross_amount} → ${newGross})`);
+      res.json({ success: true, transaction: newTx, supersededId: id });
+    } catch (error) {
+      console.error("[Phase7g] artist-edit error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/transactions/:id/artist-undo
+   *
+   * Soft-deletes the row by setting deleted_at = now(). Idempotent — second
+   * call no-ops. Restorable via /artist-restore.
+   *
+   * Response: { success, transactionId, deletedAt }
+   */
+  app.post("/api/transactions/:id/artist-undo", async (req, res) => {
+    try {
+      const { id } = req.params;
+      const guard = await loadArtistEditableTransaction(id);
+      if (!guard.ok) {
+        return res.status(guard.status).json({ success: false, error: guard.error });
+      }
+      const now = new Date().toISOString();
+      const { error } = await supabase
+        .from("transactions")
+        .update({ deleted_at: now })
+        .eq("id", id);
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      console.log(`[Phase7g] artist-undo ${id}`);
+      res.json({ success: true, transactionId: id, deletedAt: now });
+    } catch (error) {
+      console.error("[Phase7g] artist-undo error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
+   * POST /api/transactions/:id/artist-restore
+   *
+   * Clears deleted_at, restoring the row to the visible ledger. Used by the
+   * iOS "Just undone — Restore" 5-second toast. No-op if the row isn't
+   * currently soft-deleted.
+   *
+   * Same artist_direct + not-settled guards apply (the row could have been
+   * pulled into a reconciliation while the toast was on screen, however
+   * unlikely — guard handles it).
+   *
+   * Response: { success, transactionId }
+   */
+  app.post("/api/transactions/:id/artist-restore", async (req, res) => {
+    try {
+      const { id } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      // We can't use the shared guard here because the row IS soft-deleted
+      // (deleted_at set). Inline the artist_direct + settled checks instead.
+      const { data: tx, error: fetchErr } = await supabase
+        .from("transactions")
+        .select("*")
+        .eq("id", id)
+        .maybeSingle();
+      if (fetchErr) return res.status(500).json({ success: false, error: fetchErr.message });
+      if (!tx) return res.status(404).json({ success: false, error: "Transaction not found" });
+      if (tx.payment_recipient !== "artist_direct") {
+        return res.status(409).json({
+          success: false,
+          error: "Only manually-logged payments can be restored.",
+        });
+      }
+      if (tx.superseded_by) {
+        return res.status(409).json({
+          success: false,
+          error: "This row was edited, not undone. Cannot restore an edited row.",
+        });
+      }
+      if (!tx.deleted_at) {
+        // Already restored / never deleted — idempotent
+        return res.json({ success: true, transactionId: id, alreadyRestored: true });
+      }
+      // Settled-row check
+      if (tx.contact_id && tx.artist_ghl_id) {
+        const { data: completion } = await supabase
+          .from("project_completions")
+          .select("reconciliation_id")
+          .eq("contact_id", tx.contact_id)
+          .eq("artist_ghl_id", tx.artist_ghl_id)
+          .maybeSingle();
+        if (completion?.reconciliation_id) {
+          const { data: recon } = await supabase
+            .from("reconciliations")
+            .select("status")
+            .eq("id", completion.reconciliation_id)
+            .maybeSingle();
+          if (recon?.status === "settled") {
+            return res.status(409).json({
+              success: false,
+              error: "This contact's project has been settled in the meantime. Cannot restore.",
+            });
+          }
+        }
+      }
+
+      const { error } = await supabase
+        .from("transactions")
+        .update({ deleted_at: null })
+        .eq("id", id);
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+      console.log(`[Phase7g] artist-restore ${id}`);
+      res.json({ success: true, transactionId: id });
+    } catch (error) {
+      console.error("[Phase7g] artist-restore error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // GET /api/contacts/:contactId/payment-history - Full ledger for contact profile
   // Returns quote amount + all transactions + tips + computed totals
   app.get("/api/contacts/:contactId/payment-history", async (req, res) => {
@@ -1997,11 +2282,15 @@ function createApp() {
         return res.status(400).json({ success: false, error: "Missing contactId" });
       }
 
-      // 1. Fetch all transactions for this contact
+      // 1. Fetch all transactions for this contact.
+      // Phase 7g — filter out superseded (edited) and soft-deleted rows so
+      // the visible ledger never shows a row that's been replaced or undone.
       const { data: rawTransactions, error: txError } = await supabase
         .from("transactions")
-        .select("id, transaction_type, payment_method, gross_amount, tip_amount, session_date, notes")
+        .select("id, transaction_type, payment_method, payment_recipient, gross_amount, tip_amount, session_date, notes, superseded_by, deleted_at")
         .eq("contact_id", contactId)
+        .is("superseded_by", null)
+        .is("deleted_at", null)
         .order("session_date", { ascending: true });
 
       if (txError) {
@@ -2066,6 +2355,10 @@ function createApp() {
             transactionType: tx.transaction_type || "session_payment",
             paymentMethod: method,
             methodLabel,
+            // Phase 7g — iOS uses paymentRecipient + isManual to decide
+            // whether the long-press Edit/Undo menu should be available.
+            paymentRecipient: tx.payment_recipient || null,
+            isManual: tx.payment_recipient === "artist_direct",
             collectedAmount,
             merchantFee,
             sessionDate: txDate,
@@ -2178,7 +2471,9 @@ function createApp() {
       let query = supabase
         .from('transactions')
         .select('*')
-        .eq('artist_ghl_id', artistId);
+        .eq('artist_ghl_id', artistId)
+        .is('superseded_by', null) // Phase 7g
+        .is('deleted_at', null);   // Phase 7g
 
       if (locationId) {
         query = query.eq('location_id', locationId);
@@ -2502,11 +2797,14 @@ function createApp() {
         return res.status(503).json({ success: false, error: "Supabase not configured" });
       }
 
-      // 1. Fetch all transactions for this artist (group by contact later)
+      // 1. Fetch all transactions for this artist (group by contact later).
+      // Phase 7g — exclude superseded + soft-deleted rows.
       const { data: txs, error: txErr } = await supabase
         .from("transactions")
         .select("contact_id, contact_name, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type")
-        .eq("artist_ghl_id", artistId);
+        .eq("artist_ghl_id", artistId)
+        .is("superseded_by", null)
+        .is("deleted_at", null);
       if (txErr) {
         return res.status(500).json({ success: false, error: txErr.message });
       }
@@ -2668,6 +2966,8 @@ function createApp() {
           .from("transactions")
           .select("*")
           .eq("contact_id", contactId)
+          .is("superseded_by", null) // Phase 7g — exclude edited rows
+          .is("deleted_at", null)    // Phase 7g — exclude soft-deleted rows
           .order("session_date", { ascending: true }),
       ]);
       if (txErr) {
@@ -3816,10 +4116,14 @@ function createApp() {
       const endISO = `${yearNum + 1}-01-01T00:00:00-06:00`;
 
       // 1. Pull all transactions for this artist in the year.
+      // Phase 7g — exclude superseded + soft-deleted rows so the tax CSV
+      // matches what the artist sees in their own Finance tab.
       const { data: txs, error: txErr } = await supabase
         .from("transactions")
         .select("id, contact_id, contact_name, transaction_type, payment_method, gross_amount, tip_amount, shop_amount, artist_amount, shop_percentage, artist_percentage, session_date, notes")
         .eq("artist_ghl_id", artistId)
+        .is("superseded_by", null)
+        .is("deleted_at", null)
         .gte("session_date", startISO)
         .lt("session_date", endISO)
         .order("session_date", { ascending: true });
