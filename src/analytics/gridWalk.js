@@ -305,15 +305,21 @@ function gridWalkDay({
         overlaps(slotStart, slotEnd, appt.startMin, appt.endMin),
       );
 
+      // Priority: occupied > break-blocked > manually-blocked > free
+      // An active appointment in a slot means the barber served a client there,
+      // even if the barber had also blocked that time. Real work always wins
+      // over a planned block.
       let slotStatus;
-      if (isBreakBlocked) slotStatus = "break-blocked";
+      if (isOccupied) slotStatus = "occupied";
+      else if (isBreakBlocked) slotStatus = "break-blocked";
       else if (isManuallyBlocked) slotStatus = "manually-blocked";
-      else if (isOccupied) slotStatus = "occupied";
       else slotStatus = "free";
 
       calSlotMap.set(slotStart, slotStatus);
 
-      // Deduplication priority: free > occupied > manually-blocked > break-blocked
+      // Deduplication priority across calendars: free > occupied > break-blocked > manually-blocked
+      // (within one calendar, occupied wins over blocks — see slot loop above —
+      //  but for the all-calendar-deduped view, "free on at least one service" is king)
       const existing = timePointStatus.get(slotStart);
       if (!existing) {
         timePointStatus.set(slotStart, { status: slotStatus, calId });
@@ -325,10 +331,10 @@ function gridWalkDay({
       ) {
         timePointStatus.set(slotStart, { status: "occupied", calId });
       } else if (
-        slotStatus === "manually-blocked" &&
-        existing.status === "break-blocked"
+        slotStatus === "break-blocked" &&
+        existing.status === "manually-blocked"
       ) {
-        timePointStatus.set(slotStart, { status: "manually-blocked", calId });
+        timePointStatus.set(slotStart, { status: "break-blocked", calId });
       }
     }
 
@@ -354,9 +360,10 @@ function gridWalkDay({
         overlaps(slotStart, slotEnd, appt.startMin, appt.endMin),
       );
 
-      if (isBreakBlocked) primarySlotStatus.set(slotStart, "break-blocked");
+      // Priority: occupied > break-blocked > manually-blocked > free
+      if (isOccupied) primarySlotStatus.set(slotStart, "occupied");
+      else if (isBreakBlocked) primarySlotStatus.set(slotStart, "break-blocked");
       else if (isManuallyBlocked) primarySlotStatus.set(slotStart, "manually-blocked");
-      else if (isOccupied) primarySlotStatus.set(slotStart, "occupied");
       else primarySlotStatus.set(slotStart, "free");
     }
   }
