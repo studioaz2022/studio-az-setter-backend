@@ -129,6 +129,20 @@ async function computeBarberSnapshot(barberGhlId, locationId, asOfDate = null) {
     hc_dead_space_minutes: dailyUtil.hcDeadSpaceMinutes ?? null,
     slot_interval_minutes: dailyUtil.slotIntervalMinutes ?? null,
 
+    // Option B real-capacity fields (added 2026-05). The equivalents are
+    // pre-rounding decimals — used for accurate pooled aggregation over rolling
+    // windows. Without them, summing rounded daily occupied_slots inflates the
+    // pooled utilization (Lionel 30d went 97.0% honest → 99.3% spurious).
+    occupied_equivalents: dailyUtil.occupiedEquivalents ?? null,
+    overtime_equivalents: dailyUtil.overtimeEquivalents ?? null,
+    slot_duration_minutes: dailyUtil.slotDurationMinutes ?? null,
+    free_slots: dailyUtil.freeSlots ?? null,
+    cancelled_count: dailyUtil.cancelledCount ?? null,
+    noshow_count: dailyUtil.noshowCount ?? null,
+    synced_appointment_count: dailyUtil.syncedAppointmentCount ?? null,
+    informal_appointment_count: dailyUtil.informalAppointmentCount ?? null,
+    snapshot_mode: dailyUtil.mode ?? null,
+
     computed_at: new Date().toISOString(),
   };
 }
