@@ -2952,6 +2952,35 @@ function createApp() {
     return { artistName, shopPercentage };
   }
 
+  // Internal helper: enrich project_completions rows (which only store
+  // contact_id) with contact_name pulled from GHL. Batches concurrent fetches
+  // and de-dupes contactIds so each contact is hit at most once per call.
+  // Falls back gracefully — if GHL fetch fails, leaves contact_name unset
+  // and the downstream "Unknown Client" fallback kicks in.
+  async function withContactNames(completions) {
+    const list = completions || [];
+    if (list.length === 0) return list;
+    const uniqueIds = Array.from(new Set(list.map((c) => c.contact_id).filter(Boolean)));
+    const nameById = {};
+    await Promise.all(
+      uniqueIds.map(async (id) => {
+        try {
+          const c = await getContact(id);
+          const name = [c?.firstName, c?.lastName].filter(Boolean).join(" ").trim()
+            || c?.contactName
+            || c?.fullName
+            || null;
+          if (name) nameById[id] = name;
+        } catch (_) {
+          // Swallow — downstream falls back to "Unknown Client".
+        }
+      })
+    );
+    return list.map((c) => (
+      nameById[c.contact_id] ? { ...c, contact_name: nameById[c.contact_id] } : c
+    ));
+  }
+
   // GET /api/contacts/:contactId/financial-summary
   // Returns the per-contact reconciliation snapshot used by the contact ledger.
   app.get("/api/contacts/:contactId/financial-summary", async (req, res) => {
@@ -3030,7 +3059,12 @@ function createApp() {
           .from("transactions")
           .select("*")
           .eq("contact_id", contactId)
-          .eq("artist_ghl_id", artistGhlId),
+          .eq("artist_ghl_id", artistGhlId)
+          // Phase 7g — exclude soft-deleted (artist-undo) and edited (superseded)
+          // rows. Without this, mark-complete would snapshot the full historical
+          // sum including rows the artist already retracted.
+          .is("superseded_by", null)
+          .is("deleted_at", null),
         fetchArtistContext(artistGhlId, locationId),
       ]);
       if (txErr) return res.status(500).json({ success: false, error: txErr.message });
@@ -3165,7 +3199,10 @@ function createApp() {
         .order("completed_at", { ascending: true });
       if (unlinkedErr) return res.status(500).json({ success: false, error: unlinkedErr.message });
 
-      const completions = [...linkedCompletions, ...(unlinkedCompletions || [])];
+      const completions = await withContactNames([
+        ...linkedCompletions,
+        ...(unlinkedCompletions || []),
+      ]);
 
       const result = computeWeeklyReconciliation({
         artistGhlId: artistId,
@@ -3447,7 +3484,10 @@ function createApp() {
           .lte("completed_at", weekEnd.toISOString())
           .order("completed_at", { ascending: true });
 
-        const completions = [...linkedCompletions, ...(unlinkedCompletions || [])];
+        const completions = await withContactNames([
+          ...linkedCompletions,
+          ...(unlinkedCompletions || []),
+        ]);
 
         const currentResult = computeWeeklyReconciliation({
           artistGhlId: artistId,
