@@ -2300,14 +2300,15 @@ function createApp() {
 
       const transactions = rawTransactions || [];
 
-      // 2. Fetch quote amount from GHL contact custom fields
-      // Source of truth is final_price (the signed consent-form contract).
-      // Fallback to deprecated quote_to_client for legacy contacts pre-consent-form.
+      // 2. Fetch quote amount from GHL contact custom fields.
+      // The normalized customField object is keyed by GHL field ID, not field name —
+      // so we look up by ID. Source of truth is FINAL_PRICE (signed consent-form contract);
+      // fall back to deprecated QUOTED for legacy contacts pre-consent-form.
       let quoteAmount = null;
       try {
         const contact = await getContact(contactId);
         const cf = contact?.customField || {};
-        const rawQuote = cf.final_price ?? cf.quote_to_client;
+        const rawQuote = cf[GHL_CUSTOM_FIELD_IDS.FINAL_PRICE] ?? cf[GHL_CUSTOM_FIELD_IDS.QUOTED];
         if (rawQuote != null && rawQuote !== "") {
           const parsed = parseFloat(String(rawQuote).replace(/[^0-9.]/g, ""));
           if (!isNaN(parsed) && parsed > 0) quoteAmount = parsed;
@@ -2856,7 +2857,7 @@ function createApp() {
       for (const [contactId, info] of Object.entries(byContact)) {
         const ghlContact = contactMap[contactId];
         const cf = ghlContact?.customField || {};
-        const rawQuote = cf.final_price ?? cf.quote_to_client;
+        const rawQuote = cf[GHL_CUSTOM_FIELD_IDS.FINAL_PRICE] ?? cf[GHL_CUSTOM_FIELD_IDS.QUOTED];
         let quote = null;
         if (rawQuote != null && rawQuote !== "") {
           const parsed = parseFloat(String(rawQuote).replace(/[^0-9.]/g, ""));
@@ -2922,7 +2923,7 @@ function createApp() {
     try {
       const contact = await getContact(contactId);
       const cf = contact?.customField || {};
-      const raw = cf.final_price ?? cf.quote_to_client;
+      const raw = cf[GHL_CUSTOM_FIELD_IDS.FINAL_PRICE] ?? cf[GHL_CUSTOM_FIELD_IDS.QUOTED];
       if (raw == null || raw === "") return null;
       const n = parseFloat(String(raw).replace(/[^0-9.]/g, ""));
       return Number.isFinite(n) && n > 0 ? n : null;
