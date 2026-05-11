@@ -174,6 +174,7 @@ function computeWeeklyReconciliation({
     projects,
     totalNet,
     venmoCode,
+    direction,
   });
 
   return {
@@ -214,17 +215,25 @@ function generateVenmoCode({ artistName, weekStart, suffix }) {
 
 /**
  * Format the Venmo payout note. Pattern:
- *   "StudioAZ Recon Apr 20-26 · Maria Garcia, Jose Lopez · Net $1260 · [a:CHA0427]"
+ *   "StudioAZ Recon Apr 20-26 · Maria Garcia, Jose Lopez · Net $1260 to artist · [a:CHA0427]"
+ *   "StudioAZ Recon May 11-17 · Jose J · Net $3 to shop · [a:AND0511]"
  *
  * Truncates the client list with "+ N more" if the full note would exceed
  * 280 chars. The artist code marker stays at the end so the parser can
  * always extract it.
  */
-function formatVenmoNote({ weekStart, weekEnd, projects, totalNet, venmoCode }) {
+function formatVenmoNote({ weekStart, weekEnd, projects, totalNet, venmoCode, direction }) {
   const range = formatWeekRange(weekStart, weekEnd);
   const netStr = `$${Math.round(Math.abs(totalNet))}`;
+  // Direction qualifier so the recipient knows which way money flows.
+  // The parser only depends on the [a:CODE] marker + $amount, so extra
+  // text is safe to add.
+  const directionStr =
+    direction === "shop_owes_artist" ? " to artist"
+    : direction === "artist_owes_shop" ? " to shop"
+    : "";
   const codeMarker = `[a:${venmoCode}]`;
-  const fixedSuffix = ` · Net ${netStr} · ${codeMarker}`;
+  const fixedSuffix = ` · Net ${netStr}${directionStr} · ${codeMarker}`;
   const fixedPrefix = `StudioAZ Recon ${range} · `;
   const budget = VENMO_NOTE_MAX_LEN - fixedPrefix.length - fixedSuffix.length;
 
