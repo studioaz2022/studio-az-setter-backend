@@ -501,14 +501,19 @@ function createApp() {
         'https://pay.studioaztattoo.com', // Short links (Stripe financing)
         'https://checkout.studioaztattoo.com', // Custom checkout page (Square deposits)
         'https://checkout-chi-nine.vercel.app', // Checkout page (Vercel dev)
+        'https://rent-tracker-tawny.vercel.app', // Rent tracker production alias
+        'https://rent-tracker-studioaz2022s-projects.vercel.app', // Rent tracker fallback alias
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:8080',
         'http://localhost:8888',
         'http://127.0.0.1:5500', // Common local dev server port
       ];
-      
+
       if (allowedOrigins.indexOf(origin) !== -1) {
+        callback(null, true);
+      } else if (/^https:\/\/rent-tracker-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
+        // Rent tracker preview/branch deploys
         callback(null, true);
       } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
         // Allow any private/local network IP (kiosk, local dev)
@@ -519,7 +524,7 @@ function createApp() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-owner-key', 'x-internal-key'],
   }));
 
   // Use JSON body parsing for all routes except webhooks that need raw body for signature verification
