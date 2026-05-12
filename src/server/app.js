@@ -8469,7 +8469,16 @@ function createApp() {
       console.log("  [DEBUG] Raw plain text (first 800 chars):", JSON.stringify((payload?.plain || "").slice(0, 800)));
       console.log("  [DEBUG] Subject:", JSON.stringify(subject));
       console.log("  [DEBUG] Headers date:", JSON.stringify(emailDate));
-      const parsed = parseVenmoEmail(payload?.plain || "", payload?.html || "", emailDate);
+      // For "X paid your $Y request" emails (request-fulfillment flow), Venmo's
+      // HTML body has a misleading <title> tag ("Leonel paid you $72") that would
+      // make the parser think the recipient paid themselves. The subject line
+      // is the only reliable source of the payer's name. Prepend it to plain
+      // text so stripForwardingHeaders() can pull the correct name via its
+      // existing "paid your request" subject regex.
+      const plainWithSubject = subject
+        ? `Subject: ${subject}\n\n${payload?.plain || ""}`
+        : (payload?.plain || "");
+      const parsed = parseVenmoEmail(plainWithSubject, payload?.html || "", emailDate);
 
       console.log("  Parsed:", {
         sender: parsed.senderName,

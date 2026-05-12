@@ -68,6 +68,15 @@ function parseVenmoEmail(plain, html, emailDate) {
     result.amount = parseFloat(amountMatch[1].replace(/,/g, ""));
   }
 
+  // Fallback to the subject's amount when body parsing failed.
+  // Request-fulfillment emails ("X paid your $Y request") have an empty
+  // plain text body and a HTML <title> that doesn't carry the amount near
+  // "paid you", so body extraction returns 0. The subject line is the
+  // only reliable source in that case.
+  if ((!result.amount || result.amount === 0) && headerInfo.subjectAmount != null) {
+    result.amount = headerInfo.subjectAmount;
+  }
+
   // Extract transaction ID — appears after "Transaction ID" label
   const txIdMatch = text.match(/Transaction ID\s*\n\s*(\d{10,})/i)
     || rawText.match(/Transaction ID\s*\n\s*(\d{10,})/i);
@@ -206,16 +215,24 @@ function stripForwardingHeaders(text) {
     // "Subject: Spencer Weyandt paid your $60.00 request"
     // while the body has the REQUESTOR: "Leonel Chavez paid you $60.00"
     let subjectName = null;
+    let subjectAmount = null;
     const subjectContent = lastSubjectMatch[1]; // e.g. "Spencer Weyandt paid your $60.00 request"
     const requestMatch = subjectContent.match(/^(.+?)\s+paid your\s/i);
     if (requestMatch) {
       subjectName = requestMatch[1].trim();
     }
+    // Also pull the amount from the subject — request-fulfillment emails
+    // have an empty plain text body and an HTML <title> that doesn't carry
+    // the amount near "paid you", so subject is the only reliable source.
+    const subjectAmountMatch = subjectContent.match(/\$([0-9,]+(?:\.\d{2})?)/);
+    if (subjectAmountMatch) {
+      subjectAmount = parseFloat(subjectAmountMatch[1].replace(/,/g, ""));
+    }
 
     const afterSubject = text.slice(lastSubjectMatch.index + lastSubjectMatch[0].length);
     // Strip remaining forwarding headers (From:, Sent:, To:) that may follow
     const stripped = afterSubject.replace(/^\s*(?:From:|Sent:|To:|Date:|Cc:)[^\n]*\n/gim, "");
-    return { text: stripped.trim(), subjectName };
+    return { text: stripped.trim(), subjectName, subjectAmount };
   }
 
   // Fallback: Look for a block of forwarding headers in any order, use the last one
