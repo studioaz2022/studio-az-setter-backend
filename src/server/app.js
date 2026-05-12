@@ -3322,7 +3322,33 @@ function createApp() {
   // POST /api/reconciliations/:reconciliationId/settle
   // Marks an existing reconciliation row as settled. Used for cash/Zelle/manual
   // payouts; Phase 5 adds Venmo auto-detection.
+  // Owner-only guard for manual reconciliation settlement. The auto-settle
+  // path (Venmo webhook → reconciliationVenmoHandler) talks to Supabase
+  // directly and never crosses this endpoint, so gating REST is sufficient
+  // to enforce "only Lionel + Venmo can settle".
+  //
+  // Header: x-owner-key (env: OWNER_SETTLE_KEY).
+  function requireOwnerKey(req, res) {
+    const expected = process.env.OWNER_SETTLE_KEY;
+    if (!expected) {
+      res.status(503).json({
+        success: false,
+        error: "OWNER_SETTLE_KEY not configured on server",
+      });
+      return false;
+    }
+    if (req.get("x-owner-key") !== expected) {
+      res.status(403).json({
+        success: false,
+        error: "Only the owner can settle reconciliations. Use the Venmo webhook or sign in as Lionel.",
+      });
+      return false;
+    }
+    return true;
+  }
+
   app.post("/api/reconciliations/:reconciliationId/settle", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
     try {
       const { reconciliationId } = req.params;
       const { method, settlementPaymentId } = req.body || {};
