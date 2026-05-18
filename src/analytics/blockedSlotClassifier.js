@@ -40,6 +40,42 @@ const BLOCK_KEYWORDS = [
   "holiday",
 ];
 
+// Keywords that signal a multi-day absence the barber shouldn't be penalized
+// for. A `vacation_blocked` day is excluded from the utilization denominator
+// entirely (treated like a day off / no schedule), unlike a normal
+// `manually_blocked` slot which stays in the denominator (Option B).
+const VACATION_KEYWORDS = [
+  "vacation",
+  "pto",
+  "holiday",
+  "leave",
+  "time off",
+  "out of office",
+  "ooo",
+];
+
+// A block this long (minutes) is treated as a vacation regardless of title —
+// catches barbers who block a week off with an empty title (e.g. Drew).
+// 8h = one full work day; real vacation blocks are this long or much longer
+// (Lionel's was a single ~4-day 5790-min block).
+const VACATION_MIN_DURATION_MINUTES = 8 * 60;
+
+/**
+ * True if a blocked slot represents a vacation / multi-day absence.
+ * Title keyword match OR duration >= one full work day.
+ */
+function isVacationBlock(block) {
+  const titleLower = (block.title || "").trim().toLowerCase();
+  if (titleLower && VACATION_KEYWORDS.some((kw) => titleLower.includes(kw))) {
+    return true;
+  }
+  if (block.startTime && block.endTime) {
+    const durMin = (new Date(block.endTime) - new Date(block.startTime)) / 60000;
+    if (durMin >= VACATION_MIN_DURATION_MINUTES) return true;
+  }
+  return false;
+}
+
 /**
  * Classify a single blocked slot into one of the four categories above.
  * @param {object} block - GHL Blocked Slots API event ({ title, notes, ... })
@@ -74,6 +110,17 @@ function classifyBlockedSlot(block) {
     if (looksLikeName) {
       return "synced_appointment";
     }
+  }
+
+  // Rule 2.5: Vacation / multi-day absence. Title keyword (vacation, PTO,
+  // holiday, leave, OOO) OR a block spanning >= one full work day. A day
+  // covered by a vacation block is excluded from the utilization denominator
+  // entirely — the barber wasn't working that role, it's not lost capacity.
+  // Checked before break/name rules so a "Vacation"-titled multi-hour block
+  // isn't misread (e.g. "time off" contains "off"; a long untitled block
+  // would otherwise fall through to manually_blocked and wrongly count).
+  if (isVacationBlock(block)) {
+    return "vacation_blocked";
   }
 
   // Rule 3: Break-like keywords — recurring lunch/break the barber blocked manually.
@@ -111,6 +158,9 @@ function classifyBlockedSlot(block) {
 
 module.exports = {
   classifyBlockedSlot,
+  isVacationBlock,
   BREAK_KEYWORDS,
   BLOCK_KEYWORDS,
+  VACATION_KEYWORDS,
+  VACATION_MIN_DURATION_MINUTES,
 };

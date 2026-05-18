@@ -12,7 +12,7 @@
 // point (gridWalkUtilization) wraps this with data fetching for both
 // historical and live modes.
 
-const { classifyBlockedSlot } = require("./blockedSlotClassifier");
+const { classifyBlockedSlot, isVacationBlock } = require("./blockedSlotClassifier");
 
 const DAY_NAMES = [
   "sunday",
@@ -214,6 +214,22 @@ function gridWalkDay({
     const config = calendarConfigs[calId];
     workStart = Math.min(workStart, slots[0]);
     workEnd = Math.max(workEnd, slots[slots.length - 1] + config.slotInterval);
+  }
+
+  // ── Vacation guard ──
+  // `blockedSlotsForDay` is pre-filtered by filterBlockedSlotsToDay() using
+  // epoch overlap against this Central day (DST-aware, multi-day-safe). So a
+  // vacation block PRESENT in this array already overlaps this calendar day —
+  // including each day a multi-day "Vacation" block spans. We therefore do NOT
+  // re-derive minute-of-day overlap (that would be wrong for multi-day blocks:
+  // a 4-day block formats to a degenerate same-day 05:00–05:30 range).
+  //
+  // A vacation block on the day means the barber wasn't working this role —
+  // exclude the whole day from the denominator (return null, like a day off),
+  // rather than letting it tank utilization the way a normal manually-blocked
+  // slot would under Option B. You don't take a partial vacation.
+  if (blockedSlotsForDay.some((b) => isVacationBlock(b))) {
+    return null; // Vacation — excluded like a day off
   }
 
   // ── Step 3: Collect blocking events ──
