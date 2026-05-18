@@ -713,7 +713,7 @@ async function computeUtilizationSummary(barberGhlId, locationId, tier, revenueP
 
   const { data: snapshots, error } = await fetchAllRows(supabase
     .from("barber_analytics_snapshots")
-    .select("scheduled_slots, occupied_slots, overtime_slots, manually_blocked_slots, unfilled_cancelled_slots, unfilled_noshow_slots, dead_space_minutes, slot_interval_minutes, blocked_percent, availability_index, shop_impact, at_risk")
+    .select("scheduled_slots, occupied_slots, occupied_equivalents, overtime_slots, overtime_equivalents, manually_blocked_slots, unfilled_cancelled_slots, unfilled_noshow_slots, dead_space_minutes, slot_interval_minutes, slot_duration_minutes, blocked_percent, availability_index, shop_impact, at_risk")
     .eq("barber_ghl_id", barberGhlId)
     .eq("location_id", locationId)
     .gte("snapshot_date", startDateStr)
@@ -726,35 +726,53 @@ async function computeUtilizationSummary(barberGhlId, locationId, tier, revenueP
     return null; // No grid-walk data available yet
   }
 
-  // Pool slot counts across all days in the window
+  // Pool across all days in the window.
+  //
+  // Option B: pool EXACT pre-rounding equivalents (occupied_equivalents +
+  // overtime_equivalents), not rounded occupied_slots. Summing rounded slot
+  // counts inflates pooled utilization — e.g. Lionel reads 104% instead of
+  // the honest 101% — and that error compounds over the 4-8 week window.
+  // Snapshots written before the Option B migration won't have the
+  // equivalents columns; for those rows we fall back to the rounded slots
+  // (the 8-week backfill populated equivalents, so recent rows are complete).
   let totalScheduled = 0;
-  let totalOccupied = 0;
-  let totalOvertime = 0;
+  let totalOccupiedEq = 0;
+  let totalOvertimeEq = 0;
   let totalManuallyBlocked = 0;
   let totalUnfilledCancelled = 0;
   let totalUnfilledNoshow = 0;
   let totalDeadSpaceMinutes = 0;
-  let totalSlotMinutes = 0; // for service mix efficiency denominator
-  let slotIntervalSamples = [];
+  let totalSlotMinutes = 0; // service mix efficiency denominator
 
   for (const s of snapshots) {
     const scheduled = s.scheduled_slots || 0;
     totalScheduled += scheduled;
-    totalOccupied += s.occupied_slots || 0;
-    totalOvertime += s.overtime_slots || 0;
+
+    // Prefer exact equivalents; fall back to rounded slots for legacy rows
+    totalOccupiedEq += s.occupied_equivalents != null
+      ? parseFloat(s.occupied_equivalents)
+      : (s.occupied_slots || 0);
+    totalOvertimeEq += s.overtime_equivalents != null
+      ? parseFloat(s.overtime_equivalents)
+      : (s.overtime_slots || 0);
+
     totalManuallyBlocked += s.manually_blocked_slots || 0;
     totalUnfilledCancelled += s.unfilled_cancelled_slots || 0;
     totalUnfilledNoshow += s.unfilled_noshow_slots || 0;
     totalDeadSpaceMinutes += s.dead_space_minutes || 0;
-    if (s.slot_interval_minutes) {
-      totalSlotMinutes += scheduled * s.slot_interval_minutes;
-      slotIntervalSamples.push(s.slot_interval_minutes);
+
+    // Service-mix denominator is scheduled capacity in minutes. Under Option B
+    // that's scheduled × HC_DURATION (slot_duration_minutes), NOT the interval.
+    // Fall back to interval for legacy rows missing slot_duration_minutes.
+    const durMin = s.slot_duration_minutes || s.slot_interval_minutes;
+    if (durMin) {
+      totalSlotMinutes += scheduled * durMin;
     }
   }
 
-  // Pooled utilization
+  // Pooled utilization (exact Option B equivalents)
   const utilization = totalScheduled > 0
-    ? Math.round(((totalOccupied + totalOvertime) / totalScheduled) * 1000) / 10
+    ? Math.round(((totalOccupiedEq + totalOvertimeEq) / totalScheduled) * 1000) / 10
     : null;
 
   // Service mix efficiency: 1 - (dead_space / scheduled_minutes) × 100
