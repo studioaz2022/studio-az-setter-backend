@@ -7562,25 +7562,41 @@ function createApp() {
 
       const { type } = req.body;
 
+      let handledAppointment = false;
       switch (type) {
         case "AppointmentCreate":
         case "appointment.created":
           console.log("📥 Received GHL appointment webhook");
           await handleAppointmentCreated(req.body);
+          handledAppointment = true;
           break;
         case "AppointmentUpdate":
         case "appointment.updated":
           console.log("📥 Received GHL appointment webhook");
           await handleAppointmentUpdated(req.body);
+          handledAppointment = true;
           break;
         case "AppointmentDelete":
         case "appointment.deleted":
           console.log("📥 Received GHL appointment webhook");
           await handleAppointmentDeleted(req.body);
+          handledAppointment = true;
           break;
         default:
           // Non-appointment events (ContactUpdate, OutboundMessage, etc.) — ignore silently
           break;
+      }
+
+      // Proof-of-life for the front-desk stale banner (Section 10). Only on
+      // real appointment events; best-effort (touchHeartbeat never throws).
+      if (handledAppointment) {
+        const appt = req.body.appointment || req.body;
+        const locId =
+          req.body.locationId || appt.locationId || appt.location_id || null;
+        if (locId) {
+          const { touchHeartbeat } = require("../clients/syncHeartbeat");
+          touchHeartbeat(locId, "webhook", type);
+        }
       }
 
       res.status(200).json({ success: true });
@@ -9137,6 +9153,182 @@ function createApp() {
     const startOfDay = new Date(`${dateStr}T00:00:00.000${startOffsetStr}`);
     const endOfDay = new Date(`${dateStr}T23:59:59.999${endOffsetStr}`);
     return { startOfDay, endOfDay };
+  }
+
+  // ═══════════════════════════════════════════════════════════════════
+  // FRONT DESK DASHBOARD — read endpoints (Phase 1.7)
+  // Read the Supabase `appointments` CACHE (fast, <100ms), NOT live GHL.
+  // Webhook + reconciler keep the cache fresh. location-parameterized;
+  // all dates computed server-side in Central. See
+  // FRONT_DESK_DASHBOARD_PLAN.md Sections 3.2 / 12.
+  // ═══════════════════════════════════════════════════════════════════
+  {
+    const {
+      BARBER_DATA,
+      BARBER_LOCATION_ID: FD_BARBER_LOC,
+      TATTOO_ARTIST_DATA,
+      TATTOO_LOCATION_ID: FD_TATTOO_LOC,
+    } = require("../config/kioskConfig");
+    const {
+      centralDayRange,
+      resolveCentralDate,
+      nowCentral,
+    } = require("../util/centralTime");
+
+    const FD_BARBER_LOC_ID =
+      process.env.GHL_BARBER_LOCATION_ID || FD_BARBER_LOC;
+    const FD_TATTOO_LOC_ID = process.env.GHL_LOCATION_ID || FD_TATTOO_LOC;
+
+    /** Map ?location= to { locationId, roster, label }. */
+    function fdResolveLocation(location) {
+      const loc = (location || "barbershop").toLowerCase();
+      if (loc === "barbershop" || loc === FD_BARBER_LOC_ID) {
+        return { locationId: FD_BARBER_LOC_ID, roster: BARBER_DATA, label: "barbershop" };
+      }
+      if (loc === "tattoo" || loc === FD_TATTOO_LOC_ID) {
+        return { locationId: FD_TATTOO_LOC_ID, roster: TATTOO_ARTIST_DATA, label: "tattoo" };
+      }
+      return null;
+    }
+
+    /**
+     * GET /api/frontdesk/staff?location=barbershop|tattoo
+     * Roster for the grid columns. Source of truth = kioskConfig.js.
+     */
+    app.get("/api/frontdesk/staff", (req, res) => {
+      const resolved = fdResolveLocation(req.query.location);
+      if (!resolved) {
+        return res.status(400).json({ success: false, error: "Invalid location" });
+      }
+      const staff = resolved.roster.map((m) => ({
+        ghlUserId: m.ghlUserId,
+        name: m.name,
+        photoUrl: m.photoUrl || null,
+        calendars: m.calendars || (m.calendarId ? { default: m.calendarId } : {}),
+      }));
+      res.json({ success: true, location: resolved.label, staff });
+    });
+
+    /**
+     * GET /api/frontdesk/ping
+     * Tiny heartbeat for the dashboard connection-health model (Section 10).
+     */
+    app.get("/api/frontdesk/ping", (req, res) => {
+      res.json({ ok: true, ...nowCentral() });
+    });
+
+    /**
+     * GET /api/frontdesk/schedule?location=barbershop|tattoo&date=YYYY-MM-DD
+     * All appointments for that location + Central day, grouped by staff.
+     * Reads the Supabase cache. `date` defaults to today (Central).
+     * Surfaces off-roster assigned_user_ids instead of dropping them
+     * (roster-drift guard — Section 6).
+     */
+    app.get("/api/frontdesk/schedule", async (req, res) => {
+      try {
+        if (!supabase) {
+          return res.status(503).json({ success: false, error: "Supabase not configured" });
+        }
+        const resolved = fdResolveLocation(req.query.location);
+        if (!resolved) {
+          return res.status(400).json({ success: false, error: "Invalid location" });
+        }
+
+        let dateStr;
+        try {
+          dateStr = resolveCentralDate(req.query.date);
+        } catch (e) {
+          return res.status(400).json({ success: false, error: e.message });
+        }
+        const { startOfDay, endOfDay } = centralDayRange(dateStr);
+
+        const { data: rows, error } = await supabase
+          .from("appointments")
+          .select(
+            "id, title, calendar_id, contact_id, start_time, end_time, status, assigned_user_id, address, notes, checked_in_at, ghl_updated_at, updated_at"
+          )
+          .eq("location_id", resolved.locationId)
+          .gte("start_time", startOfDay.toISOString())
+          .lte("start_time", endOfDay.toISOString())
+          .order("start_time", { ascending: true });
+
+        if (error) {
+          console.error("[frontdesk/schedule] supabase error:", error.message);
+          return res.status(500).json({ success: false, error: error.message });
+        }
+
+        const rosterById = new Map(
+          resolved.roster.map((m) => [m.ghlUserId, m])
+        );
+
+        // Group appointments by staff; collect any off-roster assignees.
+        const byStaff = new Map();
+        const offRoster = new Map();
+        for (const r of rows || []) {
+          const uid = r.assigned_user_id || "__unassigned__";
+          const known = rosterById.has(uid);
+          const bucket = known ? byStaff : offRoster;
+          if (!bucket.has(uid)) bucket.set(uid, []);
+          bucket.get(uid).push(r);
+        }
+
+        const staff = resolved.roster.map((m) => ({
+          ghlUserId: m.ghlUserId,
+          name: m.name,
+          photoUrl: m.photoUrl || null,
+          appointments: byStaff.get(m.ghlUserId) || [],
+        }));
+
+        const offRosterColumns = [...offRoster.entries()].map(
+          ([uid, appts]) => ({
+            ghlUserId: uid === "__unassigned__" ? null : uid,
+            name: uid === "__unassigned__" ? "Unassigned" : "Unknown staff",
+            photoUrl: null,
+            appointments: appts,
+            offRoster: true,
+          })
+        );
+
+        // Per-day newest write — informational ("data for THIS day last
+        // changed at..."). NOT used for the stale banner: a quiet schedule
+        // day legitimately has old per-day timestamps even when the
+        // pipeline is perfectly healthy.
+        let dayNewest = null;
+        for (const r of rows || []) {
+          const t = r.ghl_updated_at || r.updated_at;
+          if (t && (!dayNewest || new Date(t) > new Date(dayNewest))) dayNewest = t;
+        }
+
+        // Staleness = "is the cache PIPELINE alive?" — answered by the
+        // sync heartbeat, which advances on every webhook hit AND every
+        // reconciler sweep (fixed cadence). This is the ONLY honest signal:
+        // appointment-write age can't tell "sync down" from "quiet day"
+        // (webhook only writes on changes). The sweep guarantees the
+        // heartbeat moves even with zero bookings. (Section 10 / Section 12.)
+        const { getHeartbeat } = require("../clients/syncHeartbeat");
+        const heartbeatAt = await getHeartbeat(resolved.locationId);
+        // Threshold > the reconciler sweep cadence (~10-15min) + slack.
+        const stale =
+          !heartbeatAt ||
+          Date.now() - new Date(heartbeatAt).getTime() > 20 * 60 * 1000;
+
+        res.json({
+          success: true,
+          location: resolved.label,
+          date: dateStr,
+          serverNow: nowCentral(),
+          syncedAt: heartbeatAt, // pipeline proof-of-life → drives stale banner
+          dayLastChanged: dayNewest, // informational: this day's newest write
+          stale,
+          totalAppointments: (rows || []).length,
+          staff,
+          offRoster: offRosterColumns,
+        });
+      } catch (err) {
+        console.error("❌ GET /api/frontdesk/schedule error:", err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
   }
 
   /**

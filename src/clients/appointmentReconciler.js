@@ -292,7 +292,7 @@ async function reconcileAppointments({
 
   // Single-staff scope (Refresh button) — one GHL call.
   if (staffGhlUserId) {
-    return reconcileOneStaff({
+    const s = await reconcileOneStaff({
       locationId,
       sdkInstance,
       staffGhlUserId,
@@ -300,6 +300,12 @@ async function reconcileAppointments({
       endTime,
       dryRun,
     });
+    // A completed real reconcile proves the GHL→cache path works → heartbeat.
+    if (!dryRun && s.errors === 0) {
+      const { touchHeartbeat } = require("./syncHeartbeat");
+      touchHeartbeat(locationId, "reconciler", `staff ${staffGhlUserId}`);
+    }
+    return s;
   }
 
   // Roster-wide scope (backfill / sweep) — one GHL call per staff member.
@@ -334,6 +340,17 @@ async function reconcileAppointments({
       `upd=${agg.updated} same=${agg.unchanged} skip=${agg.skipped} ` +
       `err=${agg.errors}${dryRun ? " (DRY RUN)" : ""}`
   );
+  // A completed sweep is the FIXED-CADENCE proof-of-life (advances the
+  // heartbeat even on a zero-booking day — the whole point). Touch even
+  // if some staff errored, as long as the sweep ran and mostly succeeded.
+  if (!dryRun && agg.errors < roster.length) {
+    const { touchHeartbeat } = require("./syncHeartbeat");
+    touchHeartbeat(
+      locationId,
+      "reconciler",
+      `sweep ${roster.length} staff, ins=${agg.inserted} upd=${agg.updated} err=${agg.errors}`
+    );
+  }
   return agg;
 }
 
