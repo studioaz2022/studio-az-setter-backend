@@ -3592,6 +3592,39 @@ function createApp() {
           };
         }
 
+        // ── Carry forward: surface unsettled prior-week recons ──
+        // An artist who still owes the shop (or is still owed) should not
+        // drop off the board when the week rolls over. If the current week
+        // produced no pending recon, fall back to the oldest still-pending
+        // reconciliation from a prior week so it stays actionable until paid.
+        if (!currentRow) {
+          const { data: carried } = await supabase
+            .from("reconciliations")
+            .select("*")
+            .eq("artist_ghl_id", artistId)
+            .eq("status", "pending")
+            .lt("week_start", weekStartStr)
+            .order("week_start", { ascending: true })
+            .limit(1)
+            .maybeSingle();
+
+          if (carried) {
+            currentRow = {
+              id: carried.id,
+              status: carried.status,
+              artistGhlId: carried.artist_ghl_id,
+              weekStart: carried.week_start,
+              weekEnd: carried.week_end,
+              netAmount: Math.abs(Number(carried.net_amount)),
+              direction: carried.direction,
+              venmoCode: carried.venmo_code,
+              venmoNote: carried.venmo_note,
+              projectCount: carried.project_count || 0,
+              carriedForward: true,
+            };
+          }
+        }
+
         // ── Last settled within 14 days ──
         const { data: lastSettled } = await supabase
           .from("reconciliations")
