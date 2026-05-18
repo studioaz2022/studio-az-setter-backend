@@ -96,6 +96,20 @@ const BARBER_DATA = [
       haircut_beard: '7Bj9t1Gwi0zcJRTwCvYA',
     },
   },
+  {
+    // Part-time barber — added 2026-05-18. Standard service keys
+    // (haircut/haircut_beard) drive the walk-in slot enum; the extra
+    // grey_blending/neck_trim keys are for the front-desk dashboard.
+    name: 'Anna Kinkead',
+    ghlUserId: '7iWsFK2Lao8GNZIawDDx',
+    photoUrl: 'https://msgsndr-private.storage.googleapis.com/user/7iWsFK2Lao8GNZIawDDx/profile/a8a4bc70-af11-44e5-9614-15f2fc15a9c7.jpg',
+    calendars: {
+      haircut: 'WWduImUIgEoEx8mBTkmp',
+      haircut_beard: '9s2hYN8XT06IrGGt89uT',
+      grey_blending: 'ZOORnQ8ZPwiyT3Xtvvlg',
+      neck_trim: 'rsg2VbiVFGuGiEwUIhdl',
+    },
+  },
 ];
 
 const TATTOO_LOCATION_ID = process.env.GHL_LOCATION_ID || 'mUemx2jG4wly4kJWBkI4';
