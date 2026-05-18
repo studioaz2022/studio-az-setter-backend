@@ -7526,8 +7526,40 @@ function createApp() {
   const { GHL_USER_IDS: GHL_IDS } = require("../config/constants");
 
   // ═══ GHL APPOINTMENT WEBHOOK (Supabase sync + reschedule detection + push) ═══
+  //
+  // Shared-secret auth (FAIL-OPEN until configured):
+  //   - If GHL_WEBHOOK_SECRET is NOT set: accept all requests (logs a warning).
+  //     This keeps the LIVE pipeline working while the secret is rolled out.
+  //   - If GHL_WEBHOOK_SECRET IS set: require it via the `x-ghl-webhook-secret`
+  //     header OR `?secret=` query param (GHL workflow webhooks can send either).
+  //
+  // Rollout is a coordinated 2-step (do NOT set the env var alone):
+  //   1. Deploy this code (no behavior change — secret unset = fail-open).
+  //   2. In GHL, add the header/query secret to every barbershop + tattoo
+  //      appointment webhook, THEN set GHL_WEBHOOK_SECRET on Render. Enforcement
+  //      turns on only once both sides match. See FRONT_DESK_DASHBOARD_PLAN.md §7.
+  function ghlWebhookAuthorized(req) {
+    const expected = process.env.GHL_WEBHOOK_SECRET;
+    if (!expected) {
+      console.warn(
+        "⚠️ [GHL webhook] GHL_WEBHOOK_SECRET not set — accepting unauthenticated (fail-open). Configure to enforce."
+      );
+      return true;
+    }
+    const provided =
+      req.get("x-ghl-webhook-secret") ||
+      req.query.secret ||
+      (req.body && req.body.webhookSecret);
+    return provided === expected;
+  }
+
   app.post("/webhooks/ghl/appointments", async (req, res) => {
     try {
+      if (!ghlWebhookAuthorized(req)) {
+        console.warn("🚫 [GHL webhook] Rejected — bad/missing secret");
+        return res.status(401).json({ success: false, error: "Unauthorized" });
+      }
+
       const { type } = req.body;
 
       switch (type) {
