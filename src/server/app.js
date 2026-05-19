@@ -505,6 +505,8 @@ function createApp() {
         'https://rent-tracker-studioaz2022s-projects.vercel.app', // Rent tracker fallback alias
         'http://localhost:3000',
         'http://localhost:3001',
+        'http://localhost:3002', // Front-desk dashboard (dev)
+        'http://localhost:3098', // Front-desk dashboard (local prod-test)
         'http://localhost:8080',
         'http://localhost:8888',
         'http://127.0.0.1:5500', // Common local dev server port
@@ -514,6 +516,10 @@ function createApp() {
         callback(null, true);
       } else if (/^https:\/\/rent-tracker-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
         // Rent tracker preview/branch deploys
+        callback(null, true);
+      } else if (/^https:\/\/front-desk-[a-z0-9-]+\.vercel\.app$/.test(origin) ||
+                 /^https:\/\/front-desk-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
+        // Front-desk dashboard production + preview/branch deploys (Vercel)
         callback(null, true);
       } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
         // Allow any private/local network IP (kiosk, local dev)
