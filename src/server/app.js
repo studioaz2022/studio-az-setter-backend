@@ -9261,10 +9261,29 @@ function createApp() {
           resolved.roster.map((m) => [m.ghlUserId, m])
         );
 
-        // Group appointments by staff; collect any off-roster assignees.
+        // Block-slot classification (Section 12). GHL stores break/
+        // availability "slots" in the same appointments table — they are
+        // NOT client bookings. Two reliable signals (from inspecting real
+        // data 2026-05-19): composite id `<id>_<epoch>_<dur>` AND/OR the
+        // dedicated break calendar `lijQ2ubF4UcrHxDwfzyK`. Flag them so
+        // the grid renders a hatched band, not a client card, and they're
+        // excluded from the booking count.
+        const BLOCK_CALENDAR_ID = "lijQ2ubF4UcrHxDwfzyK";
+        const BLOCK_ID_RE = /^[A-Za-z0-9]{15,}_\d{10,}_\d+$/;
+        const isBlockRow = (r) =>
+          r.calendar_id === BLOCK_CALENDAR_ID || BLOCK_ID_RE.test(r.id || "");
+
+        // Group by staff; collect off-roster assignees. Blocks stay on
+        // their staffer's column (a barber's break belongs there) but are
+        // tagged isBlock for the UI.
         const byStaff = new Map();
         const offRoster = new Map();
+        let blockCount = 0;
         for (const r of rows || []) {
+          if (isBlockRow(r)) {
+            r.isBlock = true;
+            blockCount++;
+          }
           const uid = r.assigned_user_id || "__unassigned__";
           const known = rosterById.has(uid);
           const bucket = known ? byStaff : offRoster;
@@ -9320,7 +9339,9 @@ function createApp() {
           syncedAt: heartbeatAt, // pipeline proof-of-life → drives stale banner
           dayLastChanged: dayNewest, // informational: this day's newest write
           stale,
-          totalAppointments: (rows || []).length,
+          totalAppointments: (rows || []).length - blockCount, // real bookings only
+          totalRows: (rows || []).length,
+          blockCount,
           staff,
           offRoster: offRosterColumns,
         });
