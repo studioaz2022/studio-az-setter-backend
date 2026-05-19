@@ -9356,6 +9356,113 @@ function createApp() {
         res.status(500).json({ success: false, error: err.message });
       }
     });
+
+    /**
+     * POST /api/frontdesk/check-in   (Phase 2.12)
+     * One-tap arrival marker. Body: { appointmentId, location,
+     *   actingStaffGhlUserId?, actingStaffName?, undo? }
+     *
+     * Check-in is an OPERATIONAL record only — sets/clears
+     * appointments.checked_in_at in Supabase, NO GHL status change
+     * (mirrors the kiosk's deliberate behavior). The grid already
+     * knows the exact appointmentId from the tapped card, so no
+     * name/phone matching is needed.
+     *
+     * NOT gated by the identity wizard (Section 8.3 — high-frequency,
+     * low-stakes) but still audit-logged under the session identity
+     * (best-effort attribution, by design). `undo:true` clears it
+     * (mis-tap recovery — the desk needs to be able to un-check-in).
+     */
+    app.post("/api/frontdesk/check-in", async (req, res) => {
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        const {
+          appointmentId,
+          location,
+          actingStaffGhlUserId = null,
+          actingStaffName = null,
+          undo = false,
+        } = req.body || {};
+
+        if (!appointmentId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "appointmentId is required" });
+        }
+        const resolved = fdResolveLocation(location);
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+
+        const checkedInAt = undo ? null : new Date().toISOString();
+        const { data: updated, error: upErr } = await supabase
+          .from("appointments")
+          .update({ checked_in_at: checkedInAt })
+          .eq("id", appointmentId)
+          .eq("location_id", resolved.locationId) // scope guard
+          .select("id, checked_in_at, title");
+
+        const ok = !upErr && updated && updated.length > 0;
+
+        // Audit (Section 8.2) — logged even though no wizard. Best-effort.
+        try {
+          await supabase.from("frontdesk_audit_log").insert([
+            {
+              location: resolved.label,
+              acting_staff_ghl_user_id: actingStaffGhlUserId,
+              acting_staff_name: actingStaffName,
+              action: undo ? "check_in_undo" : "check_in",
+              target_type: "appointment",
+              target_id: appointmentId,
+              summary: ok
+                ? `${undo ? "Un-checked-in" : "Checked in"}: ${
+                    (updated[0].title || "").trim() || appointmentId
+                  }`
+                : `check-in ${undo ? "undo " : ""}failed for ${appointmentId}`,
+              result: ok ? "success" : "failed",
+              error_text: upErr
+                ? upErr.message
+                : ok
+                ? null
+                : "appointment not found in cache",
+            },
+          ]);
+        } catch (auditErr) {
+          console.warn(
+            "[frontdesk/check-in] audit insert failed (non-fatal):",
+            auditErr.message
+          );
+        }
+
+        if (upErr) {
+          console.error("[frontdesk/check-in] update error:", upErr.message);
+          return res
+            .status(500)
+            .json({ success: false, error: upErr.message });
+        }
+        if (!ok) {
+          // Cache miss — webhook may not have synced this row yet.
+          return res.status(404).json({
+            success: false,
+            error: "Appointment not found in cache",
+          });
+        }
+        return res.json({
+          success: true,
+          appointmentId,
+          checkedInAt: updated[0].checked_in_at,
+        });
+      } catch (err) {
+        console.error("❌ POST /api/frontdesk/check-in error:", err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
   }
 
   /**
