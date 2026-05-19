@@ -9463,6 +9463,132 @@ function createApp() {
         res.status(500).json({ success: false, error: err.message });
       }
     });
+
+    /**
+     * GET /api/frontdesk/search?location=&q=    (Phase 2.13)
+     * Client lookup by name / phone / email. Thin wrapper over the
+     * existing /api/contacts/search logic, but exposes the uniform
+     * `location=barbershop|tattoo` param (maps it to the right SDK +
+     * locationId) so the frontend API surface stays consistent.
+     */
+    app.get("/api/frontdesk/search", async (req, res) => {
+      try {
+        const q = (req.query.q || "").toString().trim();
+        const resolved = fdResolveLocation(req.query.location);
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (q.length < 2) {
+          // Avoid hammering GHL on every keystroke / empty box.
+          return res.json({ success: true, contacts: [] });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk = isBarber && ghlBarber ? ghlBarber : ghl;
+
+        const result = await sdk.contacts.getContacts({
+          locationId: resolved.locationId,
+          query: q,
+          limit: 20,
+        });
+
+        // Resolve assignedTo → staff name from the cached user list.
+        let userNameMap = {};
+        try {
+          const users = await getCachedUsers(
+            isBarber ? "barber" : "tattoo",
+            sdk,
+            resolved.locationId
+          );
+          for (const u of users) {
+            userNameMap[u.id] =
+              u.name || `${u.firstName || ""} ${u.lastName || ""}`.trim();
+          }
+        } catch (e) {
+          console.warn(
+            "[frontdesk/search] user map failed (non-fatal):",
+            e.message
+          );
+        }
+
+        const titleCase = (s) =>
+          s ? s.replace(/\b\w/g, (c) => c.toUpperCase()) : s;
+        const contacts = (result?.contacts || []).map((c) => {
+          const rawName =
+            c.contactName ||
+            `${c.firstName || ""} ${c.lastName || ""}`.trim() ||
+            null;
+          return {
+            id: c.id,
+            contactName: titleCase(rawName),
+            firstName: titleCase(c.firstName),
+            lastName: titleCase(c.lastName),
+            email: c.email || null,
+            phone: c.phone || null,
+            assignedTo: c.assignedTo || null,
+            assignedToName: c.assignedTo
+              ? userNameMap[c.assignedTo] || null
+              : null,
+            tags: c.tags || [],
+          };
+        });
+
+        res.json({ success: true, location: resolved.label, contacts });
+      } catch (err) {
+        console.error("❌ GET /api/frontdesk/search error:", err.message || err);
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
+
+    /**
+     * GET /api/frontdesk/contact-appointments?location=&contactId=
+     * That contact's appointments, newest-first. Wrapper over the
+     * existing /api/contacts/:id/appointments logic with `location=`.
+     */
+    app.get("/api/frontdesk/contact-appointments", async (req, res) => {
+      try {
+        const contactId = (req.query.contactId || "").toString();
+        const resolved = fdResolveLocation(req.query.location);
+        if (!contactId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "contactId is required" });
+        }
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        let events = [];
+        if (isBarber && ghlBarber) {
+          const r = await ghlBarber.contacts.getAppointmentsForContact({
+            contactId,
+          });
+          events = r?.events || [];
+        } else {
+          events = await listAppointmentsForContact(contactId);
+        }
+        events.sort(
+          (a, b) => new Date(b.startTime) - new Date(a.startTime)
+        );
+
+        res.json({
+          success: true,
+          location: resolved.label,
+          appointments: events,
+        });
+      } catch (err) {
+        console.error(
+          "❌ GET /api/frontdesk/contact-appointments error:",
+          err.message || err
+        );
+        res.status(500).json({ success: false, error: err.message });
+      }
+    });
   }
 
   /**
