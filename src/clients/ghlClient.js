@@ -499,7 +499,7 @@ async function upsertContactFromWidget(widgetPayload, mode = "partial") {
     phone,
     tags: normalizedTags,
     customField,
-    source: "AI Tattoo Widget",
+    source: mode === "final" ? "Web Form (Completed)" : "Web Form (Partial)",
   };
 
   // Try to find existing contact
