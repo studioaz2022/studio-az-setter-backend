@@ -15,6 +15,15 @@
 // query never returns it again. The only path that does NOT stamp is the
 // outside-send-window deferral — those rows roll over to the next hourly sweep.
 //
+// nudge_sent_at vs. nudge_sms_sent_at:
+//   - nudge_sent_at is set on every resolved row (the claim marker). It does
+//     NOT mean an SMS was sent.
+//   - nudge_sms_sent_at is set only when an SMS was actually dispatched to GHL
+//     and the call returned successfully. This is what the funnel reads as
+//     "nudges_sent."
+// nudge_outcome records the specific branch that resolved each row, for
+// debugging why nudges aren't firing.
+//
 // Kill switch: LANDING_PAGE_FILL_NUDGE_ENABLED=false short-circuits the sweep.
 
 const { supabase } = require("../clients/supabaseClient");
@@ -83,11 +92,20 @@ function buildShortUrl(token) {
  * when we won the race, false when another sweep beat us to it. Either outcome
  * is fine — the SMS doesn't fire twice because we stamp BEFORE sending and
  * bail on lost-race.
+ *
+ * `outcome` records which branch of processTokenRow resolved this row.
+ * The "sent" path is provisional here ("pending_send") — markSendOutcome later
+ * promotes it to "sent" (with nudge_sms_sent_at) or "send_failed" depending on
+ * whether GHL accepted the SMS.
  */
-async function claimRow(token) {
+async function claimRow(token, outcome) {
+  const nowIso = new Date().toISOString();
   const { data, error } = await supabase
     .from("fill_tokens")
-    .update({ nudge_sent_at: new Date().toISOString() })
+    .update({
+      nudge_sent_at: nowIso,
+      nudge_outcome: outcome,
+    })
     .eq("token", token)
     .is("nudge_sent_at", null)
     .select("token")
@@ -98,6 +116,29 @@ async function claimRow(token) {
     return false;
   }
   return !!data;
+}
+
+/**
+ * Promote a claimed row's outcome after the SMS dispatch attempt resolves.
+ * Sets nudge_sms_sent_at only on success — the funnel uses this to count
+ * actual sends. Failure here just logs; the row stays claimed either way so
+ * we don't retry and accidentally double-send.
+ */
+async function markSendOutcome(token, outcome) {
+  const update = { nudge_outcome: outcome };
+  if (outcome === "sent") {
+    update.nudge_sms_sent_at = new Date().toISOString();
+  }
+  const { error } = await supabase
+    .from("fill_tokens")
+    .update(update)
+    .eq("token", token);
+  if (error) {
+    console.error(
+      `[fillNudge] markSendOutcome update failed for ${token} (${outcome}):`,
+      error.message
+    );
+  }
 }
 
 /**
@@ -157,7 +198,7 @@ async function processTokenRow(row, now = new Date()) {
   // Skip if lead has clicked the link (either before or after the 24h mark
   // doesn't matter — they're aware of the form).
   if (row.last_seen_at && new Date(row.last_seen_at) > new Date(row.created_at)) {
-    if (await claimRow(row.token)) {
+    if (await claimRow(row.token, "skipped_engaged")) {
       return { status: "skipped_engaged" };
     }
     return { status: "lost_race" };
@@ -167,7 +208,7 @@ async function processTokenRow(row, now = new Date()) {
   const artistUserId = ARTIST_USER_IDS[row.artist_slug];
   if (!artistUserId) {
     console.warn(`[fillNudge] Unknown artist slug ${row.artist_slug} on token ${row.token}`);
-    if (await claimRow(row.token)) {
+    if (await claimRow(row.token, "skipped_unknown_artist")) {
       return { status: "skipped_unknown_artist" };
     }
     return { status: "lost_race" };
@@ -182,7 +223,7 @@ async function processTokenRow(row, now = new Date()) {
     return { status: "error", error: `getContact failed: ${err.message}` };
   }
   if (!contact) {
-    if (await claimRow(row.token)) {
+    if (await claimRow(row.token, "skipped_contact")) {
       return { status: "skipped_contact" };
     }
     return { status: "lost_race" };
@@ -204,7 +245,7 @@ async function processTokenRow(row, now = new Date()) {
     return { status: "error", error: err.message };
   }
   if (alreadyReplied) {
-    if (await claimRow(row.token)) {
+    if (await claimRow(row.token, "skipped_replied")) {
       return { status: "skipped_replied" };
     }
     return { status: "lost_race" };
@@ -215,10 +256,11 @@ async function processTokenRow(row, now = new Date()) {
     return { status: "deferred_window" };
   }
 
-  // Stamp first, then send. If the SMS send fails after stamping we'll log it
-  // but won't retry — same trade-off the auto-SMS makes (errs on the side of
-  // not double-texting).
-  if (!(await claimRow(row.token))) {
+  // Claim the row to prevent double-processing. We start with outcome
+  // "pending_send" — the true outcome is rewritten below once we know whether
+  // GHL accepted the SMS. This is the key correctness fix: nudge_outcome must
+  // reflect what actually happened, not what we hoped would happen.
+  if (!(await claimRow(row.token, "pending_send"))) {
     return { status: "lost_race" };
   }
 
@@ -238,11 +280,15 @@ async function processTokenRow(row, now = new Date()) {
       contactId: row.contact_id,
       message: body,
     });
+    // Promote outcome to "sent" and stamp the actual send time. Done AFTER the
+    // SMS dispatch so we never falsely claim a send.
+    await markSendOutcome(row.token, "sent");
     console.log(
       `📱 [FILL-NUDGE] Sent to contact ${row.contact_id} (token ${row.token}, artist ${row.artist_slug}, lang ${row.language || "en"})`
     );
     return { status: "sent" };
   } catch (err) {
+    await markSendOutcome(row.token, "send_failed");
     console.error(
       `❌ [FILL-NUDGE] SMS send failed for token ${row.token}:`,
       err.response?.data || err.message

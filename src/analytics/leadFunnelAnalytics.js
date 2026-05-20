@@ -200,7 +200,7 @@ async function fetchFillTokenRows(windowDays) {
   // exceed that, switch to fetchAllRows().
   const { data, error } = await supabase
     .from("fill_tokens")
-    .select("token, contact_id, artist_slug, created_at, last_seen_at, first_step_completed_at, last_step_completed_at, submitted_at, nudge_sent_at")
+    .select("token, contact_id, artist_slug, created_at, last_seen_at, first_step_completed_at, last_step_completed_at, submitted_at, nudge_sent_at, nudge_sms_sent_at, nudge_outcome")
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false })
     .limit(1000);
@@ -233,17 +233,31 @@ async function getFunnelSnapshot(windowDays = 30, { force = false } = {}) {
   const toIso = new Date(now).toISOString();
 
   // Funnel counts — straight pass over rows.
+  // nudges_sent counts only rows where an SMS was actually dispatched to GHL,
+  // not rows where the sweep merely processed a no-op outcome. The legacy
+  // nudge_sent_at column is preserved for the by-outcome rollup below but is
+  // no longer the source of truth for "we sent an SMS."
   const totals = {
     inquiries: rows.length,
     fill_tokens_created: rows.length,
     fill_links_clicked: rows.filter((r) => r.last_seen_at).length,
     fill_started: rows.filter((r) => r.first_step_completed_at).length,
     fill_completed: rows.filter((r) => r.submitted_at).length,
-    nudges_sent: rows.filter((r) => r.nudge_sent_at).length,
+    nudges_sent: rows.filter((r) => r.nudge_sms_sent_at).length,
   };
 
+  // Per-outcome rollup of how the nudge sweep resolved each row. Surfaces
+  // why nudges aren't sending when nudges_sent is low (e.g. all skipped_engaged
+  // means the form is converting before the 24h mark — good news; all
+  // unknown_legacy means we're looking at pre-migration rows — informational).
+  const nudgeOutcomes = rows.reduce((acc, r) => {
+    const k = r.nudge_outcome || (r.nudge_sent_at ? "unknown_legacy" : "unprocessed");
+    acc[k] = (acc[k] || 0) + 1;
+    return acc;
+  }, {});
+
   const completedAfterNudge = rows.filter(
-    (r) => r.nudge_sent_at && r.submitted_at && new Date(r.submitted_at) > new Date(r.nudge_sent_at)
+    (r) => r.nudge_sms_sent_at && r.submitted_at && new Date(r.submitted_at) > new Date(r.nudge_sms_sent_at)
   ).length;
 
   const rates = {
@@ -345,6 +359,7 @@ async function getFunnelSnapshot(windowDays = 30, { force = false } = {}) {
     window: { days, from: fromIso, to: toIso },
     totals,
     rates,
+    nudge_outcomes: nudgeOutcomes,
     timing: {
       median_minutes_inquiry_to_click: inquiryToClickStats.median,
       median_minutes_click_to_submit: clickToSubmitStats.median,
