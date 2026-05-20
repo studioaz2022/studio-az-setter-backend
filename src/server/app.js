@@ -9589,6 +9589,179 @@ function createApp() {
         res.status(500).json({ success: false, error: err.message });
       }
     });
+
+    /**
+     * GET /api/frontdesk/conversation?location=&contactId=&limit=
+     * Read a contact's conversation thread (Phase 2.14). Own clean
+     * read — NOT via ghlClient.getConversationHistory which is
+     * hardcoded to the tattoo location. Picks the right SDK by
+     * location and hits /conversations/messages/export.
+     */
+    app.get("/api/frontdesk/conversation", async (req, res) => {
+      try {
+        const resolved = fdResolveLocation(req.query.location);
+        const contactId = (req.query.contactId || "").toString();
+        const limit = Math.max(
+          10,
+          Math.min(parseInt(req.query.limit, 10) || 50, 500)
+        );
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!contactId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "contactId is required" });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        const params = new URLSearchParams({
+          locationId: resolved.locationId,
+          contactId,
+          limit: String(limit),
+          sortBy: "createdAt",
+          sortOrder: "desc",
+        });
+        const httpClient = sdk.getHttpClient();
+        const resp = await httpClient.get(
+          `/conversations/messages/export?${params}`
+        );
+        const messages = resp.data?.messages || [];
+        res.json({ success: true, location: resolved.label, messages });
+      } catch (err) {
+        console.error(
+          "❌ GET /api/frontdesk/conversation error:",
+          err.response?.data || err.message || err
+        );
+        res.status(500).json({
+          success: false,
+          error: err.response?.data?.message || err.message,
+        });
+      }
+    });
+
+    /**
+     * POST /api/frontdesk/message   (Phase 2.14 — sends REAL SMS)
+     * Body: { location, contactId, body, type?='SMS',
+     *         actingStaffGhlUserId?, actingStaffName? }
+     *
+     * Clean human-attributed send path. **Deliberately does NOT use
+     * ghlClient.sendConversationMessage** because that function:
+     *   - appends the iOS AI_MESSAGE_MARKER (double-space) so iOS
+     *     classifies the message as AI — desk messages are HUMAN
+     *     and must NOT carry it,
+     *   - temporarily reassigns the contact to the AI Bot userId
+     *     (a tattoo-shop AI-setter trick the desk doesn't want),
+     *   - is hardcoded to the tattoo location,
+     *   - respects AI_RESPONSES_ENABLED kill switch (would block
+     *     legitimate desk messages).
+     *
+     * Each send: identity-wizard-gated client-side; audit-logged
+     * here (success AND failure) for the forensic trail.
+     */
+    app.post("/api/frontdesk/message", async (req, res) => {
+      const {
+        location,
+        contactId,
+        body,
+        type = "SMS",
+        actingStaffGhlUserId = null,
+        actingStaffName = null,
+      } = req.body || {};
+
+      const resolved = fdResolveLocation(location);
+      const trimmed = (body || "").trim();
+
+      // Always write an audit row, success or failure. We resolve
+      // the audit values up front so the catch can use them.
+      const auditBase = {
+        location: resolved?.label || (location ?? null),
+        acting_staff_ghl_user_id: actingStaffGhlUserId,
+        acting_staff_name: actingStaffName,
+        action: "message_send",
+        target_type: "contact",
+        target_id: contactId || null,
+        summary: trimmed
+          ? `to contact ${contactId || "?"}: ${trimmed.slice(0, 80)}`
+          : "empty message",
+        payload: { type, len: trimmed.length },
+      };
+
+      async function logAudit(result, errorText = null) {
+        if (!supabase) return;
+        try {
+          await supabase
+            .from("frontdesk_audit_log")
+            .insert([{ ...auditBase, result, error_text: errorText }]);
+        } catch (e) {
+          console.warn(
+            "[frontdesk/message] audit insert failed (non-fatal):",
+            e.message
+          );
+        }
+      }
+
+      try {
+        if (!resolved) {
+          await logAudit("failed", "Invalid location");
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!contactId) {
+          await logAudit("failed", "contactId is required");
+          return res
+            .status(400)
+            .json({ success: false, error: "contactId is required" });
+        }
+        if (!trimmed) {
+          await logAudit("failed", "empty body");
+          return res
+            .status(400)
+            .json({ success: false, error: "Message body is empty" });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        // The SDK posts to POST /conversations/messages. We pass NO
+        // userId (the desk operator is self-identified via the wizard,
+        // but isn't necessarily a GHL user; identity attribution lives
+        // in the audit log, not in GHL's message envelope).
+        const payload = {
+          contactId,
+          locationId: resolved.locationId,
+          message: trimmed, // <-- NO AI marker. Critical (Section 6).
+          type, // 'SMS' | 'Email' | 'WhatsApp' (default SMS)
+        };
+        const result = await sdk.conversations.sendANewMessage(payload);
+
+        await logAudit("success");
+        res.json({
+          success: true,
+          messageId:
+            result?.messageId ||
+            result?.id ||
+            result?.data?.messageId ||
+            null,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ POST /api/frontdesk/message error:", msg);
+        await logAudit("failed", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
