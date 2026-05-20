@@ -141,7 +141,7 @@ function isUSPhoneNumber(phone) {
 const CUSTOM_FIELD_MAP = {
   language_preference: "ETxasC6QlyxRaKU18kbz",
   inquired_technician: "H3PSN8tZSw1kYckHJN9D",
-  whatsapp_user: "FnYDobmYqnXDxlLJY5oe",
+  whatsapp_user: "QqDydmY1fnldidlcMnBC",
   tattoo_title: "8JqgdVJraABsqgUeqJ3a",
   tattoo_summary: "xAGtMfmbxtfCHdo2oyf7",
   tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
@@ -149,9 +149,10 @@ const CUSTOM_FIELD_MAP = {
   tattoo_size: "KXtfZYdeSKUyS5llTKsr",
   tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
   how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
-  first_tattoo: "QqDydmY1fnldidlcMnBC",
-  tattoo_concerns: "tattoo_concerns",
-  tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
+  first_tattoo: "FnYDobmYqnXDxlLJY5oe",
+  tattoo_concerns: "6pvXL4oJVkD1yL4uw8KB",
+  budget_range: "8onn1kDyobzZUP1dR7Q9",
+  tattoo_photo_description: "vmE7glOhOfrSu5rDrjAA",
   consultation_type: "gM2PVo90yNBDHekV5G64",
 };
 
@@ -1113,7 +1114,7 @@ async function sendConversationMessage({ contactId, body, channelContext = {} })
         if (type === "WhatsApp") {
           const contact = await getContact(contactId);
           const cf = contact?.customField || contact?.customFields || {};
-          const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";
+          const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.QqDydmY1fnldidlcMnBC || "";
           const hasWhatsAppEnabled = whatsappUser.toLowerCase() === "yes";
           const phone = contact?.phone || contact?.phoneNumber;
           const isUSPhone = isUSPhoneNumber(phone);
