@@ -9762,6 +9762,195 @@ function createApp() {
         res.status(500).json({ success: false, error: msg });
       }
     });
+
+    /**
+     * POST /api/frontdesk/cancel   (Phase 3 — first real GHL write)
+     * Body: { location, appointmentId, reason?, actionId?,
+     *         actingStaffGhlUserId?, actingStaffName? }
+     *
+     * Sets the GHL appointment's status to "cancelled" (the webhook
+     * then echoes the change back into the Supabase cache within
+     * seconds — same convergence path as any other GHL-side edit).
+     *
+     * Wizard-gated client-side (Section 8.3). Every call writes a
+     * `frontdesk_audit_log` row, success AND failure. The operation
+     * is resource-idempotent (cancelling an already-cancelled appt
+     * is a no-op in GHL + cache) so `actionId` is accepted for the
+     * shared write-contract but not required for dedup here — book/
+     * reschedule will use it for real.
+     *
+     * Pre-write scope guard: confirm the appointment exists in our
+     * cache under this location BEFORE calling GHL. Prevents a desk
+     * on the wrong location from cancelling another shop's row.
+     */
+    app.post("/api/frontdesk/cancel", async (req, res) => {
+      const {
+        location,
+        appointmentId,
+        reason = null,
+        actionId = null,
+        actingStaffGhlUserId = null,
+        actingStaffName = null,
+      } = req.body || {};
+
+      const resolved = fdResolveLocation(location);
+      const trimmedReason = reason ? String(reason).trim().slice(0, 200) : null;
+
+      const auditBase = {
+        location: resolved?.label || (location ?? null),
+        acting_staff_ghl_user_id: actingStaffGhlUserId,
+        acting_staff_name: actingStaffName,
+        action: "cancel",
+        target_type: "appointment",
+        target_id: appointmentId || null,
+        payload: {
+          reason: trimmedReason,
+          actionId,
+        },
+      };
+
+      async function logAudit(result, summary, errorText = null) {
+        if (!supabase) return;
+        try {
+          await supabase
+            .from("frontdesk_audit_log")
+            .insert([
+              { ...auditBase, summary, result, error_text: errorText },
+            ]);
+        } catch (e) {
+          console.warn(
+            "[frontdesk/cancel] audit insert failed (non-fatal):",
+            e.message
+          );
+        }
+      }
+
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        if (!resolved) {
+          await logAudit("failed", "cancel rejected: invalid location", "Invalid location");
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!appointmentId) {
+          await logAudit(
+            "failed",
+            "cancel rejected: missing appointmentId",
+            "appointmentId is required"
+          );
+          return res
+            .status(400)
+            .json({ success: false, error: "appointmentId is required" });
+        }
+
+        // Cache lookup: scope to location + grab calendar_id (some GHL
+        // clusters require it on edits — see ghlCalendarClient.js).
+        const { data: cacheRow, error: cacheErr } = await supabase
+          .from("appointments")
+          .select("id, calendar_id, title, status, location_id")
+          .eq("id", appointmentId)
+          .eq("location_id", resolved.locationId)
+          .maybeSingle();
+
+        if (cacheErr) {
+          await logAudit(
+            "failed",
+            `cancel cache lookup failed for ${appointmentId}`,
+            cacheErr.message
+          );
+          console.error("[frontdesk/cancel] cache lookup error:", cacheErr.message);
+          return res.status(500).json({ success: false, error: cacheErr.message });
+        }
+        if (!cacheRow) {
+          await logAudit(
+            "failed",
+            `cancel rejected: appointment ${appointmentId} not in ${resolved.label} cache`,
+            "appointment not found in cache for this location"
+          );
+          return res.status(404).json({
+            success: false,
+            error: "Appointment not found in cache for this location",
+          });
+        }
+
+        // Already cancelled? — resource-idempotent: return success
+        // without touching GHL again. (A duplicate click after a slow
+        // first request lands here harmlessly.)
+        const currentStatus = (cacheRow.status || "").toLowerCase();
+        if (currentStatus === "cancelled" || currentStatus === "canceled") {
+          await logAudit(
+            "success",
+            `cancel no-op (already cancelled): ${
+              (cacheRow.title || "").trim() || appointmentId
+            }`
+          );
+          return res.json({
+            success: true,
+            appointmentId,
+            alreadyCancelled: true,
+          });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        const payload = {
+          appointmentStatus: "cancelled",
+          toNotify: false,
+        };
+        // Include calendarId — some GHL clusters require it on edits.
+        if (cacheRow.calendar_id) payload.calendarId = cacheRow.calendar_id;
+
+        await sdk.calendars.editAppointment(
+          { eventId: appointmentId },
+          payload
+        );
+
+        const niceSummary = `Cancelled: ${
+          (cacheRow.title || "").trim() || appointmentId
+        }${trimmedReason ? ` — reason: ${trimmedReason}` : ""}`;
+        await logAudit("success", niceSummary);
+
+        // Optimistic mirror in cache so the next dashboard poll sees
+        // "cancelled" immediately even if the GHL webhook is briefly
+        // slow. The webhook will arrive within seconds and converge.
+        try {
+          await supabase
+            .from("appointments")
+            .update({ status: "cancelled" })
+            .eq("id", appointmentId)
+            .eq("location_id", resolved.locationId);
+        } catch (mirrorErr) {
+          console.warn(
+            "[frontdesk/cancel] cache mirror failed (non-fatal — webhook will reconcile):",
+            mirrorErr.message
+          );
+        }
+
+        return res.json({
+          success: true,
+          appointmentId,
+          status: "cancelled",
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ POST /api/frontdesk/cancel error:", msg);
+        await logAudit(
+          "failed",
+          `cancel failed for ${appointmentId || "?"}`,
+          msg
+        );
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
