@@ -10426,6 +10426,432 @@ function createApp() {
         res.status(500).json({ success: false, error: msg });
       }
     });
+
+    /**
+     * POST /api/frontdesk/book   (Phase 3.15c-ii)
+     * Create a new appointment from the BookingSheet. The heaviest
+     * write surface in the project: real GHL appointment, fires real
+     * workflows, may create a new contact.
+     *
+     * Body:
+     *   {
+     *     location,                  // "barbershop" | "tattoo"
+     *     staffGhlUserId,            // who's doing the appointment
+     *     calendarId,                // service-specific calendar
+     *     startTime,                 // ISO string (with offset)
+     *     durationMinutes,           // 5..480, post-validated
+     *
+     *     // Contact — EXACTLY ONE of these must be provided:
+     *     contactId,                 // existing contact picked from lookup
+     *     newContact: {              // OR inline-create payload
+     *       firstName, lastName?,    //   parsed by caller; we don't split
+     *       phone                    //   required for createContact
+     *     },
+     *
+     *     // Optional:
+     *     serviceLabel,              // pretty label for the title; falls
+     *                                //   back to "Appointment"
+     *     reason,                    // ignored here; reserved for parity
+     *     actionId,                  // client UUID for idempotency
+     *     actingStaffGhlUserId,      // wizard identity
+     *     actingStaffName,
+     *   }
+     *
+     * Flow:
+     *   1. Validate inputs (location, required fields, time, duration).
+     *   2. Idempotency check: if actionId already exists in the audit
+     *      log with result='success', return the original appointmentId
+     *      from its payload. NEVER create twice.
+     *   3. Pre-write live re-check (Section 11): pull the staff's
+     *      appointments for that day from CACHE; reject if the slot
+     *      [startTime, startTime + durationMinutes) overlaps any
+     *      active appointment for that assigned_user_id. Cache is
+     *      <20s old; this is faster + nearly as authoritative as
+     *      calling GHL live, and matches what the availability
+     *      endpoint shows the desk so the rejection is consistent.
+     *   4. Find or create the contact (barbershop uses ghlBarber,
+     *      tattoo uses default ghl). Existing-by-phone wins.
+     *   5. Create the appointment via sdk.calendars.createAppointment
+     *      with explicit endTime so duration is exact.
+     *   6. Audit row written with action='book', the new appointmentId
+     *      in target_id, full payload (actionId, contactId, calendarId,
+     *      startTime, durationMinutes) for the forensic record.
+     *      The webhook will echo the new appointment back into the
+     *      cache within seconds.
+     *
+     * Failure modes (all audit-logged):
+     *   - 400: validation
+     *   - 409: slot collision (pre-write re-check)
+     *   - 500: GHL contact create or appointment create blew up
+     *   - 200 + dedup: actionId already used — returns prior result
+     */
+    app.post("/api/frontdesk/book", async (req, res) => {
+      const {
+        location,
+        staffGhlUserId,
+        calendarId,
+        startTime,
+        durationMinutes,
+        contactId: existingContactId,
+        newContact,
+        serviceLabel,
+        actionId,
+        actingStaffGhlUserId = null,
+        actingStaffName = null,
+      } = req.body || {};
+
+      const resolved = fdResolveLocation(location);
+
+      // Pre-build audit base. Filled lazily as we learn the contactId
+      // / appointmentId. The summary + target_id update on each branch.
+      const auditBase = {
+        location: resolved?.label || (location ?? null),
+        acting_staff_ghl_user_id: actingStaffGhlUserId,
+        acting_staff_name: actingStaffName,
+        action: "book",
+        target_type: "appointment",
+        target_id: null, // filled when GHL returns the new appointment id
+        payload: {
+          actionId: actionId || null,
+          staffGhlUserId: staffGhlUserId || null,
+          calendarId: calendarId || null,
+          startTime: startTime || null,
+          durationMinutes: durationMinutes || null,
+          contactId: existingContactId || null,
+          newContact: newContact
+            ? { firstName: newContact.firstName, phone: newContact.phone }
+            : null,
+          serviceLabel: serviceLabel || null,
+        },
+      };
+
+      async function logAudit(result, summary, errorText = null, extra = {}) {
+        if (!supabase) return;
+        try {
+          await supabase.from("frontdesk_audit_log").insert([
+            {
+              ...auditBase,
+              ...extra, // allows target_id override
+              summary,
+              result,
+              error_text: errorText,
+            },
+          ]);
+        } catch (e) {
+          console.warn(
+            "[frontdesk/book] audit insert failed (non-fatal):",
+            e.message
+          );
+        }
+      }
+
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        if (!resolved) {
+          await logAudit("failed", "book rejected: invalid location", "Invalid location");
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!staffGhlUserId) {
+          await logAudit("failed", "book rejected: missing staffGhlUserId", "staffGhlUserId is required");
+          return res
+            .status(400)
+            .json({ success: false, error: "staffGhlUserId is required" });
+        }
+        if (!calendarId) {
+          await logAudit("failed", "book rejected: missing calendarId", "calendarId is required");
+          return res
+            .status(400)
+            .json({ success: false, error: "calendarId is required" });
+        }
+        if (!startTime) {
+          await logAudit("failed", "book rejected: missing startTime", "startTime is required");
+          return res
+            .status(400)
+            .json({ success: false, error: "startTime is required" });
+        }
+        const startMs = Date.parse(startTime);
+        if (!Number.isFinite(startMs)) {
+          await logAudit("failed", `book rejected: bad startTime "${startTime}"`, "startTime not parseable as ISO");
+          return res
+            .status(400)
+            .json({ success: false, error: "startTime must be an ISO timestamp" });
+        }
+        const dur = parseInt(durationMinutes, 10);
+        if (!Number.isFinite(dur) || dur < 5 || dur > 480) {
+          await logAudit("failed", `book rejected: bad durationMinutes ${durationMinutes}`, "durationMinutes must be 5..480");
+          return res
+            .status(400)
+            .json({ success: false, error: "durationMinutes must be between 5 and 480" });
+        }
+        // Block bookings into the past (anti-typo guard — clock skew is
+        // less than 60s in any realistic case; allow 2 min slack).
+        if (startMs < Date.now() - 2 * 60 * 1000) {
+          await logAudit("failed", `book rejected: startTime in the past (${startTime})`, "startTime is in the past");
+          return res
+            .status(400)
+            .json({ success: false, error: "startTime is in the past" });
+        }
+        // Contact: exactly one of contactId or newContact must come.
+        const hasExisting = !!existingContactId;
+        const hasNew = !!(
+          newContact &&
+          (newContact.firstName || "").trim() &&
+          (newContact.phone || "").trim()
+        );
+        if (hasExisting && hasNew) {
+          await logAudit("failed", "book rejected: both contactId and newContact provided", "Choose one — existing OR new contact");
+          return res.status(400).json({
+            success: false,
+            error: "Provide either contactId OR newContact, not both",
+          });
+        }
+        if (!hasExisting && !hasNew) {
+          await logAudit("failed", "book rejected: no contact info", "Need contactId or newContact{firstName,phone}");
+          return res.status(400).json({
+            success: false,
+            error: "contactId or newContact{firstName,phone} is required",
+          });
+        }
+
+        // Roster sanity check — same guard as /services so a desk
+        // can't book a staffer who isn't on the location.
+        const member = resolved.roster.find(
+          (m) => m.ghlUserId === staffGhlUserId
+        );
+        if (!member) {
+          await logAudit("failed", `book rejected: staff ${staffGhlUserId} not on ${resolved.label} roster`, "Staff not on this location's roster");
+          return res
+            .status(404)
+            .json({ success: false, error: "Staff not on this location's roster" });
+        }
+
+        // Idempotency check (Section 10.3). If this actionId has
+        // already been used successfully, return the prior appointment
+        // id without doing anything else. Safe to retry the request.
+        if (actionId) {
+          try {
+            const { data: prior, error: priorErr } = await supabase
+              .from("frontdesk_audit_log")
+              .select("target_id, payload, result")
+              .eq("action", "book")
+              .eq("result", "success")
+              .filter("payload->>actionId", "eq", actionId)
+              .order("created_at", { ascending: false })
+              .limit(1);
+            if (!priorErr && Array.isArray(prior) && prior[0]?.target_id) {
+              return res.json({
+                success: true,
+                appointmentId: prior[0].target_id,
+                dedup: true,
+              });
+            }
+          } catch (dedupErr) {
+            // Non-fatal — fall through to the real write attempt.
+            console.warn(
+              "[frontdesk/book] dedup lookup failed (continuing):",
+              dedupErr.message
+            );
+          }
+        }
+
+        // Pre-write slot re-check (Section 11). Match the algorithm
+        // /availability uses: pull EVERY appointment for this staff
+        // on the day, ignore cancelled/canceled/noshow, reject if our
+        // [startMs, startMs + dur) overlaps any active interval.
+        const endMs = startMs + dur * 60 * 1000;
+        const dayStartIso = new Date(startMs - 24 * 60 * 60 * 1000).toISOString();
+        const dayEndIso = new Date(startMs + 24 * 60 * 60 * 1000).toISOString();
+        const { data: busyRows, error: busyErr } = await supabase
+          .from("appointments")
+          .select("id, title, start_time, end_time, status, assigned_user_id")
+          .eq("location_id", resolved.locationId)
+          .eq("assigned_user_id", staffGhlUserId)
+          .gte("start_time", dayStartIso)
+          .lte("start_time", dayEndIso);
+        if (busyErr) {
+          await logAudit("failed", "book rejected: pre-write check failed", busyErr.message);
+          return res.status(500).json({ success: false, error: busyErr.message });
+        }
+        const conflict = (busyRows || []).find((r) => {
+          const s = (r.status || "").toLowerCase();
+          if (s === "cancelled" || s === "canceled" || s === "noshow") return false;
+          const rs = new Date(r.start_time).getTime();
+          const re = new Date(r.end_time || r.start_time).getTime();
+          return !(endMs <= rs || startMs >= re);
+        });
+        if (conflict) {
+          const conflictTitle = (conflict.title || "").trim() || "another booking";
+          const conflictTime = new Date(conflict.start_time).toLocaleString(
+            "en-US",
+            {
+              timeZone: "America/Chicago",
+              hour: "numeric",
+              minute: "2-digit",
+            }
+          );
+          const msg = `That ${conflictTime} with ${member.name.split(" ")[0]} was just booked — pick another`;
+          await logAudit(
+            "failed",
+            `book rejected: slot collision with ${conflict.id}`,
+            msg
+          );
+          return res.status(409).json({
+            success: false,
+            error: msg,
+            conflict: { id: conflict.id, title: conflictTitle },
+          });
+        }
+
+        // Resolve the SDK by location.
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        // Find-or-create the contact.
+        let contactId = existingContactId || null;
+        let contactNamePreview = null;
+        let isNewContact = false;
+
+        if (!contactId) {
+          const firstName = newContact.firstName.trim();
+          const lastName = (newContact.lastName || "").trim();
+          const phone = newContact.phone.trim();
+          contactNamePreview = [firstName, lastName].filter(Boolean).join(" ");
+
+          // Phone-dup lookup first — mirror the kiosk walk-in-book flow.
+          try {
+            const dupe = await sdk.contacts.getDuplicateContact({
+              locationId: resolved.locationId,
+              number: phone,
+            });
+            contactId = dupe?.contact?.id || null;
+          } catch (e) {
+            // not found is normal — proceed to create
+          }
+
+          if (!contactId) {
+            try {
+              const created = await sdk.contacts.createContact({
+                firstName,
+                lastName: lastName || undefined,
+                phone,
+                locationId: resolved.locationId,
+                source: "Front Desk Dashboard",
+                assignedTo: staffGhlUserId,
+              });
+              contactId =
+                created?.contact?.id || created?.id || null;
+              isNewContact = !!contactId;
+            } catch (createErr) {
+              const cm = createErr.response?.data?.message || createErr.message;
+              await logAudit("failed", `book contact create failed for ${phone}`, cm);
+              return res
+                .status(500)
+                .json({ success: false, error: `Couldn't create contact: ${cm}` });
+            }
+          }
+          if (!contactId) {
+            await logAudit("failed", "book: contact resolution returned no id", "no contactId");
+            return res
+              .status(500)
+              .json({ success: false, error: "Could not resolve contact" });
+          }
+        }
+
+        // Create the GHL appointment. Explicit endTime — duration is
+        // user-controlled, not calendar-default.
+        const endIso = new Date(endMs).toISOString();
+        const title = (() => {
+          const base = (serviceLabel || "Appointment").trim();
+          if (contactNamePreview) return `${base}: ${contactNamePreview}`;
+          if (existingContactId) return base; // we don't know the name; GHL will display by contact link
+          return base;
+        })();
+
+        let newApptId = null;
+        try {
+          const result = await sdk.calendars.createAppointment({
+            calendarId,
+            contactId,
+            locationId: resolved.locationId,
+            startTime: new Date(startMs).toISOString(),
+            endTime: endIso,
+            title,
+            appointmentStatus: "confirmed",
+            assignedUserId: staffGhlUserId,
+            ignoreFreeSlotValidation: true, // we've already done our own check
+            toNotify: false,
+          });
+          newApptId =
+            result?.id ||
+            result?.appointment?.id ||
+            result?.event?.id ||
+            null;
+        } catch (bookErr) {
+          const bm =
+            bookErr.response?.data?.message || bookErr.message || String(bookErr);
+          await logAudit("failed", `book GHL create failed`, bm);
+          return res.status(500).json({
+            success: false,
+            error: `Couldn't create appointment: ${bm}`,
+          });
+        }
+
+        if (!newApptId) {
+          await logAudit(
+            "failed",
+            "book: GHL returned no appointment id",
+            "GHL response missing id"
+          );
+          return res.status(500).json({
+            success: false,
+            error: "Booked but GHL returned no appointment id",
+          });
+        }
+
+        const summary = `Booked ${title} for ${new Date(startMs).toLocaleString(
+          "en-US",
+          {
+            timeZone: "America/Chicago",
+            month: "short",
+            day: "numeric",
+            hour: "numeric",
+            minute: "2-digit",
+          }
+        )} (${dur}m)`;
+        await logAudit("success", summary, null, { target_id: newApptId });
+
+        // No optimistic cache mirror here: the webhook lands a richer
+        // row (with calendar_id, contact_id, ghl_updated_at) within
+        // seconds. The front-end will see the new appointment on its
+        // next 20s poll. Booking from the UI takes the optimistic
+        // path on the FE side so the visual lag is hidden.
+        return res.json({
+          success: true,
+          appointmentId: newApptId,
+          contactId,
+          isNewContact,
+          title,
+          startTime: new Date(startMs).toISOString(),
+          endTime: endIso,
+          assignedUserId: staffGhlUserId,
+          calendarId,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ POST /api/frontdesk/book error:", msg);
+        await logAudit("failed", `book uncaught error`, msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
