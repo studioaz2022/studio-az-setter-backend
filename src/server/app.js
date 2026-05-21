@@ -9951,6 +9951,192 @@ function createApp() {
         res.status(500).json({ success: false, error: msg });
       }
     });
+
+    /**
+     * POST /api/frontdesk/no-show   (Phase 3.15b)
+     * Body: { location, appointmentId, reason?, actionId?,
+     *         actingStaffGhlUserId?, actingStaffName? }
+     *
+     * Mirror of /api/frontdesk/cancel — the verb shape is identical
+     * (status flip + scope guard + audit + optimistic cache mirror).
+     * The only differences are:
+     *   - GHL status → "noshow" (canonical value, see constants.js +
+     *     every existing filter in app.js — webhook accepts the three
+     *     casings inbound but we write the lowercase form),
+     *   - audit `action` is "no_show" (distinct verb for the forensic
+     *     trail; cancel and no-show are semantically different
+     *     operational decisions even when the row ends up similarly
+     *     filtered out of reports),
+     *   - resource-idempotent on `status === "noshow"`,
+     *   - upstream UI clears `checked_in_at` already via the
+     *     appointmentWebhooks handler when status flips to noshow
+     *     (see "Clear checked_in_at if appointment is cancelled or
+     *     no-show" in appointmentWebhooks.js), so we don't need to
+     *     do that here. The optimistic mirror sets only status.
+     */
+    app.post("/api/frontdesk/no-show", async (req, res) => {
+      const {
+        location,
+        appointmentId,
+        reason = null,
+        actionId = null,
+        actingStaffGhlUserId = null,
+        actingStaffName = null,
+      } = req.body || {};
+
+      const resolved = fdResolveLocation(location);
+      const trimmedReason = reason ? String(reason).trim().slice(0, 200) : null;
+
+      const auditBase = {
+        location: resolved?.label || (location ?? null),
+        acting_staff_ghl_user_id: actingStaffGhlUserId,
+        acting_staff_name: actingStaffName,
+        action: "no_show",
+        target_type: "appointment",
+        target_id: appointmentId || null,
+        payload: { reason: trimmedReason, actionId },
+      };
+
+      async function logAudit(result, summary, errorText = null) {
+        if (!supabase) return;
+        try {
+          await supabase
+            .from("frontdesk_audit_log")
+            .insert([
+              { ...auditBase, summary, result, error_text: errorText },
+            ]);
+        } catch (e) {
+          console.warn(
+            "[frontdesk/no-show] audit insert failed (non-fatal):",
+            e.message
+          );
+        }
+      }
+
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        if (!resolved) {
+          await logAudit("failed", "no-show rejected: invalid location", "Invalid location");
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!appointmentId) {
+          await logAudit(
+            "failed",
+            "no-show rejected: missing appointmentId",
+            "appointmentId is required"
+          );
+          return res
+            .status(400)
+            .json({ success: false, error: "appointmentId is required" });
+        }
+
+        // Cache scope guard (location + id must match an existing row).
+        const { data: cacheRow, error: cacheErr } = await supabase
+          .from("appointments")
+          .select("id, calendar_id, title, status, location_id")
+          .eq("id", appointmentId)
+          .eq("location_id", resolved.locationId)
+          .maybeSingle();
+
+        if (cacheErr) {
+          await logAudit(
+            "failed",
+            `no-show cache lookup failed for ${appointmentId}`,
+            cacheErr.message
+          );
+          console.error("[frontdesk/no-show] cache lookup error:", cacheErr.message);
+          return res.status(500).json({ success: false, error: cacheErr.message });
+        }
+        if (!cacheRow) {
+          await logAudit(
+            "failed",
+            `no-show rejected: appointment ${appointmentId} not in ${resolved.label} cache`,
+            "appointment not found in cache for this location"
+          );
+          return res.status(404).json({
+            success: false,
+            error: "Appointment not found in cache for this location",
+          });
+        }
+
+        // Already a no-show? short-circuit success (idempotent).
+        const currentStatus = (cacheRow.status || "").toLowerCase();
+        if (currentStatus === "noshow") {
+          await logAudit(
+            "success",
+            `no-show no-op (already noshow): ${
+              (cacheRow.title || "").trim() || appointmentId
+            }`
+          );
+          return res.json({
+            success: true,
+            appointmentId,
+            alreadyNoShow: true,
+          });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        const payload = {
+          appointmentStatus: "noshow",
+          toNotify: false,
+        };
+        if (cacheRow.calendar_id) payload.calendarId = cacheRow.calendar_id;
+
+        await sdk.calendars.editAppointment(
+          { eventId: appointmentId },
+          payload
+        );
+
+        const niceSummary = `No-show: ${
+          (cacheRow.title || "").trim() || appointmentId
+        }${trimmedReason ? ` — reason: ${trimmedReason}` : ""}`;
+        await logAudit("success", niceSummary);
+
+        // Optimistic cache mirror — webhook will reconcile within
+        // seconds either way; this just makes the next poll see the
+        // change immediately. checked_in_at is cleared by the webhook
+        // handler (appointmentWebhooks.js) when status → noshow, so
+        // we don't need to touch it here.
+        try {
+          await supabase
+            .from("appointments")
+            .update({ status: "noshow" })
+            .eq("id", appointmentId)
+            .eq("location_id", resolved.locationId);
+        } catch (mirrorErr) {
+          console.warn(
+            "[frontdesk/no-show] cache mirror failed (non-fatal — webhook will reconcile):",
+            mirrorErr.message
+          );
+        }
+
+        return res.json({
+          success: true,
+          appointmentId,
+          status: "noshow",
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ POST /api/frontdesk/no-show error:", msg);
+        await logAudit(
+          "failed",
+          `no-show failed for ${appointmentId || "?"}`,
+          msg
+        );
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
