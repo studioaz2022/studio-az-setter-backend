@@ -10170,42 +10170,138 @@ function createApp() {
         .join(" ");
     }
 
-    // Per-process cache: calendarId → { durationMinutes, fetchedAt }.
+    // Per-process cache: calendarId → { durationMinutes, intervalMinutes, fetchedAt }.
     // GHL is slow (~1s/call) and these almost never change in a day.
     // 10-minute TTL keeps stale data short without hammering the API
     // on every staff×service combination as the dashboard is browsed.
     const fdCalendarCache = new Map();
     const FD_CAL_CACHE_TTL_MS = 10 * 60 * 1000;
+    const FD_CAL_FALLBACK = { durationMinutes: 45, intervalMinutes: 15 };
 
-    async function fdGetCalendarDuration(sdk, calendarId) {
+    function fdNormalizeMinutes(value, unit) {
+      const u = (unit || "mins").toLowerCase();
+      const v = Number(value) || 0;
+      if (v <= 0) return 0;
+      return u.startsWith("hour") ? v * 60 : v;
+    }
+
+    async function fdGetCalendarMeta(sdk, calendarId) {
       const now = Date.now();
       const cached = fdCalendarCache.get(calendarId);
       if (cached && now - cached.fetchedAt < FD_CAL_CACHE_TTL_MS) {
-        return cached.durationMinutes;
+        return cached;
       }
       try {
         const r = await sdk.calendars.getCalendar({ calendarId });
-        // GHL returns { calendar: {...} } or the calendar object directly,
-        // depending on the SDK version. Handle both.
         const cal = r?.calendar || r;
-        const unit = (cal?.slotDurationUnit || "mins").toLowerCase();
-        const dur = Number(cal?.slotDuration) || 0;
-        // Normalize to minutes. "hours" is the other realistic unit GHL
-        // sends. "days" would be absurd for a barber/tattoo calendar.
-        const minutes = unit.startsWith("hour") ? dur * 60 : dur;
-        const safe = minutes > 0 ? minutes : 45; // fall back to 45 if GHL omits it
-        fdCalendarCache.set(calendarId, { durationMinutes: safe, fetchedAt: now });
-        return safe;
+        const dur =
+          fdNormalizeMinutes(cal?.slotDuration, cal?.slotDurationUnit) ||
+          FD_CAL_FALLBACK.durationMinutes;
+        // slotInterval = how often a new booking can START. GHL may
+        // omit it; when missing, the conventional fallback is "step
+        // by duration" (back-to-back bookings, no staggered starts).
+        const intRaw = fdNormalizeMinutes(
+          cal?.slotInterval,
+          cal?.slotIntervalUnit
+        );
+        const interval = intRaw > 0 ? intRaw : dur;
+        const meta = {
+          durationMinutes: dur,
+          intervalMinutes: interval,
+          fetchedAt: now,
+        };
+        fdCalendarCache.set(calendarId, meta);
+        return meta;
       } catch (err) {
         console.warn(
-          `[frontdesk/services] getCalendar(${calendarId}) failed, using 45min fallback:`,
+          `[frontdesk] getCalendar(${calendarId}) failed, using fallback:`,
           err.response?.data?.message || err.message
         );
-        const fallback = 45;
-        // Cache the fallback briefly so repeated calls don't all retry.
-        fdCalendarCache.set(calendarId, { durationMinutes: fallback, fetchedAt: now });
-        return fallback;
+        const meta = { ...FD_CAL_FALLBACK, fetchedAt: now };
+        fdCalendarCache.set(calendarId, meta);
+        return meta;
       }
+    }
+
+    // Per-process cache: staffGhlUserId → { schedules, fetchedAt }.
+    // Schedules also change rarely (weekly availability tweaks); same
+    // TTL as the calendar cache.
+    const fdScheduleCache = new Map();
+
+    async function fdGetSchedulesForStaff(sdk, locationId, staffGhlUserId) {
+      const cacheKey = `${locationId}::${staffGhlUserId}`;
+      const now = Date.now();
+      const cached = fdScheduleCache.get(cacheKey);
+      if (cached && now - cached.fetchedAt < FD_CAL_CACHE_TTL_MS) {
+        return cached.schedules;
+      }
+      try {
+        const httpClient = sdk.getHttpClient();
+        const resp = await httpClient.get(
+          `/calendars/schedules/search?locationId=${locationId}&userId=${staffGhlUserId}`,
+          { headers: { Version: "2021-04-15" } }
+        );
+        const schedules = resp.data?.schedules || [];
+        fdScheduleCache.set(cacheKey, { schedules, fetchedAt: now });
+        return schedules;
+      } catch (err) {
+        console.warn(
+          `[frontdesk] schedules/search(${staffGhlUserId}) failed, treating as no schedule:`,
+          err.response?.data?.message || err.message
+        );
+        fdScheduleCache.set(cacheKey, { schedules: [], fetchedAt: now });
+        return [];
+      }
+    }
+
+    // Resolve a calendar's bookable wall-clock intervals on a given
+    // YYYY-MM-DD (Central). Returns [{ startMin, endMin }] in minutes
+    // since midnight. Empty array means "no schedule found / day off"
+    // — caller decides whether to show that as "outside hours" or
+    // fall back to a wider default window.
+    function fdOpenIntervalsForDay(schedules, calendarId, dateStr) {
+      const dt = new Date(`${dateStr}T12:00:00Z`);
+      const dayName = dt
+        .toLocaleDateString("en-US", {
+          timeZone: "America/Chicago",
+          weekday: "long",
+        })
+        .toLowerCase();
+      for (const sched of schedules) {
+        const calIds = sched.calendarIds || [];
+        if (!calIds.includes(calendarId)) continue;
+        const rules = sched.rules || sched.schedule || [];
+        const dateOverride = rules.find(
+          (r) => r.type === "date" && r.date === dateStr
+        );
+        if (dateOverride) {
+          if (
+            dateOverride.intervals &&
+            dateOverride.intervals.length > 0
+          ) {
+            return dateOverride.intervals.map((iv) => ({
+              startMin: timeToMin(iv.from),
+              endMin: timeToMin(iv.to),
+            }));
+          }
+          return []; // empty override = day off
+        }
+        const dayRule = rules.find(
+          (r) => r.type === "wday" && r.day === dayName
+        );
+        if (dayRule && dayRule.intervals && dayRule.intervals.length > 0) {
+          return dayRule.intervals.map((iv) => ({
+            startMin: timeToMin(iv.from),
+            endMin: timeToMin(iv.to),
+          }));
+        }
+        return []; // schedule covers cal but no rule for today = day off
+      }
+      return []; // no schedule covers this calendar at all
+    }
+    function timeToMin(s) {
+      const [h, m] = (s || "").split(":").map(Number);
+      return (h || 0) * 60 + (m || 0);
     }
 
     /**
@@ -10259,17 +10355,21 @@ function createApp() {
           entries.push({ key: "default", calendarId: member.calendarId });
         }
 
-        // Fetch durations in parallel — the cache makes repeat calls cheap.
+        // Fetch metadata in parallel — the cache makes repeat calls cheap.
         const services = await Promise.all(
-          entries.map(async ({ key, calendarId }) => ({
-            key,
-            calendarId,
-            label:
-              !isBarber && key === "default"
-                ? "Tattoo"
-                : fdServiceLabel(key),
-            durationMinutes: await fdGetCalendarDuration(sdk, calendarId),
-          }))
+          entries.map(async ({ key, calendarId }) => {
+            const meta = await fdGetCalendarMeta(sdk, calendarId);
+            return {
+              key,
+              calendarId,
+              label:
+                !isBarber && key === "default"
+                  ? "Tattoo"
+                  : fdServiceLabel(key),
+              durationMinutes: meta.durationMinutes,
+              intervalMinutes: meta.intervalMinutes,
+            };
+          })
         );
 
         res.json({
@@ -10373,41 +10473,115 @@ function createApp() {
           }))
           .sort((a, b) => a.start - b.start);
 
-        // Open-hours window: 9am–9pm Central. Compute the UTC instants
-        // for those Central wall-clock times on the given date. We
-        // build a probe at 12:00Z and ask Intl what offset that maps
-        // to on that day — handles DST without a library.
+        // Resolve the day's Central offset once (DST-safe via Intl).
         const probe = new Date(`${dateStr}T12:00:00Z`);
         const parts = new Intl.DateTimeFormat("en-US", {
           timeZone: "America/Chicago",
           timeZoneName: "shortOffset",
         }).formatToParts(probe);
-        const off = (parts.find((p) => p.type === "timeZoneName") || {}).value || "GMT-6";
-        const m = /([+-])(\d{1,2})(?::(\d{2}))?/.exec(off);
-        const sign = m[1] === "-" ? -1 : 1;
-        const hh = parseInt(m[2], 10);
-        const mm = m[3] ? parseInt(m[3], 10) : 0;
-        const offsetStr = `${m[1]}${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
-        // sign unused beyond the offset string — kept for clarity.
-        void sign;
-        const windowStart = new Date(`${dateStr}T09:00:00${offsetStr}`).getTime();
-        const windowEnd = new Date(`${dateStr}T21:00:00${offsetStr}`).getTime();
+        const off =
+          (parts.find((p) => p.type === "timeZoneName") || {}).value || "GMT-6";
+        const oM = /([+-])(\d{1,2})(?::(\d{2}))?/.exec(off);
+        const sign = oM[1];
+        const hh = parseInt(oM[2], 10);
+        const mm = oM[3] ? parseInt(oM[3], 10) : 0;
+        const offsetStr = `${sign}${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
 
-        // Slot generation: step every 15 min from window start; a slot
-        // is open if [t, t + durationMinutes) doesn't overlap any busy
-        // interval AND is fully inside the window AND not in the past.
-        const STEP_MS = 15 * 60 * 1000;
+        // Resolve calendar interval (the chip step) + per-day open
+        // intervals from this staff's schedule. Both come from GHL;
+        // both are cached per-process for 10 min.
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+        const [calMeta, schedules] = await Promise.all([
+          fdGetCalendarMeta(sdk, calendarId),
+          fdGetSchedulesForStaff(sdk, resolved.locationId, staffId),
+        ]);
+        const stepMinutes = Math.max(5, calMeta.intervalMinutes || 15);
+        const stepMs = stepMinutes * 60 * 1000;
         const dur = durationMinutes * 60 * 1000;
         const nowMs = Date.now();
-        const slots = [];
-        for (let t = windowStart; t + dur <= windowEnd; t += STEP_MS) {
-          if (t < nowMs) continue;
-          const endT = t + dur;
-          const overlaps = busy.some(
-            (b) => !(endT <= b.start || t >= b.end)
-          );
-          if (!overlaps) slots.push(new Date(t).toISOString());
+
+        // Per-day open intervals from the GHL schedule. EMPTY means
+        // "no rule for this calendar on this day" — could be either a
+        // legitimate day-off or the staff has no schedule wired up.
+        // Either way the FE treats EMPTY as "out of hours window" and
+        // surfaces only the toggle-overridden list.
+        const openIntervalsMin = fdOpenIntervalsForDay(
+          schedules,
+          calendarId,
+          dateStr
+        );
+
+        // Convert wall-clock minutes-since-midnight to UTC ms for that
+        // day in Central.
+        function minToMs(m) {
+          const h = Math.floor(m / 60);
+          const mm = m % 60;
+          const hhS = String(h).padStart(2, "0");
+          const mmS = String(mm).padStart(2, "0");
+          return new Date(`${dateStr}T${hhS}:${mmS}:00${offsetStr}`).getTime();
         }
+        const openIntervalsMs = openIntervalsMin.map((iv) => ({
+          startMs: minToMs(iv.startMin),
+          endMs: minToMs(iv.endMin),
+        }));
+
+        // Hard outer window for the "any time" toggle list: 9am–9pm
+        // Central. This is the same generous default we had before —
+        // booking outside the staff's hours stays as an option, just
+        // an explicit one.
+        const anyWindowStart = minToMs(9 * 60);
+        const anyWindowEnd = minToMs(21 * 60);
+
+        // Slot generation: step by calendar.slotInterval (Item 4). A
+        // slot starting at t with `duration` mins is OPEN if it does
+        // not overlap any active busy interval, ends inside the day,
+        // and is not in the past.
+        function generateSlots(rangeStart, rangeEnd) {
+          const out = [];
+          // Anchor the first slot to the rangeStart (so a 9:00 open
+          // window with a 20-min step yields 9:00, 9:20, 9:40…).
+          for (let t = rangeStart; t + dur <= rangeEnd; t += stepMs) {
+            if (t < nowMs) continue;
+            const endT = t + dur;
+            const overlaps = busy.some(
+              (b) => !(endT <= b.start || t >= b.end)
+            );
+            if (!overlaps) out.push(new Date(t).toISOString());
+          }
+          return out;
+        }
+
+        // In-hours: union of slots generated for each open interval.
+        const inHoursSet = new Set();
+        for (const iv of openIntervalsMs) {
+          for (const s of generateSlots(iv.startMs, iv.endMs)) {
+            inHoursSet.add(s);
+          }
+        }
+        const slotsInHours = [...inHoursSet].sort();
+
+        // Any-time: full 9am-9pm window, including in-hours.
+        const slotsAnyTime = generateSlots(anyWindowStart, anyWindowEnd);
+
+        // Has this staff any schedule wired at all (for any day)?
+        // Lets the FE distinguish "scheduled day off" (toggle stays
+        // hidden, label "Day off") from "no schedule wired" (toggle
+        // is the default view — we don't know the staff's hours).
+        const staffHasAnySchedule = schedules.some((s) => {
+          const calIds = s.calendarIds || [];
+          if (!calIds.includes(calendarId)) return false;
+          const rules = s.rules || s.schedule || [];
+          return rules.some(
+            (r) =>
+              r.type === "wday" &&
+              Array.isArray(r.intervals) &&
+              r.intervals.length > 0
+          );
+        });
 
         res.json({
           success: true,
@@ -10416,9 +10590,32 @@ function createApp() {
           staffGhlUserId: staffId,
           calendarId,
           durationMinutes,
-          windowStart: new Date(windowStart).toISOString(),
-          windowEnd: new Date(windowEnd).toISOString(),
-          slots,
+          // Item 4: chip step driven by GHL's calendar.slotInterval.
+          stepMinutes,
+          // Item 3: per-day open intervals (ISO timestamps for FE
+          // visualization — knowing if a chip is in or out of hours).
+          openIntervals: openIntervalsMs.map((iv) => ({
+            startTime: new Date(iv.startMs).toISOString(),
+            endTime: new Date(iv.endMs).toISOString(),
+          })),
+          // True if the staff has a real schedule wired for THIS
+          // calendar (any day, not necessarily this date). When false,
+          // the FE shows slotsAnyTime by default — the staff hasn't
+          // told us their hours so we shouldn't hide anything.
+          staffHasSchedule: staffHasAnySchedule,
+          // True if THIS specific day has open hours. When false +
+          // staffHasSchedule=true → scheduled day off (FE labels it).
+          dayHasOpenHours: openIntervalsMin.length > 0,
+          windowStart: new Date(anyWindowStart).toISOString(),
+          windowEnd: new Date(anyWindowEnd).toISOString(),
+          slotsInHours,
+          slotsAnyTime,
+          // Back-compat for older FE callers: default to in-hours
+          // when a schedule exists, otherwise fall back to any-time.
+          slots:
+            staffHasAnySchedule && openIntervalsMin.length > 0
+              ? slotsInHours
+              : slotsAnyTime,
         });
       } catch (err) {
         const msg = err.response?.data?.message || err.message || String(err);
@@ -10767,12 +10964,36 @@ function createApp() {
         }
 
         // Create the GHL appointment. Explicit endTime — duration is
-        // user-controlled, not calendar-default.
+        // user-controlled, not calendar-default. Title MUST follow
+        // the "<Service>: <Name>" format so the front-end grid card's
+        // clientName/serviceLabel parser (lib/grid.ts) renders name
+        // bold + service subdued, matching every webhook-sourced card.
+        // For an existing contactId, we didn't carry the name in the
+        // request body — fetch it from GHL now. Non-fatal: a failed
+        // fetch falls back to service-only so the booking still lands.
         const endIso = new Date(endMs).toISOString();
+        let contactNameForTitle = contactNamePreview;
+        if (!contactNameForTitle && existingContactId) {
+          try {
+            const cr = await sdk.contacts.getContact({
+              contactId: existingContactId,
+            });
+            const c = cr?.contact || cr;
+            contactNameForTitle = (
+              c?.contactName ||
+              [c?.firstName, c?.lastName].filter(Boolean).join(" ") ||
+              ""
+            ).trim() || null;
+          } catch (nameErr) {
+            console.warn(
+              "[frontdesk/book] contact name fetch failed (non-fatal):",
+              nameErr.response?.data?.message || nameErr.message
+            );
+          }
+        }
         const title = (() => {
           const base = (serviceLabel || "Appointment").trim();
-          if (contactNamePreview) return `${base}: ${contactNamePreview}`;
-          if (existingContactId) return base; // we don't know the name; GHL will display by contact link
+          if (contactNameForTitle) return `${base}: ${contactNameForTitle}`;
           return base;
         })();
 
