@@ -222,11 +222,13 @@ router.get("/today-headline/:site", async (req, res) => {
       consultationEventCounts(site, 30),
     ]);
 
-    // Helper: pluck current+comparison values from a GA4 dateRange-dimensioned response.
+    // Helper: pluck current+comparison values from a GA4 multi-dateRange
+    // response. GA4 stamps each row with row.dateRange = "date_range_0" /
+    // "date_range_1" automatically — it is NOT a requested dimension.
     function readByRange(report, metricIndex) {
       const out = { current: 0, comparison: 0 };
       for (const row of report.rows || []) {
-        const range = row.dimensionValues?.[0]?.value;
+        const range = row.dateRange;
         const v = Number(row.metricValues?.[metricIndex]?.value ?? 0);
         if (range === "date_range_0") out.current = v;
         else if (range === "date_range_1") out.comparison = v;
@@ -234,12 +236,13 @@ router.get("/today-headline/:site", async (req, res) => {
       return out;
     }
 
-    // Helper: events report has two dimensions (dateRange, eventName).
+    // Helper: events report has eventName as its only requested dimension,
+    // plus the implicit dateRange property on each row.
     function readEventByRange(report, eventName) {
       const out = { current: 0, comparison: 0 };
       for (const row of report.rows || []) {
-        const range = row.dimensionValues?.[0]?.value;
-        const name = row.dimensionValues?.[1]?.value;
+        const range = row.dateRange;
+        const name = row.dimensionValues?.[0]?.value;
         if (name !== eventName) continue;
         const v = Number(row.metricValues?.[0]?.value ?? 0);
         if (range === "date_range_0") out.current = v;

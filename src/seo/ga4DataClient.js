@@ -93,18 +93,17 @@ async function consultationStepCompletions(siteKey, days = 30) {
  * Delta is computed client-side by the caller.
  */
 async function siteTotals(siteKey, days = 7) {
-  // GA4 date-range strings: "Ndays ago" → "today" for current; for comparison
-  // we go back another `days` days. "today" is GA4's local-property today.
+  // GA4 returns one row per dateRange automatically when multiple are passed —
+  // each row has a `dateRange` property like "date_range_0" / "date_range_1".
+  // `dateRange` is NOT a real dimension; including it in `dimensions` errors.
   return runReport(siteKey, {
     dateRanges: [
-      { startDate: `${days - 1}daysAgo`, endDate: "today", name: "current" },
+      { startDate: `${days - 1}daysAgo`, endDate: "today" },
       {
         startDate: `${2 * days - 1}daysAgo`,
         endDate: `${days}daysAgo`,
-        name: "comparison",
       },
     ],
-    dimensions: [{ name: "dateRange" }],
     metrics: [
       { name: "sessions" },
       { name: "totalUsers" },
@@ -119,14 +118,14 @@ async function siteTotals(siteKey, days = 7) {
 async function consultationEventCounts(siteKey, days = 7) {
   return runReport(siteKey, {
     dateRanges: [
-      { startDate: `${days - 1}daysAgo`, endDate: "today", name: "current" },
+      { startDate: `${days - 1}daysAgo`, endDate: "today" },
       {
         startDate: `${2 * days - 1}daysAgo`,
         endDate: `${days}daysAgo`,
-        name: "comparison",
       },
     ],
-    dimensions: [{ name: "dateRange" }, { name: "eventName" }],
+    // Only request eventName as a dimension — dateRange is implicit on each row.
+    dimensions: [{ name: "eventName" }],
     metrics: [{ name: "eventCount" }],
     dimensionFilter: {
       filter: {
