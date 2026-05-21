@@ -13,6 +13,11 @@ const {
   siteTotals,
   consultationEventCounts,
 } = require("./ga4DataClient");
+const {
+  generateInsights,
+  listInsights,
+  updateCardStatus,
+} = require("./insightEngine");
 
 const router = express.Router();
 
@@ -312,6 +317,55 @@ router.get("/today-headline/:site", async (req, res) => {
     res.status(500).json({
       error: err.response?.data?.error?.message || err.message || "GA4 query failed",
     });
+  }
+});
+
+// ──────────────────────────────────────
+// Insight cards (Insights page)
+// ──────────────────────────────────────
+//
+// GET    /api/seo/dashboard/insights/:site         — list active + history
+// POST   /api/seo/dashboard/insights/:site/generate — run the pipeline once
+// PATCH  /api/seo/dashboard/insights/card/:id      — update workflow status
+//
+// The site URL segment is validated against the Insight engine's known sites
+// (v1: tattoo only). The /generate endpoint is also reachable from the weekly
+// Render cron job — it's the same handler.
+
+router.get("/insights/:site", async (req, res) => {
+  const { site } = req.params;
+  try {
+    const { active, history } = await listInsights(site);
+    res.json({ site, active, history });
+  } catch (err) {
+    console.error("[dashboard/insights GET] error:", err.message);
+    res.status(500).json({ error: err.message || "List failed" });
+  }
+});
+
+router.post("/insights/:site/generate", async (req, res) => {
+  const { site } = req.params;
+  try {
+    const summary = await generateInsights(site);
+    res.json({ site, ...summary });
+  } catch (err) {
+    console.error("[dashboard/insights POST] error:", err.message);
+    res.status(500).json({ error: err.message || "Generation failed" });
+  }
+});
+
+router.patch("/insights/card/:id", async (req, res) => {
+  const { id } = req.params;
+  const { status, notes } = req.body || {};
+  if (!status) {
+    return res.status(400).json({ error: "status is required" });
+  }
+  try {
+    const card = await updateCardStatus(id, status, notes);
+    res.json({ card });
+  } catch (err) {
+    console.error("[dashboard/insights PATCH] error:", err.message);
+    res.status(500).json({ error: err.message || "Status update failed" });
   }
 });
 
