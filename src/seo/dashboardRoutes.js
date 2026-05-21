@@ -8,7 +8,11 @@
 
 const express = require("express");
 const axios = require("axios");
-const { consultationStepCompletions } = require("./ga4DataClient");
+const {
+  consultationStepCompletions,
+  siteTotals,
+  consultationEventCounts,
+} = require("./ga4DataClient");
 
 const router = express.Router();
 
@@ -183,6 +187,121 @@ router.get("/ga4-step-dropoff/:site", async (req, res) => {
     });
   } catch (err) {
     console.error("[dashboard/ga4-step-dropoff] error:", err.response?.data || err.message);
+    res.status(500).json({
+      error: err.response?.data?.error?.message || err.message || "GA4 query failed",
+    });
+  }
+});
+
+// ──────────────────────────────────────
+// GET /api/seo/dashboard/today-headline/:site
+// (mounted as /today-headline/:site under /api/seo/dashboard)
+// ──────────────────────────────────────
+//
+// Returns headline metrics for the Today landing page: sessions, totalUsers,
+// consultation_started, consultation_submitted. Each metric has a `current`
+// count (last 7d), a `prior` count (the 7d before that), and a `delta` (signed
+// fractional change vs. prior). Also returns a 30d total for the secondary
+// "30d total" line on each card.
+//
+// The 30d total comes from a single GA4 call rather than three separate ones —
+// less rate-limit pressure and faster.
+
+const METRIC_KEYS = ["sessions", "users", "consultation_started", "consultation_submitted"];
+
+router.get("/today-headline/:site", async (req, res) => {
+  const { site } = req.params;
+
+  try {
+    // Three GA4 calls in parallel: 7d totals (with comparison), 7d events
+    // (with comparison), and a 30d total for the "30d" sublabel.
+    const [totals7, events7, totals30, events30] = await Promise.all([
+      siteTotals(site, 7),
+      consultationEventCounts(site, 7),
+      siteTotals(site, 30),
+      consultationEventCounts(site, 30),
+    ]);
+
+    // Helper: pluck current+comparison values from a GA4 dateRange-dimensioned response.
+    function readByRange(report, metricIndex) {
+      const out = { current: 0, comparison: 0 };
+      for (const row of report.rows || []) {
+        const range = row.dimensionValues?.[0]?.value;
+        const v = Number(row.metricValues?.[metricIndex]?.value ?? 0);
+        if (range === "date_range_0") out.current = v;
+        else if (range === "date_range_1") out.comparison = v;
+      }
+      return out;
+    }
+
+    // Helper: events report has two dimensions (dateRange, eventName).
+    function readEventByRange(report, eventName) {
+      const out = { current: 0, comparison: 0 };
+      for (const row of report.rows || []) {
+        const range = row.dimensionValues?.[0]?.value;
+        const name = row.dimensionValues?.[1]?.value;
+        if (name !== eventName) continue;
+        const v = Number(row.metricValues?.[0]?.value ?? 0);
+        if (range === "date_range_0") out.current = v;
+        else if (range === "date_range_1") out.comparison = v;
+      }
+      return out;
+    }
+
+    function signedDelta(current, prior) {
+      if (prior === 0) {
+        if (current === 0) return 0;
+        return null; // can't compute % when prior is zero and current is not — render "—"
+      }
+      return (current - prior) / prior;
+    }
+
+    function packMetric(key, label, sevenD, thirtyDCurrent) {
+      return {
+        key,
+        label,
+        current_7d: sevenD.current,
+        prior_7d: sevenD.comparison,
+        delta_7d: signedDelta(sevenD.current, sevenD.comparison),
+        total_30d: thirtyDCurrent,
+      };
+    }
+
+    const sessions7  = readByRange(totals7, 0);
+    const sessions30 = readByRange(totals30, 0);
+    const users7     = readByRange(totals7, 1);
+    const users30    = readByRange(totals30, 1);
+
+    const started7   = readEventByRange(events7, "consultation_started");
+    const started30  = readEventByRange(events30, "consultation_started");
+    const submit7    = readEventByRange(events7, "consultation_submitted");
+    const submit30   = readEventByRange(events30, "consultation_submitted");
+
+    res.json({
+      window: {
+        current_7d: { days: 7 },
+        prior_7d: { days: 7 },
+        total_30d: { days: 30 },
+      },
+      metrics: [
+        packMetric("sessions", "SESSIONS", sessions7, sessions30.current),
+        packMetric("users", "USERS", users7, users30.current),
+        packMetric(
+          "consultation_started",
+          "CONSULTATION STARTS",
+          started7,
+          started30.current
+        ),
+        packMetric(
+          "consultation_submitted",
+          "CONSULTATION SUBMITS",
+          submit7,
+          submit30.current
+        ),
+      ],
+    });
+  } catch (err) {
+    console.error("[dashboard/today-headline] error:", err.response?.data || err.message);
     res.status(500).json({
       error: err.response?.data?.error?.message || err.message || "GA4 query failed",
     });

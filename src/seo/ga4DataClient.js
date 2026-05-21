@@ -84,9 +84,66 @@ async function consultationStepCompletions(siteKey, days = 30) {
   });
 }
 
+/**
+ * Site-wide totals for the headline strip on the Today page.
+ *
+ * Returns sessions + totalUsers for two date ranges in a single GA4 call:
+ *   - current:    last `days` days (inclusive of today)
+ *   - comparison: the `days` days before that
+ * Delta is computed client-side by the caller.
+ */
+async function siteTotals(siteKey, days = 7) {
+  // GA4 date-range strings: "Ndays ago" → "today" for current; for comparison
+  // we go back another `days` days. "today" is GA4's local-property today.
+  return runReport(siteKey, {
+    dateRanges: [
+      { startDate: `${days - 1}daysAgo`, endDate: "today", name: "current" },
+      {
+        startDate: `${2 * days - 1}daysAgo`,
+        endDate: `${days}daysAgo`,
+        name: "comparison",
+      },
+    ],
+    dimensions: [{ name: "dateRange" }],
+    metrics: [
+      { name: "sessions" },
+      { name: "totalUsers" },
+    ],
+  });
+}
+
+/**
+ * Consultation event counts (started + submitted) over two date ranges.
+ * Used together with siteTotals() on the Today headline.
+ */
+async function consultationEventCounts(siteKey, days = 7) {
+  return runReport(siteKey, {
+    dateRanges: [
+      { startDate: `${days - 1}daysAgo`, endDate: "today", name: "current" },
+      {
+        startDate: `${2 * days - 1}daysAgo`,
+        endDate: `${days}daysAgo`,
+        name: "comparison",
+      },
+    ],
+    dimensions: [{ name: "dateRange" }, { name: "eventName" }],
+    metrics: [{ name: "eventCount" }],
+    dimensionFilter: {
+      filter: {
+        fieldName: "eventName",
+        inListFilter: {
+          values: ["consultation_started", "consultation_submitted"],
+        },
+      },
+    },
+  });
+}
+
 module.exports = {
   getAccessToken,
   runReport,
   consultationStepCompletions,
+  siteTotals,
+  consultationEventCounts,
   PROPERTIES,
 };
