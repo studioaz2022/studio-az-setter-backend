@@ -10137,6 +10137,295 @@ function createApp() {
         res.status(500).json({ success: false, error: msg });
       }
     });
+
+    // ── Phase 3.15c: BOOKING READ ENDPOINTS ─────────────────────────
+    // Both endpoints below are read-only (no GHL writes, no audit).
+    // The actual POST /api/frontdesk/book lands in the next chunk,
+    // along with the BookingSheet UI. These two reads exist now so:
+    //   - the BookingSheet can populate its service dropdown and time
+    //     picker from real data while it is being built,
+    //   - the user can sanity-check the data shape before any write
+    //     surface lights up.
+
+    // Pretty labels for service KEYS used in kioskConfig.calendars.
+    // Keys ARE the source of truth (each barber has different keys);
+    // this map just gives the dropdown a human label. New keys added
+    // to kioskConfig still work — they just render with a title-cased
+    // fallback label until added here.
+    const FD_SERVICE_LABELS = {
+      haircut: "Haircut",
+      haircut_beard: "Haircut + Beard",
+      beard_trim: "Beard Trim",
+      grey_blending: "Grey Blending",
+      neck_trim: "Neck Trim",
+      haircut_fnf: "Haircut (F&F)",
+      haircut_beard_fnf: "Haircut + Beard (F&F)",
+    };
+    function fdServiceLabel(key) {
+      if (FD_SERVICE_LABELS[key]) return FD_SERVICE_LABELS[key];
+      // Title-case fallback so we never render the raw key.
+      return key
+        .split("_")
+        .map((w) => w[0].toUpperCase() + w.slice(1))
+        .join(" ");
+    }
+
+    // Per-process cache: calendarId → { durationMinutes, fetchedAt }.
+    // GHL is slow (~1s/call) and these almost never change in a day.
+    // 10-minute TTL keeps stale data short without hammering the API
+    // on every staff×service combination as the dashboard is browsed.
+    const fdCalendarCache = new Map();
+    const FD_CAL_CACHE_TTL_MS = 10 * 60 * 1000;
+
+    async function fdGetCalendarDuration(sdk, calendarId) {
+      const now = Date.now();
+      const cached = fdCalendarCache.get(calendarId);
+      if (cached && now - cached.fetchedAt < FD_CAL_CACHE_TTL_MS) {
+        return cached.durationMinutes;
+      }
+      try {
+        const r = await sdk.calendars.getCalendar({ calendarId });
+        // GHL returns { calendar: {...} } or the calendar object directly,
+        // depending on the SDK version. Handle both.
+        const cal = r?.calendar || r;
+        const unit = (cal?.slotDurationUnit || "mins").toLowerCase();
+        const dur = Number(cal?.slotDuration) || 0;
+        // Normalize to minutes. "hours" is the other realistic unit GHL
+        // sends. "days" would be absurd for a barber/tattoo calendar.
+        const minutes = unit.startsWith("hour") ? dur * 60 : dur;
+        const safe = minutes > 0 ? minutes : 45; // fall back to 45 if GHL omits it
+        fdCalendarCache.set(calendarId, { durationMinutes: safe, fetchedAt: now });
+        return safe;
+      } catch (err) {
+        console.warn(
+          `[frontdesk/services] getCalendar(${calendarId}) failed, using 45min fallback:`,
+          err.response?.data?.message || err.message
+        );
+        const fallback = 45;
+        // Cache the fallback briefly so repeated calls don't all retry.
+        fdCalendarCache.set(calendarId, { durationMinutes: fallback, fetchedAt: now });
+        return fallback;
+      }
+    }
+
+    /**
+     * GET /api/frontdesk/services?location=&staffGhlUserId=
+     * Service catalog for one barber/artist:
+     *   [{ key, calendarId, label, durationMinutes }, ...]
+     *
+     * Tattoo artists have a single calendar with no service key, so
+     * we return one entry with key: "default" + label: "Tattoo".
+     * Barbershop barbers have a map of service-key → calendarId in
+     * kioskConfig; we return one entry per key.
+     *
+     * Durations come from GHL's calendar settings (fetched + cached
+     * 10 min). The desk can override per-booking on the sheet — the
+     * value here is just the default.
+     */
+    app.get("/api/frontdesk/services", async (req, res) => {
+      try {
+        const resolved = fdResolveLocation(req.query.location);
+        if (!resolved) {
+          return res.status(400).json({ success: false, error: "Invalid location" });
+        }
+        const staffId = (req.query.staffGhlUserId || "").toString();
+        if (!staffId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "staffGhlUserId is required" });
+        }
+
+        const member = resolved.roster.find((m) => m.ghlUserId === staffId);
+        if (!member) {
+          return res
+            .status(404)
+            .json({ success: false, error: "Staff not on this location's roster" });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        // Build the [{ key, calendarId }] list. Barbers store a map;
+        // tattoo artists store a single calendarId at the top level.
+        const entries = [];
+        if (member.calendars) {
+          for (const [key, calendarId] of Object.entries(member.calendars)) {
+            entries.push({ key, calendarId });
+          }
+        } else if (member.calendarId) {
+          entries.push({ key: "default", calendarId: member.calendarId });
+        }
+
+        // Fetch durations in parallel — the cache makes repeat calls cheap.
+        const services = await Promise.all(
+          entries.map(async ({ key, calendarId }) => ({
+            key,
+            calendarId,
+            label:
+              !isBarber && key === "default"
+                ? "Tattoo"
+                : fdServiceLabel(key),
+            durationMinutes: await fdGetCalendarDuration(sdk, calendarId),
+          }))
+        );
+
+        res.json({
+          success: true,
+          location: resolved.label,
+          staffGhlUserId: staffId,
+          staffName: member.name,
+          services,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ GET /api/frontdesk/services error:", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
+
+    /**
+     * GET /api/frontdesk/availability
+     *   ?location=&staffGhlUserId=&calendarId=&date=YYYY-MM-DD&durationMinutes=
+     *
+     * Open-slot finder for ONE staff member on ONE day. Reads the
+     * Supabase cache for that staff's existing appointments + blocks
+     * on the day, then computes gaps wide enough for `durationMinutes`.
+     * The cache is fresher than 20s in normal operation, which is fine
+     * for browsing — the authoritative gate is the live re-check that
+     * /book performs on confirm (Section 11). This endpoint never
+     * writes anything.
+     *
+     * Open hours: 9am–9pm Central as a conservative default; the real
+     * per-barber hours come from GHL schedules and will be wired in a
+     * polish pass. Until then, slots outside the barber's real working
+     * hours will still appear here — the booking write would succeed
+     * (GHL doesn't reject out-of-hours bookings), so this is browse
+     * convenience, not a true availability oracle.
+     *
+     * Past times today are excluded (no booking into the past). All
+     * times in the response are ISO with offset; the UI formats them
+     * in Central.
+     */
+    app.get("/api/frontdesk/availability", async (req, res) => {
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        const resolved = fdResolveLocation(req.query.location);
+        if (!resolved) {
+          return res.status(400).json({ success: false, error: "Invalid location" });
+        }
+        const staffId = (req.query.staffGhlUserId || "").toString();
+        const calendarId = (req.query.calendarId || "").toString();
+        const rawDur = parseInt(req.query.durationMinutes, 10);
+        if (!staffId || !calendarId || !Number.isFinite(rawDur) || rawDur < 5) {
+          return res.status(400).json({
+            success: false,
+            error:
+              "staffGhlUserId, calendarId required; durationMinutes must be >= 5",
+          });
+        }
+        // Clamp the upper bound so a typo can't ask for an 8-hour
+        // window. 480 = 8 hours, generous for a tattoo session.
+        const durationMinutes = Math.min(480, rawDur);
+
+        let dateStr;
+        try {
+          dateStr = resolveCentralDate(req.query.date);
+        } catch (e) {
+          return res.status(400).json({ success: false, error: e.message });
+        }
+        const { startOfDay, endOfDay } = centralDayRange(dateStr);
+
+        // Pull EVERY appointment + block for this staff member on this
+        // day (any calendar). A barber blocked off on their break
+        // calendar is still busy; a barber with a haircut on calendar A
+        // can't simultaneously be booked on calendar B. Filtering by
+        // calendarId here would be wrong.
+        const { data: rows, error } = await supabase
+          .from("appointments")
+          .select("id, calendar_id, start_time, end_time, status, assigned_user_id")
+          .eq("location_id", resolved.locationId)
+          .eq("assigned_user_id", staffId)
+          .gte("start_time", startOfDay.toISOString())
+          .lte("start_time", endOfDay.toISOString())
+          .order("start_time", { ascending: true });
+
+        if (error) {
+          console.error("[frontdesk/availability] supabase error:", error.message);
+          return res.status(500).json({ success: false, error: error.message });
+        }
+
+        // Active appointments only — cancelled/no-show free up the slot.
+        const busy = (rows || [])
+          .filter((r) => {
+            const s = (r.status || "").toLowerCase();
+            return s !== "cancelled" && s !== "canceled" && s !== "noshow";
+          })
+          .map((r) => ({
+            start: new Date(r.start_time).getTime(),
+            end: new Date(r.end_time || r.start_time).getTime(),
+          }))
+          .sort((a, b) => a.start - b.start);
+
+        // Open-hours window: 9am–9pm Central. Compute the UTC instants
+        // for those Central wall-clock times on the given date. We
+        // build a probe at 12:00Z and ask Intl what offset that maps
+        // to on that day — handles DST without a library.
+        const probe = new Date(`${dateStr}T12:00:00Z`);
+        const parts = new Intl.DateTimeFormat("en-US", {
+          timeZone: "America/Chicago",
+          timeZoneName: "shortOffset",
+        }).formatToParts(probe);
+        const off = (parts.find((p) => p.type === "timeZoneName") || {}).value || "GMT-6";
+        const m = /([+-])(\d{1,2})(?::(\d{2}))?/.exec(off);
+        const sign = m[1] === "-" ? -1 : 1;
+        const hh = parseInt(m[2], 10);
+        const mm = m[3] ? parseInt(m[3], 10) : 0;
+        const offsetStr = `${m[1]}${String(hh).padStart(2, "0")}:${String(mm).padStart(2, "0")}`;
+        // sign unused beyond the offset string — kept for clarity.
+        void sign;
+        const windowStart = new Date(`${dateStr}T09:00:00${offsetStr}`).getTime();
+        const windowEnd = new Date(`${dateStr}T21:00:00${offsetStr}`).getTime();
+
+        // Slot generation: step every 15 min from window start; a slot
+        // is open if [t, t + durationMinutes) doesn't overlap any busy
+        // interval AND is fully inside the window AND not in the past.
+        const STEP_MS = 15 * 60 * 1000;
+        const dur = durationMinutes * 60 * 1000;
+        const nowMs = Date.now();
+        const slots = [];
+        for (let t = windowStart; t + dur <= windowEnd; t += STEP_MS) {
+          if (t < nowMs) continue;
+          const endT = t + dur;
+          const overlaps = busy.some(
+            (b) => !(endT <= b.start || t >= b.end)
+          );
+          if (!overlaps) slots.push(new Date(t).toISOString());
+        }
+
+        res.json({
+          success: true,
+          location: resolved.label,
+          date: dateStr,
+          staffGhlUserId: staffId,
+          calendarId,
+          durationMinutes,
+          windowStart: new Date(windowStart).toISOString(),
+          windowEnd: new Date(windowEnd).toISOString(),
+          slots,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ GET /api/frontdesk/availability error:", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
