@@ -1,0 +1,92 @@
+// ga4DataClient.js
+// Thin wrapper around the GA4 Data API for the stats dashboard.
+//
+// Uses the same OAuth refresh-token pattern as searchConsoleClient (shared
+// CLIENT_ID/CLIENT_SECRET/REFRESH_TOKEN env). Auth tokens are cached for the
+// lifetime of the Express process.
+
+require("dotenv").config({ quiet: true });
+const axios = require("axios");
+
+const CLIENT_ID = process.env.GOOGLE_OAUTH_CLIENT_ID;
+const CLIENT_SECRET = process.env.GOOGLE_OAUTH_CLIENT_SECRET;
+const REFRESH_TOKEN = process.env.GOOGLE_SEO_REFRESH_TOKEN;
+
+// GA4 property IDs per memory/ga4_data_api.md
+const PROPERTIES = {
+  tattoo: "511557077",
+  barbershop: "424855039",
+};
+
+let cachedToken = null;
+let tokenExpiry = 0;
+
+async function getAccessToken() {
+  if (cachedToken && Date.now() < tokenExpiry) return cachedToken;
+  const resp = await axios.post("https://oauth2.googleapis.com/token", {
+    client_id: CLIENT_ID,
+    client_secret: CLIENT_SECRET,
+    refresh_token: REFRESH_TOKEN,
+    grant_type: "refresh_token",
+  });
+  cachedToken = resp.data.access_token;
+  tokenExpiry = Date.now() + (resp.data.expires_in - 60) * 1000;
+  return cachedToken;
+}
+
+/**
+ * Run a GA4 `runReport` query against the configured property.
+ * @param {"tattoo"|"barbershop"} siteKey
+ * @param {object} body — runReport request body
+ * @returns {Promise<object>} raw GA4 response
+ */
+async function runReport(siteKey, body) {
+  const propertyId = PROPERTIES[siteKey];
+  if (!propertyId) {
+    throw new Error(`Unknown site for GA4: ${siteKey}`);
+  }
+  const token = await getAccessToken();
+  const url = `https://analyticsdata.googleapis.com/v1beta/properties/${propertyId}:runReport`;
+  const resp = await axios.post(url, body, {
+    headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" },
+  });
+  return resp.data;
+}
+
+/**
+ * Consultation form step completions over the last N days.
+ *
+ * Returns one row per (step_index, step_name) tuple, aggregated by eventCount.
+ * The form fires `consultation_step_complete` with `step_index` + `step_name`
+ * params on every step transition; we read both as custom dimensions.
+ *
+ * Multiple step_names can share the same step_index (e.g. step 1 has both
+ * q_artist_selection and q_timeline_en in EN flow). Caller decides how to
+ * collapse — we just return the raw rows in step-index order.
+ */
+async function consultationStepCompletions(siteKey, days = 30) {
+  return runReport(siteKey, {
+    dateRanges: [{ startDate: `${days}daysAgo`, endDate: "today" }],
+    dimensions: [
+      { name: "customEvent:step_index" },
+      { name: "customEvent:step_name" },
+    ],
+    metrics: [{ name: "totalUsers" }],
+    dimensionFilter: {
+      filter: {
+        fieldName: "eventName",
+        stringFilter: { value: "consultation_step_complete" },
+      },
+    },
+    orderBys: [
+      { dimension: { dimensionName: "customEvent:step_index" } },
+    ],
+  });
+}
+
+module.exports = {
+  getAccessToken,
+  runReport,
+  consultationStepCompletions,
+  PROPERTIES,
+};

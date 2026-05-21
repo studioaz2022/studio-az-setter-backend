@@ -20,8 +20,29 @@ const {
   trackKeywordRankings,
   competitorAnalysis,
 } = require("./serpApiClient");
+const dashboardRoutes = require("./dashboardRoutes");
 
 const router = express.Router();
+
+// ──────────────────────────────────────
+// Stats Dashboard endpoints
+// ──────────────────────────────────────
+// Mounted with internal-key middleware — the dashboard is the only consumer,
+// and these routes shape upstream data into the dashboard's exact contract.
+function requireInternalKey(req, res, next) {
+  const expected = process.env.INTERNAL_API_KEY;
+  if (!expected) {
+    return res.status(503).json({ error: "INTERNAL_API_KEY not configured" });
+  }
+  if (req.get("x-internal-key") !== expected) {
+    return res.status(401).json({ error: "Unauthorized" });
+  }
+  return next();
+}
+router.use("/dashboard", requireInternalKey, dashboardRoutes);
+
+// Note: dashboardRoutes registers paths like /abandoners/:site, so the final
+// URL becomes /api/seo/dashboard/abandoners/:site.
 
 // ──────────────────────────────────────
 // Search Console endpoints
