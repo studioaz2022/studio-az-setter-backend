@@ -18,6 +18,11 @@ const {
   listInsights,
   updateCardStatus,
 } = require("./insightEngine");
+const {
+  getTopKeywords,
+  getTopPages,
+  getDeviceBreakdown,
+} = require("./searchConsoleClient");
 
 const router = express.Router();
 
@@ -366,6 +371,83 @@ router.patch("/insights/card/:id", async (req, res) => {
   } catch (err) {
     console.error("[dashboard/insights PATCH] error:", err.message);
     res.status(500).json({ error: err.message || "Status update failed" });
+  }
+});
+
+// ──────────────────────────────────────
+// GET /api/seo/dashboard/search-console/:site
+// (mounted as /search-console/:site under /api/seo/dashboard)
+// ──────────────────────────────────────
+//
+// Returns everything the dashboard's Search Console page needs in one call:
+//   - topQueries:  top 25 by clicks over a 28d window
+//   - topPages:    top 25 by clicks over the same window
+//   - device:      mobile/desktop/tablet breakdown over the same window
+//   - newKeywords: keywords that appeared in the last 7d but not in the prior
+//                  21d — surfaces fresh content opportunities
+//
+// Single 28d window keeps the comparison consistent across widgets. Search
+// Console data lags 2-3 days; shorter windows often return empty.
+
+function ymd(d) {
+  return d.toISOString().split("T")[0];
+}
+function daysAgo(n) {
+  const d = new Date();
+  d.setDate(d.getDate() - n);
+  return ymd(d);
+}
+
+router.get("/search-console/:site", async (req, res) => {
+  const { site } = req.params;
+  if (site !== "tattoo" && site !== "barbershop") {
+    return res.status(400).json({ error: `Unknown site: ${site}` });
+  }
+
+  // 28d window (28 → 1 days ago, since Search Console data has a 1-2d lag).
+  const startDate = daysAgo(28);
+  const endDate = daysAgo(1);
+
+  // For "new keywords": last 7d vs prior 21d.
+  const last7Start = daysAgo(7);
+  const last7End = endDate;
+  const prior21Start = daysAgo(28);
+  const prior21End = daysAgo(8);
+
+  try {
+    const [topQueries, topPages, device, recent, baseline] = await Promise.all([
+      getTopKeywords(site, { startDate, endDate, limit: 25 }),
+      getTopPages(site, { startDate, endDate, limit: 25 }),
+      getDeviceBreakdown(site, { startDate, endDate }),
+      // For new-keywords diff. We pull more than 25 so the dedup window has
+      // room to find queries that appeared this week but were below the
+      // top-25 cutoff in the prior window.
+      getTopKeywords(site, { startDate: last7Start, endDate: last7End, limit: 200 }),
+      getTopKeywords(site, { startDate: prior21Start, endDate: prior21End, limit: 200 }),
+    ]);
+
+    // Diff: keywords present in `recent` but NOT in `baseline`. Compare
+    // case-insensitively to avoid noise from query normalization variants.
+    const baselineSet = new Set(
+      baseline.map((k) => (k.keyword || "").toLowerCase())
+    );
+    const newKeywords = recent
+      .filter((k) => !baselineSet.has((k.keyword || "").toLowerCase()))
+      .sort((a, b) => b.clicks - a.clicks || b.impressions - a.impressions)
+      .slice(0, 15);
+
+    res.json({
+      window: { startDate, endDate, days: 28 },
+      topQueries: topQueries.slice(0, 10),
+      topPages: topPages.slice(0, 10),
+      device,
+      newKeywords,
+    });
+  } catch (err) {
+    console.error("[dashboard/search-console] error:", err.response?.data || err.message);
+    res.status(500).json({
+      error: err.response?.data?.error?.message || err.message || "Search Console fetch failed",
+    });
   }
 });
 
