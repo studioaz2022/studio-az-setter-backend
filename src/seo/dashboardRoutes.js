@@ -223,12 +223,15 @@ router.get("/today-headline/:site", async (req, res) => {
     ]);
 
     // Helper: pluck current+comparison values from a GA4 multi-dateRange
-    // response. GA4 stamps each row with row.dateRange = "date_range_0" /
-    // "date_range_1" automatically — it is NOT a requested dimension.
+    // response. When dateRanges has 2+ entries, GA4 appends "date_range_0" /
+    // "date_range_1" as the LAST dimensionValues entry on each row — it's
+    // an implicit dimension. For siteTotals (no requested dimensions), that
+    // implicit dimension is the only entry.
     function readByRange(report, metricIndex) {
       const out = { current: 0, comparison: 0 };
       for (const row of report.rows || []) {
-        const range = row.dateRange;
+        const dvs = row.dimensionValues || [];
+        const range = dvs[dvs.length - 1]?.value;
         const v = Number(row.metricValues?.[metricIndex]?.value ?? 0);
         if (range === "date_range_0") out.current = v;
         else if (range === "date_range_1") out.comparison = v;
@@ -237,12 +240,13 @@ router.get("/today-headline/:site", async (req, res) => {
     }
 
     // Helper: events report has eventName as its only requested dimension,
-    // plus the implicit dateRange property on each row.
+    // plus the implicit dateRange dimension appended last.
     function readEventByRange(report, eventName) {
       const out = { current: 0, comparison: 0 };
       for (const row of report.rows || []) {
-        const range = row.dateRange;
-        const name = row.dimensionValues?.[0]?.value;
+        const dvs = row.dimensionValues || [];
+        const name = dvs[0]?.value;
+        const range = dvs[dvs.length - 1]?.value;
         if (name !== eventName) continue;
         const v = Number(row.metricValues?.[0]?.value ?? 0);
         if (range === "date_range_0") out.current = v;
