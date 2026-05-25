@@ -26,6 +26,8 @@ const {
 const {
   getPerformanceSummary,
   getSearchKeywords: gbpSearchKeywords,
+  listReviews,
+  STAR_TO_NUMBER,
 } = require("./gbpClient");
 
 const router = express.Router();
@@ -580,5 +582,120 @@ router.get("/map-pack/:site", async (req, res) => {
     });
   }
 });
+
+// ──────────────────────────────────────
+// GET /api/seo/dashboard/reviews/:site
+// (mounted as /reviews/:site under /api/seo/dashboard)
+// ──────────────────────────────────────
+//
+// Returns reviews + summary stats + monthly histogram for the Reviews page.
+//
+// GBP v4 account + location IDs per memory/gbp_api_access.md:
+//   tattoo: accounts/107017428683340496769 / locations/13377765707428643781
+
+const GBP_ACCOUNTS = {
+  tattoo: "accounts/107017428683340496769",
+};
+
+router.get("/reviews/:site", async (req, res) => {
+  const { site } = req.params;
+  const account = GBP_ACCOUNTS[site];
+  const location = GBP_LOCATIONS[site];
+  if (!account || !location) {
+    return res.status(400).json({ error: `No GBP account/location wired for: ${site}` });
+  }
+
+  try {
+    const { reviews, totalReviewCount, averageRating } = await listReviews(
+      account,
+      location
+    );
+
+    // Summary stats:
+    //   total       — all reviews on file
+    //   avgRating   — 1.0–5.0
+    //   responseRate — % of reviews that have a reviewReply
+    const replied = reviews.filter((r) => r.reviewReply != null).length;
+    const responseRate = totalReviewCount > 0 ? replied / totalReviewCount : 0;
+
+    // Monthly histogram for the last 18 months. One bucket per YYYY-MM.
+    // Empty months are included so the chart has continuous bars (gaps would
+    // mislead — looks like "no review activity" vs "no time at all").
+    const monthly = buildMonthlyBuckets(reviews, 18);
+
+    // Map reviews to the dashboard's shape — strip unused fields, normalize
+    // starRating to 1–5, ensure deterministic ordering (newest first).
+    const sorted = [...reviews].sort(
+      (a, b) => new Date(b.createTime) - new Date(a.createTime)
+    );
+    const list = sorted.map((r) => ({
+      id: r.reviewId,
+      reviewer: r.reviewer?.displayName || "Anonymous",
+      profilePhotoUrl: r.reviewer?.profilePhotoUrl || null,
+      rating: STAR_TO_NUMBER[r.starRating] || 0,
+      comment: r.comment || null,
+      createTime: r.createTime,
+      updateTime: r.updateTime,
+      reply: r.reviewReply
+        ? {
+            comment: r.reviewReply.comment,
+            updateTime: r.reviewReply.updateTime,
+          }
+        : null,
+    }));
+
+    res.json({
+      summary: {
+        total: totalReviewCount,
+        replied,
+        averageRating,
+        responseRate,
+      },
+      monthly,
+      reviews: list,
+    });
+  } catch (err) {
+    console.error("[dashboard/reviews] error:", err.response?.data || err.message);
+    res.status(500).json({
+      error: err.response?.data?.error?.message || err.message || "Reviews fetch failed",
+    });
+  }
+});
+
+/**
+ * Build a 1-bucket-per-month histogram of {count, avgRating} for the last
+ * `monthCount` months. Newest month is last so the chart reads left-to-right
+ * as time progressing.
+ */
+function buildMonthlyBuckets(reviews, monthCount) {
+  // Initialize buckets keyed by YYYY-MM in chronological order.
+  const buckets = [];
+  const now = new Date();
+  for (let i = monthCount - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    buckets.push({ month: key, count: 0, ratingSum: 0, ratingN: 0 });
+  }
+  const indexByKey = new Map(buckets.map((b, i) => [b.month, i]));
+
+  for (const r of reviews) {
+    const d = new Date(r.createTime);
+    const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
+    const i = indexByKey.get(key);
+    if (i == null) continue; // outside our window
+    buckets[i].count += 1;
+    const rating = STAR_TO_NUMBER[r.starRating];
+    if (rating != null) {
+      buckets[i].ratingSum += rating;
+      buckets[i].ratingN += 1;
+    }
+  }
+
+  return buckets.map((b) => ({
+    month: b.month,
+    count: b.count,
+    avgRating: b.ratingN > 0 ? Math.round((b.ratingSum / b.ratingN) * 10) / 10 : null,
+  }));
+}
 
 module.exports = router;

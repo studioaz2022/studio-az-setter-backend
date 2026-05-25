@@ -200,10 +200,77 @@ async function getPerformanceSummary(locationName, options = {}) {
   };
 }
 
+// ──────────────────────────────────────
+// v4 API (legacy) — needed for reviews + posts (no v1 equivalent)
+// ──────────────────────────────────────
+
+const V4_URL = "https://mybusiness.googleapis.com/v4";
+
+/**
+ * Fetch all reviews for a location via the v4 endpoint. Paginates through
+ * pageToken until exhausted.
+ *
+ * Returns the raw review objects from Google. Shape per review:
+ *   {
+ *     name: "accounts/.../locations/.../reviews/<reviewId>",
+ *     reviewId,
+ *     reviewer: { profilePhotoUrl, displayName, isAnonymous },
+ *     starRating: "ONE"|"TWO"|"THREE"|"FOUR"|"FIVE",
+ *     comment: "..." (optional),
+ *     createTime, updateTime,
+ *     reviewReply?: { comment, updateTime }
+ *   }
+ *
+ * @param {string} accountId  e.g. "accounts/107017428683340496769"
+ * @param {string} locationId e.g. "locations/13377765707428643781"
+ * @param {object} opts
+ * @param {number} opts.maxPages  cap on pagination (default 10 = up to 500 reviews)
+ */
+async function listReviews(accountId, locationId, { maxPages = 10 } = {}) {
+  const token = await getAccessToken();
+  const out = [];
+  let pageToken;
+  let pages = 0;
+  while (pages < maxPages) {
+    const params = { pageSize: 50 };
+    if (pageToken) params.pageToken = pageToken;
+    const resp = await axios.get(
+      `${V4_URL}/${accountId}/${locationId}/reviews`,
+      { headers: headers(token), params }
+    );
+    const reviews = resp.data.reviews || [];
+    out.push(...reviews);
+    pageToken = resp.data.nextPageToken;
+    pages += 1;
+    if (!pageToken) break;
+  }
+  return {
+    reviews: out,
+    totalReviewCount: out.length,
+    averageRating: computeAverageRating(out),
+  };
+}
+
+const STAR_TO_NUMBER = { ONE: 1, TWO: 2, THREE: 3, FOUR: 4, FIVE: 5 };
+
+function computeAverageRating(reviews) {
+  if (!reviews.length) return 0;
+  let sum = 0;
+  let n = 0;
+  for (const r of reviews) {
+    const v = STAR_TO_NUMBER[r.starRating];
+    if (v != null) { sum += v; n += 1; }
+  }
+  if (n === 0) return 0;
+  return Math.round((sum / n) * 10) / 10;
+}
+
 module.exports = {
   listAccounts,
   listLocations,
   getDailyMetrics,
   getSearchKeywords,
   getPerformanceSummary,
+  listReviews,
+  STAR_TO_NUMBER,
 };
