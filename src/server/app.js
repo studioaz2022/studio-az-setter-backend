@@ -10449,7 +10449,9 @@ function createApp() {
         // calendarId here would be wrong.
         const { data: rows, error } = await supabase
           .from("appointments")
-          .select("id, calendar_id, start_time, end_time, status, assigned_user_id")
+          .select(
+            "id, title, calendar_id, start_time, end_time, status, assigned_user_id"
+          )
           .eq("location_id", resolved.locationId)
           .eq("assigned_user_id", staffId)
           .gte("start_time", startOfDay.toISOString())
@@ -10462,12 +10464,16 @@ function createApp() {
         }
 
         // Active appointments only — cancelled/no-show free up the slot.
+        // `title` survives into the response so the FE can render the
+        // overlap-warning copy ("Conflicts with Jose Chavez 12:00–12:30").
         const busy = (rows || [])
           .filter((r) => {
             const s = (r.status || "").toLowerCase();
             return s !== "cancelled" && s !== "canceled" && s !== "noshow";
           })
           .map((r) => ({
+            id: r.id,
+            title: r.title || "",
             start: new Date(r.start_time).getTime(),
             end: new Date(r.end_time || r.start_time).getTime(),
           }))
@@ -10610,6 +10616,18 @@ function createApp() {
           windowEnd: new Date(anyWindowEnd).toISOString(),
           slotsInHours,
           slotsAnyTime,
+          // Active busy intervals for THIS staff on THIS day. Drives
+          // the BookingSheet's live "overlap warning" (Phase 3.16c
+          // user follow-up): the FE detects when the picked
+          // [start, start+duration) overlaps any of these and surfaces
+          // who/when inline. Cancelled/no-show rows are already filtered
+          // upstream — these are real conflicts.
+          busyIntervals: busy.map((b) => ({
+            id: b.id,
+            title: b.title,
+            startTime: new Date(b.start).toISOString(),
+            endTime: new Date(b.end).toISOString(),
+          })),
           // Back-compat for older FE callers: default to in-hours
           // when a schedule exists, otherwise fall back to any-time.
           slots:
