@@ -23,6 +23,10 @@ const {
   getTopPages,
   getDeviceBreakdown,
 } = require("./searchConsoleClient");
+const {
+  getPerformanceSummary,
+  getSearchKeywords: gbpSearchKeywords,
+} = require("./gbpClient");
 
 const router = express.Router();
 
@@ -447,6 +451,132 @@ router.get("/search-console/:site", async (req, res) => {
     console.error("[dashboard/search-console] error:", err.response?.data || err.message);
     res.status(500).json({
       error: err.response?.data?.error?.message || err.message || "Search Console fetch failed",
+    });
+  }
+});
+
+// ──────────────────────────────────────
+// GET /api/seo/dashboard/map-pack/:site
+// (mounted as /map-pack/:site under /api/seo/dashboard)
+// ──────────────────────────────────────
+//
+// Returns GBP performance + keyword data for the Map Pack page:
+//   - impressions: 4 surface counts (Maps mobile, Maps desktop, Search mobile,
+//                  Search desktop) for current 28d + prior 28d + signed delta
+//   - actions:     4 action counts (directions, calls, website clicks,
+//                  bookings) same shape
+//   - keywords:    top search queries that triggered the GBP listing in the
+//                  current 28d window (with impression counts)
+//
+// GBP location IDs per memory/gbp_api_access.md:
+//   tattoo: locations/13377765707428643781
+//   (no barbershop GBP API access wired yet)
+
+const GBP_LOCATIONS = {
+  tattoo: "locations/13377765707428643781",
+};
+
+router.get("/map-pack/:site", async (req, res) => {
+  const { site } = req.params;
+  const locationName = GBP_LOCATIONS[site];
+  if (!locationName) {
+    return res.status(400).json({ error: `No GBP location wired for: ${site}` });
+  }
+
+  const endDate = daysAgo(1);
+  const startDate = daysAgo(28);
+  const priorEnd = daysAgo(29);
+  const priorStart = daysAgo(56);
+
+  try {
+    // 3 calls in parallel. Keywords pull only the current window — week-over-
+    // week keyword diffs would need their own endpoint, not worth the lift
+    // for v1.
+    const [current, prior, keywordsRaw] = await Promise.all([
+      getPerformanceSummary(locationName, { startDate, endDate }),
+      getPerformanceSummary(locationName, {
+        startDate: priorStart,
+        endDate: priorEnd,
+      }),
+      gbpSearchKeywords(locationName, { startDate, endDate }).catch((err) => {
+        console.warn("[map-pack] keywords failed:", err.response?.data || err.message);
+        return [];
+      }),
+    ]);
+
+    // Build a flat metric list with current/prior/delta. Keeps the dashboard
+    // side dumb — just renders what we hand it.
+    function pack(label, key, currentVal, priorVal, group) {
+      const delta =
+        priorVal === 0
+          ? currentVal > 0
+            ? null  // can't compute % when prior was 0
+            : 0
+          : (currentVal - priorVal) / priorVal;
+      return {
+        key,
+        label,
+        group,
+        current_28d: currentVal,
+        prior_28d: priorVal,
+        delta_28d: delta,
+      };
+    }
+
+    const impressions = [
+      pack("MAPS · MOBILE", "maps_mobile",
+        current.impressions.mobileMaps, prior.impressions.mobileMaps, "impressions"),
+      pack("MAPS · DESKTOP", "maps_desktop",
+        current.impressions.desktopMaps, prior.impressions.desktopMaps, "impressions"),
+      pack("SEARCH · MOBILE", "search_mobile",
+        current.impressions.mobileSearch, prior.impressions.mobileSearch, "impressions"),
+      pack("SEARCH · DESKTOP", "search_desktop",
+        current.impressions.desktopSearch, prior.impressions.desktopSearch, "impressions"),
+    ];
+
+    const actions = [
+      pack("DIRECTION REQUESTS", "directions",
+        current.actions.directionRequests, prior.actions.directionRequests, "actions"),
+      pack("CALLS", "calls",
+        current.actions.callClicks, prior.actions.callClicks, "actions"),
+      pack("WEBSITE CLICKS", "website_clicks",
+        current.actions.websiteClicks, prior.actions.websiteClicks, "actions"),
+      pack("BOOKINGS", "bookings",
+        current.actions.bookings, prior.actions.bookings, "actions"),
+    ];
+
+    // GBP keyword rows look like:
+    //   { searchKeyword: "tattoo shop minneapolis",
+    //     insightsValue: { value: "42" } }
+    // Sometimes the value is reported as "threshold" with no number (small N).
+    // Normalize both to { keyword, impressions } and sort.
+    const keywords = (keywordsRaw || [])
+      .map((row) => {
+        const v = row?.insightsValue?.value;
+        const t = row?.insightsValue?.threshold;
+        const impressions = v != null ? Number(v) : null;
+        return {
+          keyword: row?.searchKeyword || "(unknown)",
+          impressions,
+          threshold: t || null, // e.g. "1-10" if below GBP's reporting cutoff
+        };
+      })
+      .sort((a, b) => (b.impressions || 0) - (a.impressions || 0))
+      .slice(0, 25);
+
+    res.json({
+      window: {
+        current: { startDate, endDate, days: 28 },
+        prior: { startDate: priorStart, endDate: priorEnd, days: 28 },
+      },
+      impressions,
+      actions,
+      keywords,
+    });
+  } catch (err) {
+    console.error("[dashboard/map-pack] error:", err.response?.data || err.message);
+    res.status(500).json({
+      error: err.response?.data?.error?.message || err.message || "GBP fetch failed",
     });
   }
 });

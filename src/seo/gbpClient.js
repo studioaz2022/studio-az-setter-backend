@@ -90,20 +90,21 @@ async function getDailyMetrics(locationName, options = {}) {
     "BUSINESS_BOOKINGS",
   ];
 
+  // GBP's fetchMultiDailyMetricsTimeSeries wants the metrics as REPEATED
+  // dailyMetrics query params (plural, repeated), NOT comma-joined.
+  // URLSearchParams handles repetition cleanly when passed an array per key.
+  const params = new URLSearchParams();
+  for (const m of metrics) params.append("dailyMetrics", m);
+  params.append("dailyRange.startDate.year", String(startYear));
+  params.append("dailyRange.startDate.month", String(startMonth));
+  params.append("dailyRange.startDate.day", String(startDay));
+  params.append("dailyRange.endDate.year", String(endYear));
+  params.append("dailyRange.endDate.month", String(endMonth));
+  params.append("dailyRange.endDate.day", String(endDay));
+
   const resp = await axios.get(
-    `${PERFORMANCE_URL}/${locationName}:getDailyMetricsTimeSeries`,
-    {
-      headers: headers(token),
-      params: {
-        "dailyMetric": metrics.join(","),
-        "dailyRange.startDate.year": startYear,
-        "dailyRange.startDate.month": startMonth,
-        "dailyRange.startDate.day": startDay,
-        "dailyRange.endDate.year": endYear,
-        "dailyRange.endDate.month": endMonth,
-        "dailyRange.endDate.day": endDay,
-      },
-    }
+    `${PERFORMANCE_URL}/${locationName}:fetchMultiDailyMetricsTimeSeries?${params.toString()}`,
+    { headers: headers(token) }
   );
 
   return resp.data;
@@ -148,25 +149,30 @@ async function getSearchKeywords(locationName, options = {}) {
 
 /**
  * Get a summary of GBP performance (aggregated totals).
+ *
+ * The fetchMultiDailyMetricsTimeSeries response shape is:
+ *   { multiDailyMetricTimeSeries: [
+ *       { dailyMetricTimeSeries: [
+ *           { dailyMetric, timeSeries: { datedValues: [{ date, value }] } }
+ *         ]
+ *       }
+ *     ]
+ *   }
+ * We flatten that and sum each metric's daily values.
  */
 async function getPerformanceSummary(locationName, options = {}) {
   const raw = await getDailyMetrics(locationName, options);
-  const timeSeries = raw.timeSeries || [];
 
   const summary = {};
-  for (const series of timeSeries) {
-    const metric = series.dailyMetric;
-    let total = 0;
-    for (const point of series.dailySubEntityResults || []) {
-      for (const ts of point.timeSeries?.datedValues || []) {
+  for (const outer of raw.multiDailyMetricTimeSeries || []) {
+    for (const series of outer.dailyMetricTimeSeries || []) {
+      const metric = series.dailyMetric;
+      let total = 0;
+      for (const ts of series.timeSeries?.datedValues || []) {
         total += parseInt(ts.value || "0", 10);
       }
+      summary[metric] = (summary[metric] || 0) + total;
     }
-    // Also check top-level timeSeries format
-    for (const ts of series.timeSeries?.datedValues || []) {
-      total += parseInt(ts.value || "0", 10);
-    }
-    summary[metric] = total;
   }
 
   return {
