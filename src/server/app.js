@@ -4150,6 +4150,82 @@ function createApp() {
   });
 
   /**
+   * GET /api/shop/contacts/search?q=...&limit=20
+   *
+   * Phase 9 — Searches contacts that already appear in the tattoo shop's
+   * transactions table by contact_name (case-insensitive substring). This
+   * is the owner-web entry point for drilling into any contact's ledger
+   * without having to wait for them to bubble up in outstanding receivables.
+   *
+   * Returns: { success, results: [{ contactId, contactName, latestArtistGhlId,
+   *   transactionCount, lastSessionDate }] }
+   */
+  app.get("/api/shop/contacts/search", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+      const q = String(req.query.q || "").trim();
+      const limit = Math.min(Number(req.query.limit) || 20, 50);
+      if (q.length < 2) {
+        return res.json({ success: true, results: [] });
+      }
+      const locationId = process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4";
+
+      const { data: txs, error } = await supabase
+        .from("transactions")
+        .select("contact_id, contact_name, artist_ghl_id, session_date")
+        .eq("location_id", locationId)
+        .ilike("contact_name", `%${q}%`)
+        .is("superseded_by", null)
+        .is("deleted_at", null)
+        .order("session_date", { ascending: false })
+        .limit(500);
+      if (error) {
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const byContact = {};
+      for (const t of txs || []) {
+        if (!t.contact_id) continue;
+        const c = byContact[t.contact_id] || (byContact[t.contact_id] = {
+          contactId: t.contact_id,
+          contactName: t.contact_name || "Unknown",
+          latestArtistGhlId: t.artist_ghl_id,
+          transactionCount: 0,
+          lastSessionDate: t.session_date,
+        });
+        c.transactionCount++;
+        if (t.session_date && (!c.lastSessionDate || t.session_date > c.lastSessionDate)) {
+          c.lastSessionDate = t.session_date;
+          c.latestArtistGhlId = t.artist_ghl_id;
+        }
+      }
+
+      const { data: rates } = await supabase
+        .from("artist_commission_rates")
+        .select("artist_ghl_id, artist_name")
+        .eq("location_id", locationId)
+        .is("effective_to", null);
+      const artistNames = {};
+      for (const r of rates || []) artistNames[r.artist_ghl_id] = r.artist_name;
+
+      const results = Object.values(byContact)
+        .map((c) => ({
+          ...c,
+          artistName: artistNames[c.latestArtistGhlId] || null,
+        }))
+        .sort((a, b) => (b.lastSessionDate || "").localeCompare(a.lastSessionDate || ""))
+        .slice(0, limit);
+
+      res.json({ success: true, results });
+    } catch (error) {
+      console.error("[ContactSearch] error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
    * GET /api/shop/audit-log?startDate=...&endDate=...&artistId=...&type=...&limit=100&offset=0
    *
    * Unified time-ordered audit log combining:
