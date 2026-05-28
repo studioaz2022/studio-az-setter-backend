@@ -26,12 +26,16 @@ const { stripHtml } = require("../rentTracker/venmoEmailParser");
 
 /**
  * Pull the reconciliation code marker from a note string.
- * Match pattern: [a:CHA0427] or [a:CHA0427-2] (with collision suffix).
+ * Match patterns:
+ *   [a:CHA0427]      — regular weekly recon
+ *   [a:CHA0427-2]    — collision suffix (rare, when two artists share prefix)
+ *   [a:CHA0527-R]    — Phase 8 rollup recon (consolidates multiple weekly recons)
+ *   [a:CHA0527-R2]   — Phase 8 rollup with collision suffix
  * @returns {string|null} the code (e.g. "CHA0427"), or null if absent.
  */
 function parseReconciliationCode(noteOrText) {
   if (!noteOrText) return null;
-  const m = String(noteOrText).match(/\[a:([A-Z]{3}\d{4}(?:-\d+)?)\]/i);
+  const m = String(noteOrText).match(/\[a:([A-Z]{3}\d{4}(?:-(?:R\d*|\d+))?)\]/i);
   return m ? m[1].toUpperCase() : null;
 }
 

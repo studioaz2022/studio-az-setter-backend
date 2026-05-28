@@ -106,10 +106,11 @@ async function findReconciliationByCode(code) {
  * already settled (returns the already-settled row).
  */
 async function markSettled({ reconciliationId, settlementPaymentId, method = "venmo_auto" }) {
-  // Read current state first
+  // Read current state first — need `consolidates` to know if this is
+  // a rollup that needs to cascade.
   const { data: current, error: readErr } = await supabase
     .from("reconciliations")
-    .select("id, status, settled_at, settled_via, settlement_payment_id")
+    .select("id, status, settled_at, settled_via, settlement_payment_id, consolidates")
     .eq("id", reconciliationId)
     .maybeSingle();
   if (readErr || !current) {
@@ -120,11 +121,13 @@ async function markSettled({ reconciliationId, settlementPaymentId, method = "ve
     return { ok: true, alreadySettled: true, row: current };
   }
 
+  const settledAt = new Date().toISOString();
+
   const { data, error } = await supabase
     .from("reconciliations")
     .update({
       status: "settled",
-      settled_at: new Date().toISOString(),
+      settled_at: settledAt,
       settled_via: method,
       settlement_payment_id: settlementPaymentId || null,
     })
@@ -145,6 +148,38 @@ async function markSettled({ reconciliationId, settlementPaymentId, method = "ve
       .maybeSingle();
     return { ok: true, alreadySettled: true, row: refetch };
   }
+
+  // Phase 8 — Rollup cascade. If this row had `consolidates`, flip each
+  // child recon to settled too, stamped with the same payment id but
+  // settled_via='rollup' so the audit trail shows which children were
+  // bulk-settled by this rollup.
+  if (Array.isArray(current.consolidates) && current.consolidates.length > 0) {
+    const { error: cascadeErr } = await supabase
+      .from("reconciliations")
+      .update({
+        status: "settled",
+        settled_at: settledAt,
+        settled_via: "rollup",
+        settlement_payment_id: settlementPaymentId || null,
+        parent_reconciliation_id: reconciliationId,
+      })
+      .in("id", current.consolidates)
+      .eq("status", "pending"); // only flip still-pending children
+    if (cascadeErr) {
+      // The rollup itself is settled. Children left in pending will be
+      // visible in the next consolidate attempt — surface the warning so
+      // ops can clean up manually.
+      console.error(
+        `[Recon] cascade-settle failed for rollup ${reconciliationId} children` +
+          ` [${current.consolidates.join(", ")}]: ${cascadeErr.message}`
+      );
+    } else {
+      console.log(
+        `[Recon] cascade-settled ${current.consolidates.length} children of rollup ${reconciliationId}`
+      );
+    }
+  }
+
   return { ok: true, alreadySettled: false, row: data };
 }
 

@@ -3374,21 +3374,203 @@ function createApp() {
         return res.status(503).json({ success: false, error: "Supabase not configured" });
       }
 
-      const { data, error } = await supabase
-        .from("reconciliations")
-        .update({
-          status: "settled",
-          settled_at: new Date().toISOString(),
-          settled_via: method,
-          settlement_payment_id: settlementPaymentId || null,
-        })
-        .eq("id", reconciliationId)
-        .select()
-        .single();
-      if (error) return res.status(500).json({ success: false, error: error.message });
-      res.json({ success: true, reconciliation: data });
+      // Route through markSettled so rollup cascading happens uniformly
+      // here AND in the Venmo webhook auto-settle path.
+      const { markSettled } = require("../services/reconciliationVenmoHandler");
+      const result = await markSettled({
+        reconciliationId,
+        settlementPaymentId: settlementPaymentId || null,
+        method,
+      });
+      if (!result.ok) {
+        return res.status(500).json({ success: false, error: result.reason });
+      }
+      res.json({ success: true, reconciliation: result.row });
     } catch (error) {
       console.error("[Reconciliation] settle error:", error);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/artists/:artistId/consolidate-pending
+  //
+  // Phase 8 — Net-Settlement Consolidation.
+  // Gathers ALL pending non-rollup recons for the artist, nets the signed
+  // amounts, creates a "rollup" reconciliation that consolidates them.
+  // The rollup is a normal recon row with `consolidates` populated and
+  // its own venmo_code (`<ARTIST><MMDD>-R`). When the rollup settles
+  // (via Venmo webhook OR manual /settle), the cascade in
+  // reconciliationVenmoHandler.markSettled() flips all children to
+  // `status=settled, settled_via='rollup', parent_reconciliation_id=<rollup id>`.
+  //
+  // Owner-only (same auth posture as /settle).
+  // Returns 409 if fewer than 2 pending children, or if a rollup already exists.
+  app.post("/api/artists/:artistId/consolidate-pending", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { artistId } = req.params;
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Supabase not configured" });
+      }
+
+      // 1. Refuse if a pending rollup already exists for this artist —
+      //    avoids accidental double-roll while one is in flight.
+      const { data: existingRollup } = await supabase
+        .from("reconciliations")
+        .select("id, venmo_code, net_amount, direction")
+        .eq("artist_ghl_id", artistId)
+        .eq("status", "pending")
+        .not("consolidates", "is", null)
+        .limit(1)
+        .maybeSingle();
+      if (existingRollup) {
+        return res.status(409).json({
+          success: false,
+          error: "A pending rollup already exists for this artist. Settle or delete it first.",
+          existingRollup,
+        });
+      }
+
+      // 2. Fetch all pending non-rollup recons (the children).
+      const { data: children, error: childErr } = await supabase
+        .from("reconciliations")
+        .select("*")
+        .eq("artist_ghl_id", artistId)
+        .eq("status", "pending")
+        .is("consolidates", null)
+        .order("week_start", { ascending: true });
+      if (childErr) {
+        return res.status(500).json({ success: false, error: childErr.message });
+      }
+
+      if (!children || children.length < 2) {
+        return res.status(409).json({
+          success: false,
+          error: `Need at least 2 pending recons to consolidate; found ${children?.length || 0}.`,
+        });
+      }
+
+      // 3. Net the signed amounts. A child in direction shop_owes_artist
+      //    contributes +net_amount (positive = artist receives); artist_owes_shop
+      //    contributes −net_amount.
+      let netCents = 0;
+      for (const c of children) {
+        const cents = Math.round(Number(c.net_amount) * 100);
+        netCents += c.direction === "shop_owes_artist" ? cents : -cents;
+      }
+      const netDollars = netCents / 100;
+      const direction =
+        netCents > 0 ? "shop_owes_artist"
+        : netCents < 0 ? "artist_owes_shop"
+        : "settled";
+
+      // 4. Look up artist context for venmo_code prefix + display name.
+      const locationId = process.env.GHL_LOCATION_ID;
+      const { artistName } = await fetchArtistContext(artistId, locationId);
+
+      // 5. Generate the rollup code: <PREFIX><MMDD>-R. Today's MMDD is fine —
+      //    rollups are exempt from the (artist_ghl_id, week_start) unique
+      //    index, so collision with a current-week recon code is OK.
+      const { toShopDateString } = require("../utils/dateUtils");
+      const today = new Date();
+      const todayShop = toShopDateString(today); // YYYY-MM-DD (Central tz)
+      const baseCode = generateVenmoCode({
+        artistName: artistName || artistId,
+        weekStart: today,
+      }); // e.g. "AND0527"
+      let rollupCode = `${baseCode}-R`;
+
+      // Collision dodge: if -R is taken (rare — same artist consolidated
+      // earlier today and that rollup is already settled), append a counter.
+      for (let suffix = 2; suffix < 20; suffix++) {
+        const { data: clash } = await supabase
+          .from("reconciliations")
+          .select("id")
+          .eq("venmo_code", rollupCode)
+          .maybeSingle();
+        if (!clash) break;
+        rollupCode = `${baseCode}-R${suffix}`;
+      }
+
+      // 6. Build the venmo note. Mirror the per-week format but say
+      //    "Consolidated" + N projects.
+      const weekStart = todayShop;
+      const maxWeekEnd = children.reduce((max, c) =>
+        c.week_end > max ? c.week_end : max, children[0].week_end);
+      const netStr = `$${Math.abs(netDollars).toFixed(0)}`;
+      const directionStr = direction === "shop_owes_artist" ? " to artist"
+        : direction === "artist_owes_shop" ? " to shop" : "";
+      const venmoNote = `StudioAZ Recon Consolidated · ${children.length} weeks · Net ${netStr}${directionStr} · [a:${rollupCode}]`;
+
+      // 7. Create the rollup row. If net == 0, mark settled immediately
+      //    so the audit log reflects "consolidated and zeroed out."
+      const childIds = children.map((c) => c.id);
+      const isZeroNet = netCents === 0;
+      const rollupInsert = {
+        artist_ghl_id: artistId,
+        week_start: weekStart,
+        week_end: maxWeekEnd,
+        net_amount: Math.abs(netDollars),
+        direction: isZeroNet ? "shop_owes_artist" : direction,
+        // Schema check constraint requires one of the two directions even
+        // for zero-net rollups. We use shop_owes_artist as a neutral pick
+        // (it'll be immediately settled with status=settled below).
+        status: isZeroNet ? "settled" : "pending",
+        venmo_code: rollupCode,
+        venmo_note: venmoNote,
+        project_count: children.reduce((sum, c) => sum + (c.project_count || 0), 0),
+        consolidates: childIds,
+        settled_at: isZeroNet ? new Date().toISOString() : null,
+        settled_via: isZeroNet ? "rollup" : null,
+      };
+
+      const { data: rollup, error: rollupErr } = await supabase
+        .from("reconciliations")
+        .insert(rollupInsert)
+        .select()
+        .single();
+      if (rollupErr) {
+        return res.status(500).json({ success: false, error: rollupErr.message });
+      }
+
+      // 8. Stamp parent_reconciliation_id on children. Children stay
+      //    `status=pending` until the rollup settles (then the venmo
+      //    handler's cascade flips them). EXCEPT in the zero-net case
+      //    where we settle children immediately too.
+      const childUpdate = isZeroNet
+        ? {
+            status: "settled",
+            settled_at: new Date().toISOString(),
+            settled_via: "rollup",
+            parent_reconciliation_id: rollup.id,
+          }
+        : { parent_reconciliation_id: rollup.id };
+      const { error: cascadeErr } = await supabase
+        .from("reconciliations")
+        .update(childUpdate)
+        .in("id", childIds);
+      if (cascadeErr) {
+        // Roll back the rollup row so we don't leave orphaned state.
+        await supabase.from("reconciliations").delete().eq("id", rollup.id);
+        return res.status(500).json({
+          success: false,
+          error: `cascade-link failed: ${cascadeErr.message}`,
+        });
+      }
+
+      console.log(
+        `[Reconciliation] Consolidated ${children.length} recons → rollup ${rollupCode}` +
+          ` (net=${direction === "settled" ? "0" : netDollars} ${direction})`
+      );
+
+      res.json({
+        success: true,
+        rollup,
+        consolidated: childIds,
+        zeroNet: isZeroNet,
+      });
+    } catch (error) {
+      console.error("[Reconciliation] consolidate error:", error);
       res.status(500).json({ success: false, error: error.message });
     }
   });
@@ -3598,37 +3780,67 @@ function createApp() {
           };
         }
 
+        // ── Phase 8 — Pending recon picture ──
+        // Gather ALL pending recons for this artist (not just current week).
+        // Used to:
+        //   (a) decide whether to surface a rollup as the primary row,
+        //   (b) count "additional" pending recons for the Consolidate button,
+        //   (c) compute the artist's total signed pending net across weeks.
+        const { data: allPending } = await supabase
+          .from("reconciliations")
+          .select("id, week_start, week_end, net_amount, direction, venmo_code, venmo_note, project_count, status, consolidates")
+          .eq("artist_ghl_id", artistId)
+          .eq("status", "pending")
+          .order("week_start", { ascending: true });
+
+        const pendingList = allPending || [];
+        const pendingRollup = pendingList.find((r) => Array.isArray(r.consolidates) && r.consolidates.length > 0);
+        const pendingChildren = pendingList.filter((r) => !r.consolidates || r.consolidates.length === 0);
+
+        // Total signed net across non-rollup children (the "what's outstanding total")
+        let pendingNetCents = 0;
+        for (const c of pendingChildren) {
+          const cents = Math.round(Number(c.net_amount) * 100);
+          pendingNetCents += c.direction === "shop_owes_artist" ? cents : -cents;
+        }
+
+        // Rollup takes priority — represents the artist's consolidated debt.
+        if (pendingRollup) {
+          currentRow = {
+            id: pendingRollup.id,
+            status: pendingRollup.status,
+            artistGhlId: artistId,
+            weekStart: pendingRollup.week_start,
+            weekEnd: pendingRollup.week_end,
+            netAmount: Math.abs(Number(pendingRollup.net_amount)),
+            direction: pendingRollup.direction,
+            venmoCode: pendingRollup.venmo_code,
+            venmoNote: pendingRollup.venmo_note,
+            projectCount: pendingRollup.project_count || 0,
+            isRollup: true,
+            consolidates: pendingRollup.consolidates,
+          };
+        }
         // ── Carry forward: surface unsettled prior-week recons ──
         // An artist who still owes the shop (or is still owed) should not
         // drop off the board when the week rolls over. If the current week
-        // produced no pending recon, fall back to the oldest still-pending
-        // reconciliation from a prior week so it stays actionable until paid.
-        if (!currentRow) {
-          const { data: carried } = await supabase
-            .from("reconciliations")
-            .select("*")
-            .eq("artist_ghl_id", artistId)
-            .eq("status", "pending")
-            .lt("week_start", weekStartStr)
-            .order("week_start", { ascending: true })
-            .limit(1)
-            .maybeSingle();
-
-          if (carried) {
-            currentRow = {
-              id: carried.id,
-              status: carried.status,
-              artistGhlId: carried.artist_ghl_id,
-              weekStart: carried.week_start,
-              weekEnd: carried.week_end,
-              netAmount: Math.abs(Number(carried.net_amount)),
-              direction: carried.direction,
-              venmoCode: carried.venmo_code,
-              venmoNote: carried.venmo_note,
-              projectCount: carried.project_count || 0,
-              carriedForward: true,
-            };
-          }
+        // produced no pending recon, fall back to the OLDEST still-pending
+        // non-rollup recon (children only — rollup case handled above).
+        else if (!currentRow && pendingChildren.length > 0) {
+          const carried = pendingChildren[0]; // already sorted asc by week_start
+          currentRow = {
+            id: carried.id,
+            status: carried.status,
+            artistGhlId: artistId,
+            weekStart: carried.week_start,
+            weekEnd: carried.week_end,
+            netAmount: Math.abs(Number(carried.net_amount)),
+            direction: carried.direction,
+            venmoCode: carried.venmo_code,
+            venmoNote: carried.venmo_note,
+            projectCount: carried.project_count || 0,
+            carriedForward: true,
+          };
         }
 
         // ── Last settled within 14 days ──
@@ -3650,6 +3862,14 @@ function createApp() {
           artistPercentage: Number(artist.artist_percentage),
           currentReconciliation: currentRow,
           lastSettledReconciliation: lastSettled || null,
+          // Phase 8 — Consolidation hints for the UI.
+          //   pendingChildrenCount: # of non-rollup pending recons.
+          //     If >= 2 AND no rollup yet → show "Consolidate" button.
+          //   pendingNetSigned: total signed net across non-rollup pending recons.
+          //     Positive = shop owes artist; negative = artist owes shop.
+          pendingChildrenCount: pendingChildren.length,
+          pendingNetSigned: pendingNetCents / 100,
+          hasPendingRollup: !!pendingRollup,
         });
       }
 
