@@ -64,7 +64,7 @@ Tattoo & project fields:
 - tattoo_size: general size category (e.g. "Fine Line", "Small", "Medium", "Large")
 - tattoo_color_preference: "Black & grey", "Full color", "Mostly B&G with color accent", or "Not sure yet"
 - tattoo_photo_description: what the reference photos are meant to show
-- how_soon_is_client_deciding: timeframe (e.g. "Soonest possible", "In a month", "1–3 months", "Still deciding")
+- how_soon_is_client_deciding: timeframe (e.g. "ASAP" (current EN form label) / "Lo Mas Pronto Posible" (ES form label), legacy "Soonest possible" for older EN leads, "In a month", "1–3 months", "Still deciding")
 - first_tattoo: "Yes" or "No"
 - tattoo_concerns: free-text concerns (skin, scars, fear, etc.)
 
@@ -87,7 +87,7 @@ Use both the structured fields and conversation context to understand the lead�
 
 HOT (YES):
 - Clear idea (tattoo_title + tattoo_summary make sense).
-- Soon timeline ("Soonest possible" or "In a month").
+- Soon timeline ("ASAP" / "Lo Mas Pronto Posible" / legacy "Soonest possible" or "In a month").
 - Fast, engaged replies.
 - Positive, decisive language ("I’m ready", "I want to do this").
 
