@@ -12559,6 +12559,35 @@ function createApp() {
   // ═══ MONDAY MONEY LEAK RITUAL CRON ═══
   startMondayRitualCron();
 
+  // ═══ META ADS (Marketing API) ═══
+  // Smoke-test endpoint — verifies the SDK + token + ad account wiring.
+  // Returns the same campaigns the Meta MCP shows in Claude Desktop.
+  app.get("/api/meta/campaigns", async (req, res) => {
+    try {
+      const { adAccount, Campaign } = require("../clients/metaAdsSdk");
+      if (!adAccount) {
+        return res.status(503).json({ success: false, error: "META_AD_ACCOUNT_ID not configured" });
+      }
+      const fields = [
+        Campaign.Fields.id,
+        Campaign.Fields.name,
+        Campaign.Fields.objective,
+        Campaign.Fields.status,
+        Campaign.Fields.effective_status,
+        Campaign.Fields.daily_budget,
+        Campaign.Fields.lifetime_budget,
+        Campaign.Fields.created_time,
+      ];
+      const campaigns = await adAccount.getCampaigns(fields, { limit: 100 });
+      const data = campaigns.map((c) => c._data || c);
+      return res.json({ success: true, count: data.length, campaigns: data });
+    } catch (err) {
+      const fbError = err.response?.data?.error || err.message || String(err);
+      console.error("[Meta] /api/meta/campaigns error:", fbError);
+      return res.status(500).json({ success: false, error: fbError });
+    }
+  });
+
   return app;
 }
 
