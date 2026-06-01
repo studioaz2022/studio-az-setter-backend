@@ -79,6 +79,21 @@ const SYSTEM_FIELDS = {
   LAST_TATTOO_COMPLETED_AT: "last_tattoo_completed_at", // When the last tattoo was completed
   // AI bot version override (Phase 0 — v2 rewrite feature flag)
   AI_BOT_VERSION: "ai_bot_version", // Per-contact override: "v1" or "v2"; falls back to AI_BOT_VERSION env
+  // Funnel gate (Phase 0.5 — v2 rewrite) — REQUIRES manual GHL custom-field creation before non-shadow use
+  FUNNEL_STATUS: "funnel_status", // Source of truth for v2 routing (see FUNNEL_STATUSES)
+  FUNNEL_ENTRY_SOURCE: "funnel_entry_source", // How the lead entered: website_form | sms | dm | unknown
+  FUNNEL_ENTRY_DATE: "funnel_entry_date", // ISO timestamp the lead was first classified into the funnel
+  HUMAN_LAST_MESSAGE_AT: "human_last_message_at", // ISO timestamp of the most recent human (GHL user) reply — drives paused_human decay
+};
+
+// Funnel status values (Phase 0.5). The single source of truth for v2 routing.
+// unset (field absent/empty) => brand-new contact => run classifier.
+const FUNNEL_STATUSES = {
+  ACTIVE: "active", // In funnel, bot drives the conversation (full v2 controller)
+  PAUSED_HUMAN: "paused_human", // Human replied recently; bot silent in 24h decay window
+  PAUSED_MANUAL: "paused_manual", // iOS toggle paused the bot; silent until manually resumed
+  COMPLETED: "completed", // Tattoo done, FAQ mode; re-run classifier on new inbound
+  NOT_A_LEAD: "not_a_lead", // Classifier said no; silent forever unless re-classified
 };
 
 // Tattoo Custom Field Keys
@@ -253,6 +268,7 @@ module.exports = {
   AI_PHASES,
   LEAD_TEMPERATURES,
   SYSTEM_FIELDS,
+  FUNNEL_STATUSES,
   TATTOO_FIELDS,
   DEPOSIT_CONFIG,
   LANGUAGES,

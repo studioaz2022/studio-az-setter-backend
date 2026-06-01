@@ -23,6 +23,7 @@ const {
   addTranslatorAsFollower,
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
+const { runShadow: runShadowFunnelGate } = require("../ai/v2/shadowGate"); // Phase 0.5 — funnel gate shadow mode (logs only)
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact, getCheckoutSession, processCheckoutPayment } = require("../payments/squareClient");
 const { createFinancingLinkForContact } = require("../payments/stripeClient");
@@ -853,6 +854,12 @@ function createApp() {
         console.log(`💈 [MSG] Barbershop message from ${contactName} — push sent, skipping AI setter`);
         return;
       }
+
+      // ═══ PHASE 0.5: v2 FUNNEL GATE — SHADOW MODE ═══
+      // Logs what the v2 location filter + funnel gate WOULD decide. Changes nothing,
+      // never awaited (no latency to v1), never throws. Gated by AI_BOT_SHADOW="true".
+      runShadowFunnelGate({ payload: latestPayload, contact, messageText: combinedMessageText })
+        .catch((err) => console.error("🕵️ [SHADOW] unexpected:", err?.message || err));
 
       if (!COMPACT_MODE) {
         console.log("📋 Webhook custom fields extracted:", JSON.stringify(webhookCustomFields, null, 2));
