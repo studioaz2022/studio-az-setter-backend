@@ -77,6 +77,8 @@ const SYSTEM_FIELDS = {
   // Returning client context
   PREVIOUS_CONVERSATION_SUMMARY: "previous_conversation_summary", // Summarized history from previous tattoo cycles
   LAST_TATTOO_COMPLETED_AT: "last_tattoo_completed_at", // When the last tattoo was completed
+  // AI bot version override (Phase 0 — v2 rewrite feature flag)
+  AI_BOT_VERSION: "ai_bot_version", // Per-contact override: "v1" or "v2"; falls back to AI_BOT_VERSION env
 };
 
 // Tattoo Custom Field Keys
