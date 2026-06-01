@@ -858,7 +858,7 @@ function createApp() {
       // ═══ PHASE 0.5: v2 FUNNEL GATE — SHADOW MODE ═══
       // Logs what the v2 location filter + funnel gate WOULD decide. Changes nothing,
       // never awaited (no latency to v1), never throws. Gated by AI_BOT_SHADOW="true".
-      runShadowFunnelGate({ payload: latestPayload, contact, messageText: combinedMessageText })
+      runShadowFunnelGate({ payload: latestPayload, contact, contactId, contactName, messageText: combinedMessageText })
         .catch((err) => console.error("🕵️ [SHADOW] unexpected:", err?.message || err));
 
       if (!COMPACT_MODE) {

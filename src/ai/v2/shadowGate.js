@@ -11,6 +11,7 @@
 
 const { checkLocation } = require("./locationFilter");
 const { routeInbound } = require("./funnelGate");
+const { recordShadowDecision } = require("./shadowStore");
 
 /** Is shadow mode enabled? */
 function isShadowEnabled() {
@@ -34,16 +35,23 @@ function deriveEntrySource(payload) {
  * @param {object} args
  * @param {object} args.payload raw GHL webhook payload (for location + entry source)
  * @param {object} args.contact merged GHL contact (carries funnel_status)
+ * @param {string} [args.contactId] GHL contact id (for the log row)
+ * @param {string} [args.contactName] display name (for the log row)
  * @param {string} [args.messageText] the inbound message text (combined/debounced)
  * @param {object} [args.formData] consultation-form data if present
  * @returns {Promise<object|null>} the decision (also returned for tests), or null
  */
-async function runShadow({ payload, contact, messageText, formData = null } = {}) {
+async function runShadow({ payload, contact, contactId, contactName, messageText, formData = null } = {}) {
   if (!isShadowEnabled()) return null;
   try {
     const loc = checkLocation(payload);
     if (!loc.isTattoo) {
       console.log(`🕵️ [SHADOW] location=${loc.reason} → v2 would EXIT (not tattoo). No classify.`);
+      await recordShadowDecision({
+        contactId, contactName, locationId: loc.locationId, locationReason: loc.reason,
+        messageText, shadowStage: "location", action: "exit",
+        reason: `location=${loc.reason}`, ranClassifier: false,
+      });
       return { stage: "location", decision: "exit", location: loc };
     }
 
@@ -61,6 +69,14 @@ async function runShadow({ payload, contact, messageText, formData = null } = {}
       `🕵️ [SHADOW] funnel_status=${decision.funnelStatus || "unset"} → action=${decision.action}` +
         `${decision.notifyHuman ? " (+notify)" : ""} | reason="${decision.reason}"${cls}${proposed}`
     );
+    await recordShadowDecision({
+      contactId, contactName, locationId: loc.locationId, locationReason: loc.reason,
+      entrySource, messageText, shadowStage: "funnel",
+      funnelStatusCurrent: decision.funnelStatus, action: decision.action,
+      notifyHuman: decision.notifyHuman, reason: decision.reason,
+      ranClassifier: decision.ranClassifier, classifier: decision.classifierResult,
+      proposed: decision.proposed,
+    });
     return { stage: "funnel", decision, location: loc, entrySource };
   } catch (err) {
     // Shadow must never disturb the live flow.
