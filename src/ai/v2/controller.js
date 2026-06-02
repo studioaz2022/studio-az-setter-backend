@@ -12,16 +12,28 @@ const fs = require("fs");
 const path = require("path");
 const { generateReply, MODELS } = require("./anthropicClient");
 const { TOOL_DEFINITIONS, executeTool } = require("./tools");
+const { decideModel } = require("./escalation");
+const { recordObjectionEvent } = require("./objectionStore");
 
 const MAX_TOOL_ITERATIONS = 6; // safety cap on the tool-use loop
 
-// Load the static system prompt once at module init (cached prefix on every call).
-const SYSTEM_PROMPT_PATH = path.join(__dirname, "..", "..", "prompts", "v4", "system_prompt.md");
+// Load the static system prompt + objection principles once at module init.
+// Both form the cached prefix on every call (together they exceed Haiku's 2048-token
+// cache minimum, so caching actually activates from Phase 3 onward).
+const PROMPT_DIR = path.join(__dirname, "..", "..", "prompts", "v4");
+const SYSTEM_PROMPT_PATH = path.join(PROMPT_DIR, "system_prompt.md");
+const OBJECTION_PRINCIPLES_PATH = path.join(PROMPT_DIR, "objection_principles.md");
 let SYSTEM_PROMPT = "";
+let OBJECTION_PRINCIPLES = "";
 try {
   SYSTEM_PROMPT = fs.readFileSync(SYSTEM_PROMPT_PATH, "utf8");
 } catch (err) {
   console.error(`❌ [v2 controller] failed to load system prompt at ${SYSTEM_PROMPT_PATH}:`, err.message);
+}
+try {
+  OBJECTION_PRINCIPLES = fs.readFileSync(OBJECTION_PRINCIPLES_PATH, "utf8");
+} catch (err) {
+  console.error(`❌ [v2 controller] failed to load objection principles at ${OBJECTION_PRINCIPLES_PATH}:`, err.message);
 }
 
 /**
@@ -95,8 +107,8 @@ function sanitizeMessages(messages) {
  * @param {boolean}[args.faqMode] post-deposit FAQ mode
  * @param {boolean}[args.useTools] enable the tool-use loop (default true)
  * @param {boolean}[args.dryRun] execute tools as no-op mocks (tests; no GHL/Square writes)
- * @param {string} [args.model] override model (defaults Haiku 4.5)
- * @returns {Promise<{replyText:string, bubbles:string[], model:string, usage:object, stopReason:string, toolTrace:Array}>}
+ * @param {string} [args.forceModel] pin a specific model (tests); otherwise auto-escalated
+ * @returns {Promise<{replyText:string, bubbles:string[], model:string, usage:object, stopReason:string, toolTrace:Array, escalation:object}>}
  */
 async function handleInboundMessage({
   contact = {},
@@ -109,21 +121,30 @@ async function handleInboundMessage({
   faqMode = false,
   useTools = true,
   dryRun = false,
-  model = MODELS.HAIKU,
+  forceModel = null,
 } = {}) {
   if (!SYSTEM_PROMPT) throw new Error("v2 system prompt not loaded");
   if (!latestMessageText || !latestMessageText.trim()) {
     throw new Error("handleInboundMessage requires latestMessageText");
   }
 
+  const normalizedHistory = normalizeHistory(history);
   const messages = sanitizeMessages(
-    normalizeHistory(history).concat([{ role: "user", content: latestMessageText.trim() }])
+    normalizedHistory.concat([{ role: "user", content: latestMessageText.trim() }])
   );
   if (!messages.length) throw new Error("no usable messages after sanitize");
 
-  // System = static cached prompt + dynamic (uncached) context block.
+  // Escalation: hard turns (objection / pushback / circling) go to Sonnet, else Haiku.
+  const escalation = decideModel({ latestMessageText, history: normalizedHistory });
+  const model = forceModel || escalation.model;
+
+  // System = static cached prefix (system prompt + objection principles) + dynamic
+  // (uncached) context block. Cache breakpoint sits on the objection principles so the
+  // whole static prefix is cached and the per-contact context after it is not.
   const contextBlock = buildContextBlock(contact, { language, faqMode });
-  const system = [{ text: SYSTEM_PROMPT, cache: true }];
+  const system = [{ text: SYSTEM_PROMPT }];
+  if (OBJECTION_PRINCIPLES) system.push({ text: OBJECTION_PRINCIPLES, cache: true });
+  else system[0].cache = true; // fall back to caching the system prompt alone
   if (contextBlock) system.push({ text: contextBlock });
 
   const tools = useTools ? TOOL_DEFINITIONS : undefined;
@@ -175,6 +196,21 @@ async function handleInboundMessage({
   const text = result?.text || "";
   const bubbles = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
 
+  // Log detected objections for the Phase 6 tuning loop (best-effort; no-op until table exists).
+  // Skip in dryRun so tests don't write rows.
+  if (escalation.objectionId && !dryRun) {
+    recordObjectionEvent({
+      contactId,
+      contactName: toolCtx.contactName,
+      objectionId: escalation.objectionId,
+      escalationReason: escalation.reason,
+      messageText: latestMessageText,
+      botReply: text,
+      modelUsed: model,
+      language,
+    }).catch(() => {});
+  }
+
   return {
     replyText: text,
     bubbles: bubbles.length ? bubbles : (text ? [text] : []),
@@ -182,6 +218,7 @@ async function handleInboundMessage({
     usage: usageTotals,
     stopReason: result?.stopReason || null,
     toolTrace,
+    escalation, // { escalate, model, reason, objectionId }
   };
 }
 
