@@ -25,6 +25,14 @@ function getGhlFieldIdMapping() {
         "ra4nk80wma8eqklcfxst": "how_soon_is_client_deciding",
         "qqdydmy1fnldidlcmnbc": "first_tattoo",
         "ptrjy8tbbjlnrwqepdnp": "tattoo_photo_description",
+        // v2 funnel fields (created 2026-06-02). Without these, normalizeCustomFields can't
+        // map the ID back to the friendly key, so v2 reads of funnel_status/etc. silently fail
+        // (e.g. a backfilled paused_manual lead would read as unset → bot would wrongly engage).
+        "mley66qtid69fsuj6r6w": "funnel_status",
+        "hmatsp1xocobmirrao1b": "funnel_entry_source",
+        "mn5p4nantwoz5o3bcs4i": "funnel_entry_date",
+        "zthqaspryj0a6pqpskq7": "human_last_message_at",
+        "ev1qvacurjev7or9q5mb": "ai_bot_version",
       };
       GHL_FIELD_ID_TO_NAME = knownMappings;
     } catch (err) {
