@@ -6191,6 +6191,65 @@ function createApp() {
     return true;
   }
 
+  // ═══ v2 AI Setter — iOS contact-profile controls (Phase 4) ═══
+  // These back the Pause AI / Resume AI / "AI handle this" buttons on the iOS contact profile.
+  // The SwiftUI controls themselves live in the iOS repo (separate workstream); these are the
+  // backend they call. The status indicator just reads the funnel_status custom field — no
+  // endpoint needed. Internal-only (x-internal-key). Body: { contactId }.
+  async function setFunnelStatus(contactId, fields) {
+    const { updateContact } = require("../clients/ghlClient");
+    return updateContact(contactId, { customField: fields });
+  }
+
+  // Pause AI → funnel_status = paused_manual (silent until manually resumed; no auto-resume).
+  app.post("/api/ai-setter/pause", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
+    const contactId = req.body?.contactId;
+    if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
+    try {
+      await setFunnelStatus(contactId, { [SYSTEM_FIELDS.FUNNEL_STATUS]: FUNNEL_STATUSES.PAUSED_MANUAL });
+      return res.json({ success: true, funnel_status: FUNNEL_STATUSES.PAUSED_MANUAL });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Resume AI → funnel_status = active (bot picks up on next inbound). Clears the human-pause clock.
+  app.post("/api/ai-setter/resume", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
+    const contactId = req.body?.contactId;
+    if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
+    try {
+      await setFunnelStatus(contactId, {
+        [SYSTEM_FIELDS.FUNNEL_STATUS]: FUNNEL_STATUSES.ACTIVE,
+        [SYSTEM_FIELDS.HUMAN_LAST_MESSAGE_AT]: "",
+      });
+      return res.json({ success: true, funnel_status: FUNNEL_STATUSES.ACTIVE });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // AI handle this → let the bot send the next reply even though a human was just in the thread.
+  // Sets active + clears the human-pause clock so the decay window won't block re-entry.
+  app.post("/api/ai-setter/ai-handle", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
+    const contactId = req.body?.contactId;
+    if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
+    try {
+      await setFunnelStatus(contactId, {
+        [SYSTEM_FIELDS.FUNNEL_STATUS]: FUNNEL_STATUSES.ACTIVE,
+        [SYSTEM_FIELDS.HUMAN_LAST_MESSAGE_AT]: "",
+      });
+      return res.json({ success: true, funnel_status: FUNNEL_STATUSES.ACTIVE, note: "bot will handle next inbound" });
+    } catch (err) {
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // POST /api/tattoo/fill-token
   // Internal-only re-issue / back-fill. Useful for migrating existing leads or
   // manually generating a link from iOS. Body: { contactId, artistSlug, language?, source?, expiryDays? }

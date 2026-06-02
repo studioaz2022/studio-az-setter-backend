@@ -22,6 +22,7 @@ const {
 const { createDepositLinkForContact } = require("../../payments/squareClient");
 const { updateContact } = require("../../clients/ghlClient");
 const { handleHumanHandoff } = require("../../clients/aiSetterEventHandler");
+const { scheduleFollowup } = require("./followupScheduler");
 const {
   SYSTEM_FIELDS,
   TATTOO_FIELDS,
@@ -322,10 +323,17 @@ const HANDLERS = {
   },
 
   async schedule_followup(input, ctx) {
-    // Phase 2 stub: full persistence + cron send lands in Phase 4 (followupScheduler rebuild).
     if (!input.when || !input.message) return { ok: false, error: "when and message required" };
-    console.log(`[tool schedule_followup] (stub) contact=${ctx.contactId} when=${input.when} msg="${input.message}"`);
-    return { ok: true, scheduled: true, note: "follow-up captured (persistence lands in Phase 4)" };
+    const res = await scheduleFollowup({
+      contactId: ctx.contactId,
+      when: input.when,
+      message: input.message,
+      reason: input.reason || "lead went cold / asked for time",
+      model: ctx.modelUsed || null,
+    });
+    // Graceful: until the scheduled_followups table is applied, this no-ops but doesn't break chat.
+    if (!res.ok) return { ok: false, error: res.error, note: "follow-up not persisted (table pending)" };
+    return { ok: true, scheduled: true, scheduled_for: res.scheduledFor };
   },
 };
 
