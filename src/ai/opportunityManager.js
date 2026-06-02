@@ -26,6 +26,26 @@ function getStageKeyFromId(stageId) {
   return Object.keys(PIPELINE_STAGE_CONFIG).find(key => PIPELINE_STAGE_CONFIG[key].id === stageId) || null;
 }
 
+// Refund Request Form §6.6 — map the funnel stage key (the *when*) to its
+// human-readable analytic label. Note: a "Consult Completed" answer cannot be
+// derived from pipeline stage alone (CONSULT_APPOINTMENT covers both scheduled
+// and completed), so callers with that knowledge — like the refund form, which
+// runs consultDidHappen() — should pass `lastStageBeforeLostOverride`.
+const LAST_STAGE_LABELS = Object.freeze({
+  INTAKE: "Intake",
+  DISCOVERY: "Discovery",
+  DEPOSIT_PENDING: "Deposit Pending",
+  QUALIFIED: "Deposit Paid",
+  CONSULT_APPOINTMENT: "Consult Scheduled",
+  CONSULT_MESSAGE: "Consult Scheduled",
+  TATTOO_BOOKED: "Tattoo Booked",
+});
+
+function deriveLastStageBeforeLost(currentStageKey) {
+  if (!currentStageKey) return null;
+  return LAST_STAGE_LABELS[currentStageKey] || null;
+}
+
 function canAdvance(currentKey, targetKey, { allowRegression = false } = {}) {
   if (!currentKey) return true;
   if (allowRegression) return true;
@@ -160,7 +180,23 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
 
 async function transitionToStage(contactId, stageKey, options = {}) {
   if (!stageKey) return null;
-  const { contact: providedContact, allowRegression = false, monetaryValue, note, status, skipCompletionArchive = false } = options;
+  const {
+    contact: providedContact,
+    allowRegression = false,
+    monetaryValue,
+    note,
+    status,
+    skipCompletionArchive = false,
+    // Lost-deal analytics (§6.6). Set on transitions to COLD_NURTURE_LOST.
+    //   lastStageBeforeLostOverride — caller supplies the precise label (e.g.
+    //     refund form passes "Consult Completed" derived from Fireflies). When
+    //     omitted, we derive from `currentStage` via the mapping below.
+    //   lostReason  — one of 9 cause-only buckets (or 'other'). See §6.6.
+    //   refundType  — 'deposit_refunded' | 'partial_refund' | 'no_refund' | 'no_payment'.
+    lastStageBeforeLostOverride,
+    lostReason,
+    refundType,
+  } = options;
   const { contact, opportunityId, currentStage } = await ensureOpportunity({
     contactId,
     stageKey,
@@ -308,10 +344,35 @@ async function transitionToStage(contactId, stageKey, options = {}) {
     await addOpportunityNote({ opportunityId: updatedOpportunityId, content: note });
   }
 
-  await updateSystemFields(contactId, {
+  // Lost-deal analytics (§6.6) — every transition to COLD_NURTURE_LOST writes
+  // the three structural fields. Auto-derives `last_stage_before_lost` from
+  // the stage we're moving FROM; callers with finer knowledge (e.g. the refund
+  // form already ran consultDidHappen and knows "Consult Completed") pass
+  // lastStageBeforeLostOverride. Idempotency guard: if we're already at LOST,
+  // do NOT recapture — we'd otherwise overwrite the true "last stage before
+  // we became Lost" with the value `cold_nurture_lost`. updateSystemFields
+  // filters out undefined, so unsupplied options are silent no-ops.
+  const systemFieldUpdates = {
     opportunity_stage: updatedStageKey,
     opportunity_id: updatedOpportunityId,
-  });
+  };
+  if (stageKey === OPPORTUNITY_STAGES.COLD_NURTURE_LOST) {
+    const wasAlreadyLost = currentStage === OPPORTUNITY_STAGES.COLD_NURTURE_LOST;
+    if (!wasAlreadyLost) {
+      const derived = deriveLastStageBeforeLost(currentStage);
+      const lastStage = lastStageBeforeLostOverride || derived;
+      if (lastStage) {
+        systemFieldUpdates.last_stage_before_lost = lastStage;
+      }
+    }
+    if (lostReason) {
+      systemFieldUpdates.lost_reason = lostReason;
+    }
+    if (refundType) {
+      systemFieldUpdates.refund_type = refundType;
+    }
+  }
+  await updateSystemFields(contactId, systemFieldUpdates);
 
   return { opportunityId: updatedOpportunityId, stageKey: updatedStageKey };
 }

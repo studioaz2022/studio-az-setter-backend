@@ -55,6 +55,16 @@ const SYSTEM_FIELDS = {
   TATTOO_BOOKED: "tattoo_booked",
   TATTOO_COMPLETED: "tattoo_completed",
   COLD_NURTURE_LOST: "cold_nurture_lost",
+  // Lost-deal analytics (Refund Request Form §6.6). Auto-captured on every
+  // transition to COLD_NURTURE_LOST. Three orthogonal jobs:
+  //   LAST_STAGE_BEFORE_LOST — the *when* (where the funnel broke).
+  //   LOST_REASON            — the *why* (cause-only, 8 buckets + 'other').
+  //   REFUND_TYPE            — the *money outcome* (4 values).
+  // Custom fields with these keys must exist in the GHL CRM location. Until
+  // they do, writes are silent no-ops — no risk to existing flows.
+  LAST_STAGE_BEFORE_LOST: "last_stage_before_lost",
+  LOST_REASON: "lost_reason",
+  REFUND_TYPE: "refund_type",
   // Booking state fields (persisted for crash recovery)
   TIMES_SENT: "times_sent", // Whether time options have been sent
   DEPOSIT_LINK_URL: "deposit_link_url", // The actual deposit URL for reuse
