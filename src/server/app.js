@@ -6257,7 +6257,7 @@ function createApp() {
 
   // Pause AI → funnel_status = paused_manual (silent until manually resumed; no auto-resume).
   app.post("/api/ai-setter/pause", async (req, res) => {
-    if (!requireInternalKey(req, res)) return;
+    if (!requireOwnerKey(req, res)) return; // iOS-facing owner action (x-owner-key)
     const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
     const contactId = req.body?.contactId;
     if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
@@ -6271,7 +6271,7 @@ function createApp() {
 
   // Resume AI → funnel_status = active (bot picks up on next inbound). Clears the human-pause clock.
   app.post("/api/ai-setter/resume", async (req, res) => {
-    if (!requireInternalKey(req, res)) return;
+    if (!requireOwnerKey(req, res)) return; // iOS-facing owner action (x-owner-key)
     const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
     const contactId = req.body?.contactId;
     if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
@@ -6289,7 +6289,7 @@ function createApp() {
   // AI handle this → let the bot send the next reply even though a human was just in the thread.
   // Sets active + clears the human-pause clock so the decay window won't block re-entry.
   app.post("/api/ai-setter/ai-handle", async (req, res) => {
-    if (!requireInternalKey(req, res)) return;
+    if (!requireOwnerKey(req, res)) return; // iOS-facing owner action (x-owner-key)
     const { FUNNEL_STATUSES, SYSTEM_FIELDS } = require("../config/constants");
     const contactId = req.body?.contactId;
     if (!contactId) return res.status(400).json({ success: false, error: "contactId required" });
