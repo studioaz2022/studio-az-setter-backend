@@ -698,4 +698,151 @@ function buildMonthlyBuckets(reviews, monthCount) {
   }));
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Operations → Refunds & Lost (Refund Request Form §13.3 / Phase 8)
+// ───────────────────────────────────────────────────────────────────────────
+//
+// GET /operations/refunds/:site?days=
+//
+// Aggregates the refund_requests table (Phase 1 schema + Phase 5 writes) into
+// three orthogonal slices — last_stage_before_lost (the WHEN), lost_reason
+// (the WHY), refund_type (the MONEY OUTCOME) — plus headline totals and the
+// manual-review / failed counts.
+//
+// site: 'tattoo' returns the live aggregates. 'barbershop' is supported with
+// zeroes (refund form is tattoo-only today; the page should still render).
+//
+// All slices anchor on submitted_at (the row was actually completed), not
+// created_at (when the link was minted), so the dashboard reflects refunds
+// the team actually processed.
+router.get("/operations/refunds/:site", async (req, res) => {
+  const site = req.params.site;
+  if (site !== "tattoo" && site !== "barbershop") {
+    return res.status(400).json({ error: "unknown site" });
+  }
+
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+
+  // Empty barbershop response — refund form is tattoo-only for now.
+  if (site === "barbershop") {
+    return res.json(emptyRefundResponse(site, days));
+  }
+
+  try {
+    const { supabase } = require("../clients/supabaseClient");
+
+    const now = Date.now();
+    const day = 24 * 60 * 60 * 1000;
+    const currentStart = new Date(now - days * day).toISOString();
+    const priorStart = new Date(now - 2 * days * day).toISOString();
+    const thirtyStart = new Date(now - 30 * day).toISOString();
+
+    // One read pulls the full 30d window — we slice in memory rather than
+    // round-trip three times. The table is small (one row per refund request);
+    // 30 days of traffic is trivially under a paged response.
+    const { data: rows, error } = await supabase
+      .from("refund_requests")
+      .select(
+        "id, status, refund_status, refund_type, lost_reason, last_stage_before_lost, refund_amount_cents, drop_off_stage, multi_or_missing_deposit, submitted_at, created_at"
+      )
+      .gte("created_at", thirtyStart)
+      .order("created_at", { ascending: false });
+
+    if (error) {
+      console.error("[dashboard refunds] supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    const all = rows || [];
+    const completed = all.filter((r) => r.status === "completed" && r.submitted_at);
+
+    function inWindow(row, startIso, endIso) {
+      const ts = row.submitted_at;
+      if (!ts) return false;
+      if (ts < startIso) return false;
+      if (endIso && ts >= endIso) return false;
+      return true;
+    }
+
+    const current7 = completed.filter((r) => inWindow(r, currentStart, null));
+    const prior7 = completed.filter((r) => inWindow(r, priorStart, currentStart));
+    const total30 = completed; // 30d window matches the SQL filter
+
+    function aggregate(window) {
+      const byStage = {};
+      const byReason = {};
+      const byType = {};
+      let dollarsRefunded = 0;
+      let refundedCount = 0;
+      let manualReviewCount = 0;
+      let failedCount = 0;
+
+      for (const r of window) {
+        if (r.last_stage_before_lost) {
+          byStage[r.last_stage_before_lost] =
+            (byStage[r.last_stage_before_lost] || 0) + 1;
+        }
+        if (r.lost_reason) {
+          byReason[r.lost_reason] = (byReason[r.lost_reason] || 0) + 1;
+        }
+        if (r.refund_type) {
+          byType[r.refund_type] = (byType[r.refund_type] || 0) + 1;
+        }
+        if (r.refund_status === "refunded") {
+          refundedCount += 1;
+          if (typeof r.refund_amount_cents === "number") {
+            dollarsRefunded += r.refund_amount_cents / 100;
+          }
+        }
+        if (r.refund_status === "manual_review") manualReviewCount += 1;
+        if (r.refund_status === "failed") failedCount += 1;
+      }
+
+      return {
+        total: window.length,
+        refundedCount,
+        manualReviewCount,
+        failedCount,
+        dollarsRefunded: Math.round(dollarsRefunded * 100) / 100,
+        byStage,
+        byReason,
+        byType,
+      };
+    }
+
+    return res.json({
+      site,
+      windowDays: days,
+      generatedAt: new Date().toISOString(),
+      current7d: aggregate(current7),
+      prior7d: aggregate(prior7),
+      total30d: aggregate(total30),
+    });
+  } catch (err) {
+    console.error("[dashboard refunds] unexpected:", err.message);
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+function emptyRefundResponse(site, days) {
+  const zero = {
+    total: 0,
+    refundedCount: 0,
+    manualReviewCount: 0,
+    failedCount: 0,
+    dollarsRefunded: 0,
+    byStage: {},
+    byReason: {},
+    byType: {},
+  };
+  return {
+    site,
+    windowDays: days,
+    generatedAt: new Date().toISOString(),
+    current7d: zero,
+    prior7d: zero,
+    total30d: zero,
+  };
+}
+
 module.exports = router;
