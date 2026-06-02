@@ -1358,13 +1358,14 @@ function createApp() {
         const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true" || cf.translator_needed === "Yes";
         const isMessageConsult = consultationType === "message";
 
-        // Gate the customer-facing deposit confirmation to EXACTLY ONCE per payment.
+        // Gate ALL post-payment side-effects to EXACTLY ONCE per payment.
         // Set true only when THIS webhook invocation is the one that newly records the
         // payment (i.e. wins the financial-table unique constraint). Square retries the
-        // webhook aggressively; without this, every retry re-sent "Got your deposit…",
-        // spamming the lead. Tying it to the unique insert dedups both sequential AND
-        // concurrent retries.
-        let depositConfirmationShouldSend = false;
+        // webhook aggressively; without this, every retry re-ran the confirmation SMS,
+        // iOS notifications, artist push, and task creation — spamming the lead AND the
+        // artist's phone, and creating duplicate tasks. Tying it to the unique insert
+        // dedups both sequential AND concurrent retries.
+        let depositNewlyRecorded = false;
 
         // === FINANCIAL TRACKING: Record deposit payment ===
         try {
@@ -1389,7 +1390,7 @@ function createApp() {
             }
             try {
               await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
-              depositConfirmationShouldSend = true; // we are the one true recorder → safe to confirm
+              depositNewlyRecorded = true; // we are the one true recorder → safe to fire side-effects
               if (!COMPACT_MODE) {
                 console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
               }
@@ -1428,105 +1429,120 @@ function createApp() {
           }
         } catch (financialErr) {
           console.error('[Financial] Error recording payment:', financialErr.message || financialErr);
-          // Don't fail the webhook - deposit was already processed
+          // Recording failed (e.g. Supabase down) → depositNewlyRecorded stays false, so the
+          // gated side-effects below (QUALIFIED transition, iOS notifications, artist push,
+          // task creation, message-consult assignment, confirmation SMS) are ALL skipped.
+          // We accept a paid customer getting no confirmation over spamming on every retry,
+          // but log it loudly so it's debuggable rather than silently swallowed.
+          console.warn(`[Financial] ⚠️ Payment ${payment.id} for contact ${contactId} was NOT recorded — SKIPPING all downstream side-effects (confirmation/notifications/tasks). Investigate financial store before this payment is lost.`);
+          // Don't fail the webhook (Square would just retry); the next retry may succeed.
         }
 
-        // Sync pipeline to QUALIFIED stage first
-        if (!COMPACT_MODE) console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
-        await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
-        if (!COMPACT_MODE) console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
+        // Gate all post-payment side-effects on the same idempotency signal as the
+        // confirmation SMS. They only fire when THIS invocation newly recorded the payment.
+        // On Square webhook retries (payment already recorded) or when financial recording
+        // failed above, depositNewlyRecorded is false and we skip them — this is what stops
+        // duplicate iOS notifications, artist push spam, and duplicate task creation.
+        if (!depositNewlyRecorded) {
+          console.log(`⏭️ [DEPOSIT] Payment ${payment.id || payment.payment_id || '?'} for contact ${contactId} not newly recorded (retry/duplicate or recording failed) — skipping QUALIFIED transition, iOS notifications, artist push, task creation, and message-consult assignment.`);
+        } else {
+          // Sync pipeline to QUALIFIED stage first
+          if (!COMPACT_MODE) console.log(`📊 [PIPELINE] Deposit paid - transitioning to QUALIFIED...`);
+          await transitionToStage(contactId, OPPORTUNITY_STAGES.QUALIFIED);
+          if (!COMPACT_MODE) console.log(`✅ [PIPELINE] Contact ${contactId} moved to QUALIFIED stage`);
 
-        // === NOTIFY iOS APP: Deposit paid event ===
-        const paymentId = payment.id || payment.payment_id || null;
-        const assignedArtist = resolveArtistUserId(contact);
-        await notifyDepositPaid(contactId, {
-          amount,
-          paymentId,
-          artistId: assignedArtist,
-          consultationType,
-        });
-
-        // === PUSH NOTIFICATION: Deposit paid ===
-        try {
-          const { sendPaymentReceivedNotification } = require("../services/paymentNotifications");
-          const contactDisplayName = contact?.contactName || contact?.firstName || "Client";
-          await sendPaymentReceivedNotification({
-            artistGhlUserId: assignedArtist,
-            contactName: contactDisplayName,
-            amount: amount / 100,
-            paymentMethod: "square",
-            contactId,
-          });
-        } catch (pushErr) {
-          console.warn("⚠️ Deposit push notification failed (non-fatal):", pushErr.message);
-        }
-
-        // === NOTIFY iOS APP: Lead qualified event ===
-        await notifyLeadQualified(contactId, {
-          assignedArtist,
-          consultationType,
-          tattooSummary: cf.tattoo_summary || null,
-        });
-
-        // === iOS APP TASK CREATION: Based on consultation type, language, and tattoo size ===
-        try {
-          const languagePreference = cf.language_preference || cf.languagePreference || "English";
-          const leadSpanishComfortable = cf.lead_spanish_comfortable === true || 
-                                          cf.lead_spanish_comfortable === "true" || 
-                                          cf.lead_spanish_comfortable === "Yes";
-          const isSpanishOrComfortable = languagePreference === "Spanish" || leadSpanishComfortable;
-          const tattooSize = cf.tattoo_size || cf.size_of_tattoo || "";
-
-          // Use the actual GHL assigned user ID from the contact, not the custom field
-          // This ensures tasks are created for the user who owns the contact
-          const assignedToUserId = contact?.assignedTo || contact?.assignedUserId || null;
-
-          // Map GHL user IDs to artist names for the webhook server
-          const USER_ID_TO_ARTIST_NAME = {
-            '1wuLf50VMODExBSJ9xPI': 'Joan',
-            'O8ChoMYj1BmMWJJsDlvC': 'Andrew',
-            'uAWhIMemqUPJC1SqCyDR': 'Maria',
-            '1kFG5FWdUDhXLUX46snG': 'Lionel',
-            'Wl24x1ZrucHuHatM0ODD': 'Claudia',
-          };
-          
-          const artistName = assignedToUserId ? USER_ID_TO_ARTIST_NAME[assignedToUserId] || assignedToUserId : null;
-
-          await handleQualifiedLeadTasks({
-            contactId,
-            contactName,
+          // === NOTIFY iOS APP: Deposit paid event ===
+          const paymentId = payment.id || payment.payment_id || null;
+          const assignedArtist = resolveArtistUserId(contact);
+          await notifyDepositPaid(contactId, {
+            amount,
+            paymentId,
+            artistId: assignedArtist,
             consultationType,
-            isSpanishOrComfortable,
-            tattooSize,
-            assignedArtist: artistName
           });
-        } catch (taskErr) {
-          console.error("❌ [TASK] Failed to create iOS app task:", taskErr.message || taskErr);
-          // Don't fail the webhook - task creation is non-critical
-        }
 
-        // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
-        if (isMessageConsult) {
-          if (!COMPACT_MODE) console.log(`📝 [MESSAGE CONSULT] Deposit paid for message consultation - assigning artist...`);
-          
-          // Assign the artist to the contact
+          // === PUSH NOTIFICATION: Deposit paid ===
           try {
-            await assignContactToArtist(contactId);
-            if (!COMPACT_MODE) console.log(`✅ [MESSAGE CONSULT] Artist assigned to contact ${contactId}`);
-          } catch (assignErr) {
-            console.error("❌ [MESSAGE CONSULT] Failed to assign artist:", assignErr.message || assignErr);
+            const { sendPaymentReceivedNotification } = require("../services/paymentNotifications");
+            const contactDisplayName = contact?.contactName || contact?.firstName || "Client";
+            await sendPaymentReceivedNotification({
+              artistGhlUserId: assignedArtist,
+              contactName: contactDisplayName,
+              amount: amount / 100,
+              paymentMethod: "square",
+              contactId,
+            });
+          } catch (pushErr) {
+            console.warn("⚠️ Deposit push notification failed (non-fatal):", pushErr.message);
           }
-          
-          // Transition to CONSULT_MESSAGE stage
+
+          // === NOTIFY iOS APP: Lead qualified event ===
+          await notifyLeadQualified(contactId, {
+            assignedArtist,
+            consultationType,
+            tattooSummary: cf.tattoo_summary || null,
+          });
+
+          // === iOS APP TASK CREATION: Based on consultation type, language, and tattoo size ===
           try {
-            await transitionToStage(contactId, OPPORTUNITY_STAGES.CONSULT_MESSAGE);
-            if (COMPACT_MODE) {
-              console.log(`   → CONSULT_MESSAGE stage | artist assigned`);
-            } else {
-              console.log(`✅ [PIPELINE] Contact ${contactId} moved to CONSULT_MESSAGE stage`);
+            const languagePreference = cf.language_preference || cf.languagePreference || "English";
+            const leadSpanishComfortable = cf.lead_spanish_comfortable === true ||
+                                            cf.lead_spanish_comfortable === "true" ||
+                                            cf.lead_spanish_comfortable === "Yes";
+            const isSpanishOrComfortable = languagePreference === "Spanish" || leadSpanishComfortable;
+            const tattooSize = cf.tattoo_size || cf.size_of_tattoo || "";
+
+            // Use the actual GHL assigned user ID from the contact, not the custom field
+            // This ensures tasks are created for the user who owns the contact
+            const assignedToUserId = contact?.assignedTo || contact?.assignedUserId || null;
+
+            // Map GHL user IDs to artist names for the webhook server
+            const USER_ID_TO_ARTIST_NAME = {
+              '1wuLf50VMODExBSJ9xPI': 'Joan',
+              'O8ChoMYj1BmMWJJsDlvC': 'Andrew',
+              'uAWhIMemqUPJC1SqCyDR': 'Maria',
+              '1kFG5FWdUDhXLUX46snG': 'Lionel',
+              'Wl24x1ZrucHuHatM0ODD': 'Claudia',
+            };
+
+            const artistName = assignedToUserId ? USER_ID_TO_ARTIST_NAME[assignedToUserId] || assignedToUserId : null;
+
+            await handleQualifiedLeadTasks({
+              contactId,
+              contactName,
+              consultationType,
+              isSpanishOrComfortable,
+              tattooSize,
+              assignedArtist: artistName
+            });
+          } catch (taskErr) {
+            console.error("❌ [TASK] Failed to create iOS app task:", taskErr.message || taskErr);
+            // Don't fail the webhook - task creation is non-critical
+          }
+
+          // === MESSAGE-BASED CONSULTATION: Assign artist and move to CONSULT_MESSAGE ===
+          if (isMessageConsult) {
+            if (!COMPACT_MODE) console.log(`📝 [MESSAGE CONSULT] Deposit paid for message consultation - assigning artist...`);
+
+            // Assign the artist to the contact
+            try {
+              await assignContactToArtist(contactId);
+              if (!COMPACT_MODE) console.log(`✅ [MESSAGE CONSULT] Artist assigned to contact ${contactId}`);
+            } catch (assignErr) {
+              console.error("❌ [MESSAGE CONSULT] Failed to assign artist:", assignErr.message || assignErr);
             }
-          } catch (stageErr) {
-            console.error("❌ [PIPELINE] Failed to transition to CONSULT_MESSAGE:", stageErr.message || stageErr);
+
+            // Transition to CONSULT_MESSAGE stage
+            try {
+              await transitionToStage(contactId, OPPORTUNITY_STAGES.CONSULT_MESSAGE);
+              if (COMPACT_MODE) {
+                console.log(`   → CONSULT_MESSAGE stage | artist assigned`);
+              } else {
+                console.log(`✅ [PIPELINE] Contact ${contactId} moved to CONSULT_MESSAGE stage`);
+              }
+            } catch (stageErr) {
+              console.error("❌ [PIPELINE] Failed to transition to CONSULT_MESSAGE:", stageErr.message || stageErr);
+            }
           }
         }
 
@@ -1548,7 +1564,7 @@ function createApp() {
         // === SEND DEPOSIT CONFIRMATION MESSAGE ===
         // Only when THIS invocation newly recorded the payment — prevents Square webhook
         // retries from re-sending the confirmation (the bug that spammed "Got your deposit…").
-        if (!depositConfirmationShouldSend) {
+        if (!depositNewlyRecorded) {
           console.log(`⏭️ [DEPOSIT] Confirmation already sent for this payment (retry/duplicate) — skipping send for ${contactId}`);
         } else try {
           // Build channel context from contact for message sending
