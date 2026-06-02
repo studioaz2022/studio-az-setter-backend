@@ -24,6 +24,8 @@ const {
 } = require("../clients/ghlClient");
 const { handleInboundMessage } = require("../ai/controller");
 const { runShadow: runShadowFunnelGate } = require("../ai/v2/shadowGate"); // Phase 0.5 — funnel gate shadow mode (logs only)
+const { resolveBotVersion } = require("../ai/v2/botVersion"); // Phase 5 — v1/v2 routing flag
+const { runV2Inbound } = require("../ai/v2/pipeline"); // Phase 5 — v2 inbound orchestrator
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
 const { getContactIdFromOrder, createDepositLinkForContact, getCheckoutSession, processCheckoutPayment } = require("../payments/squareClient");
 const { createFinancingLinkForContact } = require("../payments/stripeClient");
@@ -918,6 +920,29 @@ function createApp() {
         },
       });
       
+      // ═══ v2 AI SETTER — flag-gated routing (Phase 5) ═══
+      // Default flag is v1, so this branch is DORMANT until a contact is opted in
+      // (AI_BOT_VERSION=v2 env, or per-contact ai_bot_version=v2). runV2Inbound is fully
+      // isolated and never throws; the extra try/catch is belt-and-suspenders so a v2 issue
+      // can never break the v1 path. When v2 handles the inbound, we return — v1 does not run.
+      if (resolveBotVersion(contact) === "v2") {
+        try {
+          const v2res = await runV2Inbound({
+            payload: latestPayload,
+            contact,
+            contactId,
+            contactName,
+            messageText: combinedMessageText,
+            rawMessages,
+            channelContext,
+          });
+          console.log(`🤖 [v2] action=${v2res.action}${v2res.gateAction ? ` gate=${v2res.gateAction}` : ""}${v2res.model ? ` model=${v2res.model.includes("sonnet") ? "sonnet" : "haiku"}` : ""}`);
+        } catch (err) {
+          console.error("🤖 [v2] pipeline error (v1 NOT run for this v2 contact):", err.message || err);
+        }
+        return; // v2 owns this inbound
+      }
+
       // ═══ COMPACT MODE: LOG INCOMING MESSAGE ═══
       if (COMPACT_MODE) {
         logIncomingMessage({
