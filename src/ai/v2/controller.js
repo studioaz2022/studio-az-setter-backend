@@ -11,6 +11,9 @@
 const fs = require("fs");
 const path = require("path");
 const { generateReply, MODELS } = require("./anthropicClient");
+const { TOOL_DEFINITIONS, executeTool } = require("./tools");
+
+const MAX_TOOL_ITERATIONS = 6; // safety cap on the tool-use loop
 
 // Load the static system prompt once at module init (cached prefix on every call).
 const SYSTEM_PROMPT_PATH = path.join(__dirname, "..", "..", "prompts", "v4", "system_prompt.md");
@@ -82,15 +85,32 @@ function sanitizeMessages(messages) {
  * Generate the bot's reply to an inbound message. Talk-only.
  *
  * @param {object} args
- * @param {object} [args.contact] GHL contact (for context block)
+ * @param {object} [args.contact] GHL contact (for context block + tool ctx)
+ * @param {string} [args.contactId] GHL contact id (required for live tool execution)
+ * @param {object} [args.channelContext] channel info for message sending (passed to tool ctx)
+ * @param {string} [args.contactName] display name (passed to tool ctx)
  * @param {Array}  [args.history] prior turns (oldest→newest)
  * @param {string} args.latestMessageText the new inbound message
  * @param {string} [args.language] detected language hint ("en"|"es")
  * @param {boolean}[args.faqMode] post-deposit FAQ mode
+ * @param {boolean}[args.useTools] enable the tool-use loop (default true)
+ * @param {boolean}[args.dryRun] execute tools as no-op mocks (tests; no GHL/Square writes)
  * @param {string} [args.model] override model (defaults Haiku 4.5)
- * @returns {Promise<{replyText:string, bubbles:string[], model:string, usage:object, stopReason:string}>}
+ * @returns {Promise<{replyText:string, bubbles:string[], model:string, usage:object, stopReason:string, toolTrace:Array}>}
  */
-async function handleInboundMessage({ contact = {}, history = [], latestMessageText, language, faqMode = false, model = MODELS.HAIKU } = {}) {
+async function handleInboundMessage({
+  contact = {},
+  contactId,
+  channelContext,
+  contactName,
+  history = [],
+  latestMessageText,
+  language,
+  faqMode = false,
+  useTools = true,
+  dryRun = false,
+  model = MODELS.HAIKU,
+} = {}) {
   if (!SYSTEM_PROMPT) throw new Error("v2 system prompt not loaded");
   if (!latestMessageText || !latestMessageText.trim()) {
     throw new Error("handleInboundMessage requires latestMessageText");
@@ -106,17 +126,62 @@ async function handleInboundMessage({ contact = {}, history = [], latestMessageT
   const system = [{ text: SYSTEM_PROMPT, cache: true }];
   if (contextBlock) system.push({ text: contextBlock });
 
-  const result = await generateReply({ system, messages, model });
+  const tools = useTools ? TOOL_DEFINITIONS : undefined;
+  const toolCtx = {
+    contactId,
+    contact,
+    channelContext,
+    contactName: contactName || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim() || null,
+    language,
+    dryRun,
+  };
 
-  // Split into bubbles on blank lines (the prompt allows up to ~2 short bubbles).
-  const bubbles = result.text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const toolTrace = [];
+  const usageTotals = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0 };
+  const addUsage = (u = {}) => {
+    usageTotals.input_tokens += u.input_tokens || 0;
+    usageTotals.output_tokens += u.output_tokens || 0;
+    usageTotals.cache_read_input_tokens += u.cache_read_input_tokens || 0;
+    usageTotals.cache_creation_input_tokens += u.cache_creation_input_tokens || 0;
+  };
+
+  let result;
+  // Tool-use loop: keep going while the model asks to call tools.
+  for (let i = 0; i < MAX_TOOL_ITERATIONS; i++) {
+    result = await generateReply({ system, messages, tools, model });
+    addUsage(result.usage);
+
+    if (result.stopReason !== "tool_use" || !result.toolUses.length) break;
+
+    // Append the assistant's tool-use turn verbatim, then the tool results.
+    messages.push({ role: "assistant", content: result.content });
+    const toolResults = [];
+    for (const call of result.toolUses) {
+      const out = await executeTool(call.name, call.input || {}, toolCtx);
+      toolTrace.push({ name: call.name, input: call.input, output: out });
+      toolResults.push({
+        type: "tool_result",
+        tool_use_id: call.id,
+        content: JSON.stringify(out),
+      });
+    }
+    messages.push({ role: "user", content: toolResults });
+
+    if (i === MAX_TOOL_ITERATIONS - 1) {
+      console.warn(`⚠️ [v2 controller] hit MAX_TOOL_ITERATIONS for contact ${contactId}`);
+    }
+  }
+
+  const text = result?.text || "";
+  const bubbles = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
 
   return {
-    replyText: result.text,
-    bubbles: bubbles.length ? bubbles : [result.text],
-    model: result.model,
-    usage: result.usage,
-    stopReason: result.stopReason,
+    replyText: text,
+    bubbles: bubbles.length ? bubbles : (text ? [text] : []),
+    model: result?.model || model,
+    usage: usageTotals,
+    stopReason: result?.stopReason || null,
+    toolTrace,
   };
 }
 

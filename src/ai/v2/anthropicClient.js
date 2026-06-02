@@ -67,33 +67,45 @@ function buildCachedSystem(system) {
  * @param {object} args
  * @param {string|Array} args.system system prompt (string or text blocks); cached
  * @param {Array<{role:"user"|"assistant", content:string|Array}>} args.messages turn history
+ * @param {Array} [args.tools] Anthropic tool definitions ({name, description, input_schema}); the last gets cached
  * @param {string} [args.model] model id (defaults to Haiku 4.5)
  * @param {number} [args.maxTokens]
  * @param {number} [args.temperature]
- * @returns {Promise<{text:string, usage:object, model:string, stopReason:string, raw:object}>}
+ * @returns {Promise<{text:string, content:Array, toolUses:Array, usage:object, model:string, stopReason:string, raw:object}>}
  */
-async function generateReply({ system, messages, model = MODELS.HAIKU, maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7 } = {}) {
+async function generateReply({ system, messages, tools, model = MODELS.HAIKU, maxTokens = DEFAULT_MAX_TOKENS, temperature = 0.7 } = {}) {
   if (!Array.isArray(messages) || messages.length === 0) {
     throw new Error("generateReply requires a non-empty messages array");
   }
   const client = getClient();
-  const resp = await client.messages.create({
+  const req = {
     model,
     max_tokens: maxTokens,
     temperature,
     system: buildCachedSystem(system),
     messages,
-  });
+  };
+  if (Array.isArray(tools) && tools.length) {
+    // Cache the tool definitions too — they're static across a conversation.
+    req.tools = tools.map((t, i) =>
+      i === tools.length - 1 ? { ...t, cache_control: { type: "ephemeral" } } : t
+    );
+  }
+  const resp = await client.messages.create(req);
 
-  // Concatenate text blocks from the response.
-  const text = (resp.content || [])
+  const content = resp.content || [];
+  // Concatenate text blocks; collect tool_use blocks.
+  const text = content
     .filter((b) => b.type === "text")
     .map((b) => b.text)
     .join("")
     .trim();
+  const toolUses = content.filter((b) => b.type === "tool_use");
 
   return {
     text,
+    content,
+    toolUses,
     usage: resp.usage || {},
     model: resp.model || model,
     stopReason: resp.stop_reason || null,
