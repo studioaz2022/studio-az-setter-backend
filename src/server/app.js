@@ -6304,6 +6304,22 @@ function createApp() {
     }
   });
 
+  // POST /api/ai-setter/followup-sweep (Phase 4 cron target)
+  // Sends any due touch-back follow-ups. Internal-key gated; meant to be hit by a Render cron
+  // (mirror fill-nudge-sweep, hourly). No-ops cleanly when nothing is due.
+  app.post("/api/ai-setter/followup-sweep", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { processDueFollowups } = require("../ai/v2/followupScheduler");
+      const result = await processDueFollowups({});
+      console.log(`📨 [followup-sweep] processed=${result.processed} sent=${result.sent} failed=${result.failed}`);
+      return res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("❌ [followup-sweep] error:", err.message || err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // POST /api/tattoo/fill-token
   // Internal-only re-issue / back-fill. Useful for migrating existing leads or
   // manually generating a link from iOS. Body: { contactId, artistSlug, language?, source?, expiryDays? }
