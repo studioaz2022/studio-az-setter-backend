@@ -103,16 +103,20 @@ async function createDepositLinkForContact({
   if (typeof amountCents !== "number" || !amountCents) {
     throw new Error("amountCents (number) is required");
   }
+  if (paymentType !== "deposit" && paymentType !== "consult") {
+    throw new Error('paymentType must be "deposit" or "consult"');
+  }
   if (!SQUARE_LOCATION_ID) {
     throw new Error("SQUARE_LOCATION_ID is not set");
   }
 
-  // Determine title and description based on amount + language
+  // Title + description come from the artist's stated intent, NOT the amount —
+  // a $50 link is genuinely ambiguous between small-tattoo deposit and consult fee.
   const lang = language === "es" ? "es" : "en";
   const strings = DESCRIPTIONS[lang];
 
-  const title = amountCents <= 5000 ? strings.consultTitle : strings.depositTitle;
-  const richDescription = amountCents <= 5000 ? strings.consult : strings.deposit;
+  const title = paymentType === "consult" ? strings.consultTitle : strings.depositTitle;
+  const richDescription = paymentType === "consult" ? strings.consult : strings.deposit;
 
   if (!COMPACT_MODE) {
     console.log("[Square] Creating checkout session:", {
@@ -338,6 +342,116 @@ async function processCheckoutPayment(sessionId, sourceId, buyerEmail) {
 }
 
 /**
+ * Refund (all or part of) a previously-completed Square payment.
+ *
+ * Used by the Refund Request Form flow (REFUND_REQUEST_FORM_PLAN.md §6.3).
+ * The caller supplies the idempotency key — Square caps it at 45 chars; if you
+ * pass a longer string we truncate so a 48-char token can be passed verbatim
+ * (`tokenTo45 = token.slice(0, 45)` would also work, but doing it here keeps
+ * callers honest).
+ *
+ * Returns `{ refundId, status, amountCents }` on success. Square's status is
+ * usually `PENDING` for card refunds (settles async) and `COMPLETED` for cash
+ * sandbox refunds — treat both as success on the synchronous submit path. A
+ * later `refund.updated` webhook flips PENDING → COMPLETED if subscribed.
+ *
+ * Throws on non-2xx or status `FAILED`. The caller decides whether to mark the
+ * refund_requests row `refund_status='failed'` and escalate (§6.5).
+ *
+ * @param {object} params
+ * @param {string} params.paymentId        - Original Square payment ID being refunded.
+ * @param {number} params.amountCents      - Amount to refund (integer cents).
+ * @param {string} params.idempotencyKey   - Caller-controlled key (≤45 chars).
+ * @param {string} [params.currency]       - Defaults to "USD".
+ * @param {string} [params.reason]         - Free-text reason shown in Square dashboard.
+ */
+async function refundPayment({
+  paymentId,
+  amountCents,
+  idempotencyKey,
+  currency = "USD",
+  reason = "Deposit refund — client canceled",
+}) {
+  if (!paymentId) {
+    throw new Error("paymentId is required");
+  }
+  if (typeof amountCents !== "number" || amountCents <= 0) {
+    throw new Error("amountCents (positive number) is required");
+  }
+  if (!idempotencyKey || typeof idempotencyKey !== "string") {
+    throw new Error("idempotencyKey is required");
+  }
+
+  // Square hard-caps idempotency keys at 45 characters. Truncate rather than
+  // reject so callers can pass our 48-char request token verbatim.
+  const key = idempotencyKey.length > 45 ? idempotencyKey.slice(0, 45) : idempotencyKey;
+
+  try {
+    const response = await axios.post(
+      `${SQUARE_BASE_URL}/v2/refunds`,
+      {
+        idempotency_key: key,
+        payment_id: paymentId,
+        amount_money: { amount: amountCents, currency },
+        reason,
+      },
+      {
+        headers: {
+          Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const refund = response.data?.refund;
+    if (!refund) {
+      throw new Error("Refund response missing refund object");
+    }
+
+    // Square returns PENDING (card) or COMPLETED (cash sandbox). Anything else
+    // — FAILED, REJECTED — is a real failure the caller must handle.
+    const status = refund.status;
+    if (status !== "PENDING" && status !== "COMPLETED") {
+      throw new Error(`Refund status: ${status}`);
+    }
+
+    if (COMPACT_MODE) {
+      console.log(
+        `💳 SQUARE REFUND: refund=${shortId(refund.id)} payment=${shortId(paymentId)} $${amountCents / 100} ${status}`
+      );
+    } else {
+      console.log("[Square] Refund created:", {
+        refundId: refund.id,
+        paymentId,
+        amount: amountCents / 100,
+        status,
+      });
+    }
+
+    return {
+      refundId: refund.id,
+      status,
+      amountCents: refund.amount_money?.amount ?? amountCents,
+    };
+  } catch (err) {
+    // Square returns structured errors in response.data.errors[]. Log them
+    // verbosely so a manual-review escalation has something to act on.
+    if (err.response) {
+      console.error(
+        "[Square] HTTP error issuing refund:",
+        err.response.status,
+        JSON.stringify(err.response.data, null, 2)
+      );
+      const details = err.response.data?.errors?.[0];
+      const code = details?.code || "UNKNOWN";
+      const detail = details?.detail || err.message;
+      throw new Error(`Square refund failed (${code}): ${detail}`);
+    }
+    throw err;
+  }
+}
+
+/**
  * Given an orderId from a webhook, fetch the order and return the contactId
  * from reference_id.
  */
@@ -390,5 +504,6 @@ module.exports = {
   createDepositLinkForContact,
   getCheckoutSession,
   processCheckoutPayment,
+  refundPayment,
   getContactIdFromOrder,
 };

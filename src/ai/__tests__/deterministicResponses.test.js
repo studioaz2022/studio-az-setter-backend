@@ -99,7 +99,7 @@ describe("buildDeterministicResponse", () => {
       })
     );
     expect(createDepositLinkForContact).toHaveBeenCalledWith(
-      expect.objectContaining({ contactId: "contact123" })
+      expect.objectContaining({ contactId: "contact123", paymentType: "deposit" })
     );
     expect(updateSystemFields).toHaveBeenCalledWith(
       "contact123",

@@ -127,6 +127,7 @@ async function handlePathChoice({
         const deposit = await createDepositLinkForContact({
           contactId,
           amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+          paymentType: "deposit",
           description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
           language: isSpanish ? "es" : "en",
         });

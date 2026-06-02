@@ -483,6 +483,7 @@ async function buildDeterministicResponse({
       const deposit = await createDepositLinkForContact({
         contactId,
         amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+        paymentType: "deposit",
         description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
         language: isSpanish ? "es" : "en",
       });
@@ -619,6 +620,7 @@ async function buildDeterministicResponse({
           const deposit = await createDepositLinkForContact({
             contactId,
             amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+            paymentType: "deposit",
             description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
           });
           depositPart = `The $${amount} deposit locks in your spot and is fully refundable if you don't love the design — it goes toward your tattoo total.\n\nHere's the link: ${deposit?.url}`;
@@ -721,6 +723,7 @@ async function buildDeterministicResponse({
       const deposit = await createDepositLinkForContact({
         contactId,
         amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+        paymentType: "deposit",
         description: DEPOSIT_CONFIG.DEFAULT_DESCRIPTION,
       });
 

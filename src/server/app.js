@@ -5758,7 +5758,7 @@ function createApp() {
   // POST /api/generate-payment-link - Generate a Square payment link for a contact
   app.post("/api/generate-payment-link", async (req, res) => {
     try {
-      const { contactId, amountCents, description, artistId, artistName, contactName, language } = req.body;
+      const { contactId, amountCents, paymentType, description, artistId, artistName, contactName, language } = req.body;
 
       if (!contactId) {
         return res.status(400).json({
@@ -5774,11 +5774,21 @@ function createApp() {
         });
       }
 
-      console.log(`[API] Generating payment link for contact ${contactId} — $${amountCents / 100}${artistName ? ` (artist: ${artistName})` : ''}`);
+      // paymentType is the explicit deposit-vs-consult intent. Required for refund
+      // disambiguation — historical rows that lacked it can't be safely refunded.
+      if (paymentType !== "deposit" && paymentType !== "consult") {
+        return res.status(400).json({
+          success: false,
+          error: 'Missing or invalid required field: paymentType (must be "deposit" or "consult")',
+        });
+      }
+
+      console.log(`[API] Generating payment link for contact ${contactId} — $${amountCents / 100} [${paymentType}]${artistName ? ` (artist: ${artistName})` : ''}`);
 
       const paymentLink = await createDepositLinkForContact({
         contactId,
         amountCents,
+        paymentType,
         description: description || "Studio AZ Tattoo Payment",
         artistId: artistId || null,
         artistName: artistName || null,
