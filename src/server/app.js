@@ -499,6 +499,8 @@ function createApp() {
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
         'https://consent.studioaztattoo.com', // Consent form web app
+        'https://refund.studioaztattoo.com', // Refund request form (Phase 6)
+        'http://localhost:3003', // Refund form dev (Phase 6)
         'https://pay.studioaztattoo.com', // Short links (Stripe financing)
         'https://checkout.studioaztattoo.com', // Custom checkout page (Square deposits)
         'https://checkout-chi-nine.vercel.app', // Checkout page (Vercel dev)
@@ -521,6 +523,10 @@ function createApp() {
       } else if (/^https:\/\/front-desk-[a-z0-9-]+\.vercel\.app$/.test(origin) ||
                  /^https:\/\/front-desk-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
         // Front-desk dashboard production + preview/branch deploys (Vercel)
+        callback(null, true);
+      } else if (/^https:\/\/refund-form-[a-z0-9-]+\.vercel\.app$/.test(origin) ||
+                 /^https:\/\/refund-form-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
+        // Refund form preview/branch deploys (Vercel)
         callback(null, true);
       } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
         // Allow any private/local network IP (kiosk, local dev)
@@ -5812,6 +5818,97 @@ function createApp() {
         success: false,
         error: error.message || "Failed to generate payment link",
       });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // REFUND REQUEST FORM (Phase 3 lifecycle — money + Lost still STUBBED here,
+  // wired in Phase 5). See REFUND_REQUEST_FORM_PLAN.md §6.2 for the contract.
+  // ═══════════════════════════════════════════════════════════════════════════
+  const {
+    createRefundRequest,
+    getRefundRequestByToken,
+    submitRefundRequest,
+  } = require("../refundRequest/refundRequestService");
+
+  // POST /api/refund-request/send — Internal: mint token + SMS to client.
+  // Called by iOS ("Send refund link") and the AI setter on explicit cancel.
+  // Gated by x-internal-key, same pattern as /api/tattoo/fill-token.
+  app.post("/api/refund-request/send", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { contactId } = req.body || {};
+      if (!contactId) {
+        return res
+          .status(400)
+          .json({ success: false, error: "contactId is required" });
+      }
+
+      const result = await createRefundRequest(contactId);
+
+      if (!result.success) {
+        return res.status(400).json(result);
+      }
+
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/refund-request/send error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // GET /api/refund-request/:token — Public prefill for the web form.
+  // Never exposes the raw drop_off_stage — only the boolean showConsultQuality.
+  app.get("/api/refund-request/:token", async (req, res) => {
+    try {
+      const result = await getRefundRequestByToken(req.params.token);
+      if (!result.success) {
+        const status =
+          result.error === "expired" || result.error === "already_submitted"
+            ? 410
+            : result.error === "not_found"
+            ? 404
+            : 500;
+        return res.status(status).json(result);
+      }
+      res.json(result);
+    } catch (err) {
+      console.error("❌ GET /api/refund-request/:token error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // POST /api/refund-request/:token/submit — Public submit.
+  // Phase 3: persist answers only. Phase 5 wires the actual refund + Lost.
+  app.post("/api/refund-request/:token/submit", async (req, res) => {
+    try {
+      const requestMeta = {
+        ip:
+          req.headers["x-forwarded-for"]?.split(",")[0]?.trim() ||
+          req.socket?.remoteAddress ||
+          null,
+        userAgent: req.headers["user-agent"] || null,
+      };
+
+      const result = await submitRefundRequest(
+        req.params.token,
+        req.body || {},
+        requestMeta
+      );
+
+      if (!result.success) {
+        const status = result.httpStatus || 400;
+        // Strip our internal httpStatus from the response body.
+        const { httpStatus, ...body } = result;
+        return res.status(status).json(body);
+      }
+
+      // Strip httpStatus if present (it won't be on success).
+      const { httpStatus, ...body } = result;
+      res.json(body);
+    } catch (err) {
+      console.error("❌ POST /api/refund-request/:token/submit error:", err);
+      res.status(500).json({ success: false, error: err.message });
     }
   });
 
