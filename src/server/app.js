@@ -1358,6 +1358,14 @@ function createApp() {
         const translatorNeeded = cf.translator_needed === true || cf.translator_needed === "true" || cf.translator_needed === "Yes";
         const isMessageConsult = consultationType === "message";
 
+        // Gate the customer-facing deposit confirmation to EXACTLY ONCE per payment.
+        // Set true only when THIS webhook invocation is the one that newly records the
+        // payment (i.e. wins the financial-table unique constraint). Square retries the
+        // webhook aggressively; without this, every retry re-sent "Got your deposit…",
+        // spamming the lead. Tying it to the unique insert dedups both sequential AND
+        // concurrent retries.
+        let depositConfirmationShouldSend = false;
+
         // === FINANCIAL TRACKING: Record deposit payment ===
         try {
           let alreadyProcessed = false;
@@ -1381,6 +1389,7 @@ function createApp() {
             }
             try {
               await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
+              depositConfirmationShouldSend = true; // we are the one true recorder → safe to confirm
               if (!COMPACT_MODE) {
                 console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
               }
@@ -1537,7 +1546,11 @@ function createApp() {
         }
 
         // === SEND DEPOSIT CONFIRMATION MESSAGE ===
-        try {
+        // Only when THIS invocation newly recorded the payment — prevents Square webhook
+        // retries from re-sending the confirmation (the bug that spammed "Got your deposit…").
+        if (!depositConfirmationShouldSend) {
+          console.log(`⏭️ [DEPOSIT] Confirmation already sent for this payment (retry/duplicate) — skipping send for ${contactId}`);
+        } else try {
           // Build channel context from contact for message sending
           // Use the same logic as deriveChannelContext to ensure consistency
           const whatsappUser = cf.whatsapp_user || cf.whatsappUser || cf.FnYDobmYqnXDxlLJY5oe || "";

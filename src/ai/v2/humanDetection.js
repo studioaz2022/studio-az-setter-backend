@@ -20,13 +20,21 @@ const AI_BOT_USER_ID = "3dsbsgZpCWrDYCFPvhKu";
 const DECAY_HOURS = 24;
 const DECAY_MS = DECAY_HOURS * 3600 * 1000;
 
-/** Is this message an outbound sent by a real human (not the bot/automation)? */
+/** Is this message an outbound sent by a real human (not the bot/automation)?
+ *
+ * CRITICAL ordering: the bot sends via the GHL conversations app, so its OWN messages are
+ * tagged `source: "app"` too — identical to a human texting from the GHL app. The ONLY reliable
+ * discriminator is the userId: the bot's messages carry AI_BOT_USER_ID. So we must reject the
+ * bot's userId FIRST, before the source check, or the bot would treat its own replies as "a
+ * human is in the thread" and silence itself. (Confirmed against real GHL message data.)
+ */
 function isHumanMessage(m) {
   if (!m || m.direction !== "outbound") return false;
+  if (m.userId && m.userId === AI_BOT_USER_ID) return false; // the bot itself — never human
   const source = (m.source || "").toLowerCase();
-  if (source === "app") return true;
-  if (source === "workflow" || source === "api") return false;
-  if (m.userId && m.userId !== AI_BOT_USER_ID) return true;
+  if (source === "workflow" || source === "api") return false; // other automation
+  if (source === "app") return true; // sent from the GHL app by a (non-bot) human
+  if (m.userId) return true; // outbound under some other (non-bot) user id
   return false;
 }
 

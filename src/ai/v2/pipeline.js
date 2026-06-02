@@ -62,6 +62,14 @@ async function runV2Inbound({ payload, contact = {}, contactId, contactName, mes
     const loc = checkLocation(payload);
     if (!loc.isTattoo) return { action: "exit_location", reason: loc.reason };
 
+    // 1b. Manual pause takes precedence over everything. Check it BEFORE the back-off so a
+    // human reply in a manually-paused thread can't downgrade paused_manual → paused_human
+    // (which would auto-resume after 24h). paused_manual stays off until explicitly resumed.
+    const currentStatus = cf[SYSTEM_FIELDS.FUNNEL_STATUS];
+    if (currentStatus === FUNNEL_STATUSES.PAUSED_MANUAL) {
+      return { action: "silent", reason: "paused_manual (manual hold — no auto-resume)" };
+    }
+
     // 2. Human back-off (Signals A/B/C).
     const backoff = evaluateBackoff({ messages: rawMessages });
     if (backoff.decision === "stay_silent") {

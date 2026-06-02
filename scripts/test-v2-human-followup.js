@@ -11,6 +11,7 @@ require("dotenv").config({ override: true, quiet: true });
 const hd = require("../src/ai/v2/humanDetection");
 const { smartResumeCheck } = require("../src/ai/v2/resumeNotifier");
 const fu = require("../src/ai/v2/followupScheduler");
+const { supabase } = require("../src/clients/supabaseClient");
 
 const HOUR = 3600000, DAY = 24 * HOUR;
 const iso = (msAgo, now) => new Date(now - msAgo).toISOString();
@@ -30,6 +31,11 @@ function check(name, cond) { total++; if (cond) { pass++; console.log(`  ✅ ${n
   check("source:app outbound → human", hd.analyzeThread([botMsg, humanApp]).humanInThread);
   check("outbound w/ non-bot userId → human", hd.analyzeThread([humanUserId]).humanInThread);
   check("bot userId outbound → NOT human", !hd.isHumanMessage({ direction: "outbound", userId: hd.AI_BOT_USER_ID }));
+  // Regression (real GHL data): the bot sends with source "app" AND its own userId — must NOT
+  // be seen as a human, or the bot silences itself after its own messages.
+  check("bot msg source:app + bot userId → NOT human", !hd.isHumanMessage({ direction: "outbound", source: "app", userId: hd.AI_BOT_USER_ID }));
+  check("staff msg source:app + other userId → human", hd.isHumanMessage({ direction: "outbound", source: "app", userId: "Wl24x1ZrucHuHatM0ODD" }));
+  check("workflow automation → NOT human", !hd.isHumanMessage({ direction: "outbound", source: "workflow", userId: "Wl24x1ZrucHuHatM0ODD" }));
 
   console.log("\n── Signal B: 24h decay window ──");
   const d1 = hd.evaluateDecay({ lastActivityAt: iso(1 * HOUR, NOW), now: NOW });
@@ -44,14 +50,15 @@ function check(name, cond) { total++; if (cond) { pass++; console.log(`  ✅ ${n
   check("both silent 25h → check_resume", expired.decision === "check_resume");
   check("no human in thread → proceed", hd.evaluateBackoff({ messages: [botMsg, leadMsg], now: NOW }).decision === "proceed");
 
-  console.log("\n── Followups: parseWhen + graceful no-op (table not yet applied) ──");
+  console.log("\n── Followups: parseWhen + live persistence (table applied 2026-06-02) ──");
   const w = fu.parseWhen("2 days", NOW);
   check("parseWhen('2 days') ≈ +2d", Math.abs(w.getTime() - (NOW + 2 * DAY)) < 1000);
   check("parseWhen('1 week') ≈ +7d", Math.abs(fu.parseWhen("1 week", NOW).getTime() - (NOW + 7 * DAY)) < 1000);
-  const sched = await fu.scheduleFollowup({ contactId: "TEST", when: "2 days", message: "hey still thinking about that forearm piece?" });
-  check("scheduleFollowup graceful when table absent (no throw)", sched && sched.ok === false);
+  const sched = await fu.scheduleFollowup({ contactId: "TEST_HF", when: "2 days", message: "[TEST_HF] still thinking about that forearm piece?" });
+  check("scheduleFollowup persists to live table", sched && sched.ok === true && !!sched.id);
   const swept = await fu.processDueFollowups({ now: NOW, send: async () => {} });
-  check("processDueFollowups graceful when table absent", swept && swept.processed === 0);
+  check("processDueFollowups runs (future row not due → 0)", swept && swept.processed === 0);
+  if (supabase) await supabase.from("scheduled_followups").delete().eq("contact_id", "TEST_HF"); // cleanup
 
   console.log("\n── Signal C: smart resume check (live Haiku) ──");
   const openThread = [
