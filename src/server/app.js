@@ -5912,6 +5912,153 @@ function createApp() {
     }
   });
 
+  // POST /api/contacts/:contactId/refund — Owner-only manual refund path
+  // (REFUND_REQUEST_FORM_PLAN.md §12.4). Used by the rent-tracker Ledger
+  // Plate to settle a multi/missing-deposit escalation by hand.
+  //
+  // Auth: requireOwnerKey (x-owner-key, same as /api/reconciliations/.../settle).
+  // Body: { paymentId, amountCents?, refundType }
+  //   - paymentId: REQUIRED. The Square payment id of the deposit to reverse.
+  //   - amountCents: OPTIONAL. Defaults to the full deposit amount (looked up
+  //     from the original transactions row).
+  //   - refundType: REQUIRED. 'deposit_refunded' | 'partial_refund' | 'no_refund'.
+  //     'no_refund' is supported for the bookkeeping-only path (e.g. owner
+  //     decides not to refund and just wants to mark the contact Lost).
+  //
+  // Returns { success, refundId?, refundStatus, ledgerRowId? } plus the
+  // raw refund response from Square (when issued).
+  app.post("/api/contacts/:contactId/refund", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { contactId } = req.params;
+      const { paymentId, amountCents, refundType, reason } = req.body || {};
+
+      if (!contactId) {
+        return res
+          .status(400)
+          .json({ success: false, error: "contactId is required" });
+      }
+      if (!paymentId && refundType !== "no_refund") {
+        return res.status(400).json({
+          success: false,
+          error: "paymentId is required (or supply refundType='no_refund' for bookkeeping-only)",
+        });
+      }
+      if (!["deposit_refunded", "partial_refund", "no_refund"].includes(refundType)) {
+        return res.status(400).json({
+          success: false,
+          error: "refundType must be one of: deposit_refunded, partial_refund, no_refund",
+        });
+      }
+
+      const {
+        lookupOriginalDepositTxn,
+        postRefundLedgerRow,
+        mirrorRefundToInstantDb,
+        notifyRefundManualReview,
+      } = require("../refundRequest/refundRequestService");
+      const { refundPayment } = require("../payments/squareClient");
+      const { transitionToStage } = require("../ai/opportunityManager");
+      const { OPPORTUNITY_STAGES } = require("../config/constants");
+
+      let refundId = null;
+      let ledgerRow = null;
+      let appliedAmountCents = null;
+
+      // Bookkeeping-only path — skip Square, skip ledger, just write
+      // refund_type onto the Lost transition so the §6.6 analytics roll up.
+      if (refundType !== "no_refund") {
+        const originalTxn = await lookupOriginalDepositTxn(paymentId);
+        if (!originalTxn) {
+          return res.status(404).json({
+            success: false,
+            error: `No deposit transaction found for square_payment_id ${paymentId}`,
+          });
+        }
+
+        // Default the amount to the full original deposit.
+        appliedAmountCents =
+          typeof amountCents === "number" && amountCents > 0
+            ? amountCents
+            : Math.round(Number(originalTxn.gross_amount) * 100);
+
+        // Idempotency key: deterministic per (paymentId, amountCents) so a
+        // retry doesn't double-refund (Square caps at 45 chars).
+        const idempotencyKey = `owner-${paymentId.slice(-20)}-${appliedAmountCents}`.slice(0, 45);
+
+        try {
+          const refund = await refundPayment({
+            paymentId,
+            amountCents: appliedAmountCents,
+            idempotencyKey,
+            currency: "USD",
+            reason: reason || "Owner manual refund",
+          });
+          refundId = refund.refundId;
+        } catch (squareErr) {
+          // The owner needs to know immediately if Square rejected the refund.
+          return res.status(502).json({
+            success: false,
+            error: `Square refund failed: ${squareErr.message}`,
+          });
+        }
+
+        ledgerRow = await postRefundLedgerRow({
+          refundedTxn: originalTxn,
+          contactName: null,
+          squareRefundId: refundId,
+          refundAmountCents: appliedAmountCents,
+        });
+
+        await mirrorRefundToInstantDb({
+          refundedTxn: originalTxn,
+          refundAmountCents: appliedAmountCents,
+          squareRefundId: refundId,
+        });
+      }
+
+      // Move opportunity to Lost (Phase 4 idempotency guard handles the
+      // already-LOST case where last_stage_before_lost is preserved).
+      try {
+        await transitionToStage(contactId, OPPORTUNITY_STAGES.COLD_NURTURE_LOST, {
+          allowRegression: true,
+          refundType,
+          // The owner endpoint doesn't have a drop_off_stage to map; let
+          // Phase 4's auto-derive run from the contact's current stage.
+        });
+      } catch (lostErr) {
+        // Non-fatal — money already moved (or wasn't needed for no_refund).
+        console.error(
+          `[OwnerRefund] Lost transition failed for ${contactId}: ${lostErr.message}`
+        );
+      }
+
+      // Best-effort notification so the owner sees confirmation in iOS.
+      try {
+        await notifyRefundManualReview({
+          contactId,
+          contactName: null,
+          reason: `Manual refund completed (${refundType})`,
+        });
+      } catch (notifyErr) {
+        console.warn(
+          `[OwnerRefund] manual-review notify failed: ${notifyErr.message}`
+        );
+      }
+
+      return res.json({
+        success: true,
+        refundId,
+        refundStatus: refundType === "no_refund" ? "skipped" : "refunded",
+        appliedAmountCents,
+        ledgerRowId: ledgerRow?.id || null,
+      });
+    } catch (err) {
+      console.error("❌ POST /api/contacts/:contactId/refund error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ═══════════════════════════════════════════════════════════════════════════
   // TATTOO ARTIST SOCIAL LANDING PAGE INQUIRY
   // ═══════════════════════════════════════════════════════════════════════════
