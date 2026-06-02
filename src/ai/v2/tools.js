@@ -323,6 +323,10 @@ const HANDLERS = {
   },
 
   async schedule_followup(input, ctx) {
+    // Follow-up feature is gated off until cadence/rules are reviewed (see AI_SETTER_REWRITE_PLAN).
+    if (process.env.AI_FOLLOWUPS_ENABLED !== "true") {
+      return { ok: false, error: "follow-ups are disabled", note: "AI_FOLLOWUPS_ENABLED is off" };
+    }
     if (!input.when || !input.message) return { ok: false, error: "when and message required" };
     const res = await scheduleFollowup({
       contactId: ctx.contactId,
@@ -383,4 +387,14 @@ async function executeTool(name, input = {}, ctx = {}) {
   }
 }
 
-module.exports = { TOOL_DEFINITIONS, executeTool, HANDLERS, ACTIVE_CONSULT_CALENDARS, LEAD_FIELD_MAP };
+/**
+ * Tool definitions the bot is actually offered, honoring feature flags.
+ * schedule_followup is excluded unless AI_FOLLOWUPS_ENABLED="true" (follow-up feature is
+ * deferred pending cadence/rules review — so the bot doesn't create dormant follow-up rows).
+ */
+function getActiveToolDefinitions() {
+  const followupsOn = process.env.AI_FOLLOWUPS_ENABLED === "true";
+  return TOOL_DEFINITIONS.filter((t) => followupsOn || t.name !== "schedule_followup");
+}
+
+module.exports = { TOOL_DEFINITIONS, getActiveToolDefinitions, executeTool, HANDLERS, ACTIVE_CONSULT_CALENDARS, LEAD_FIELD_MAP };

@@ -11,7 +11,7 @@
 const fs = require("fs");
 const path = require("path");
 const { generateReply, MODELS } = require("./anthropicClient");
-const { TOOL_DEFINITIONS, executeTool } = require("./tools");
+const { getActiveToolDefinitions, executeTool } = require("./tools");
 const { decideModel } = require("./escalation");
 const { recordObjectionEvent } = require("./objectionStore");
 
@@ -147,7 +147,7 @@ async function handleInboundMessage({
   else system[0].cache = true; // fall back to caching the system prompt alone
   if (contextBlock) system.push({ text: contextBlock });
 
-  const tools = useTools ? TOOL_DEFINITIONS : undefined;
+  const tools = useTools ? getActiveToolDefinitions() : undefined;
   const toolCtx = {
     contactId,
     contact,
