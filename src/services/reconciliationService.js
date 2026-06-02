@@ -71,9 +71,18 @@ function computeContactReconciliation({ quote, transactions, shopPercentage }) {
   let artistOwedFromTxCents = 0;
 
   for (const tx of transactions || []) {
-    const grossCents = dollarsToCents(tx.gross_amount);
-    const shopAmtCents = dollarsToCents(tx.shop_amount);
-    const artistAmtCents = dollarsToCents(tx.artist_amount);
+    // Refund rows store positive gross + transaction_type='refund' (the DB
+    // CHECK forbids negative gross_amount, so the *sign* of the contribution
+    // has to be applied here, not stored). Legacy rows with gross_amount<0
+    // and no 'refund' type are also caught by isRefundTransaction — both
+    // encodings net to the same number because we take |gross| then negate
+    // when isRefund. Without this, financial-summary over-counts a refunded
+    // deposit as still-collected (the bug §6.7 fix #2 calls out).
+    const isRefund = isRefundTransaction(tx);
+    const sign = isRefund ? -1 : 1;
+    const grossCents = sign * Math.abs(dollarsToCents(tx.gross_amount));
+    const shopAmtCents = sign * Math.abs(dollarsToCents(tx.shop_amount));
+    const artistAmtCents = sign * Math.abs(dollarsToCents(tx.artist_amount));
     const recipient = tx.payment_recipient;
 
     if (recipient === "shop") {

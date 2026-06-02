@@ -136,7 +136,10 @@ describe("computeContactReconciliation — core math", () => {
     expect(result.isFullyPaid).toBe(false);
   });
 
-  test("refund transaction reduces collected", () => {
+  test("refund transaction reduces collected — legacy encoding (negative gross_amount)", () => {
+    // Pre-Phase-2 refund rows that used negative gross_amount (the DB CHECK
+    // (gross_amount >= 0) is recent; older rows may still exist). Both this
+    // and the new positive-gross encoding must produce the same final number.
     const result = computeContactReconciliation({
       quote: 1000,
       shopPercentage: 30,
@@ -145,6 +148,90 @@ describe("computeContactReconciliation — core math", () => {
         tx({ gross: -100, recipient: "shop", type: "refund" }),
       ],
     });
+    expect(result.collected).toBe(400);
+  });
+
+  test("refund transaction reduces collected — production encoding (positive gross + type='refund')", () => {
+    // The shape the refund form actually writes (§6.7): gross_amount POSITIVE,
+    // transaction_type='refund', payment_recipient='shop' (same as the deposit
+    // it reverses). Before the Phase 2 fix this row was over-counted as
+    // additional shop collection — financial-summary disagreed with payment-history.
+    const result = computeContactReconciliation({
+      quote: 1000,
+      shopPercentage: 30,
+      transactions: [
+        tx({ gross: 500, recipient: "shop" }),
+        tx({ gross: 100, recipient: "shop", type: "refund" }),
+      ],
+    });
+    expect(result.collected).toBe(400);
+    expect(result.shopActualReceived).toBe(400);
+  });
+
+  test("refunded deposit drops netToArtist correctly (shop owes artist less)", () => {
+    // Quote $1000 @ 30/70. Shop took a $100 deposit, then refunded it.
+    // shopActual = 100 - 100 = 0, shopShouldReceive = 300. netToArtist = -300.
+    // (Shop is now short on what it owes itself; the artist isn't owed
+    // anything from a deposit the client got back.)
+    const result = computeContactReconciliation({
+      quote: 1000,
+      shopPercentage: 30,
+      transactions: [
+        tx({ gross: 100, recipient: "shop", type: "deposit" }),
+        tx({ gross: 100, recipient: "shop", type: "refund" }),
+      ],
+    });
+    expect(result.shopActualReceived).toBe(0);
+    expect(result.collected).toBe(0);
+    expect(result.outstanding).toBe(1000); // contract balance unchanged
+    expect(result.netToArtist).toBe(-300);
+  });
+
+  test("refund mid-project: partial collection then partial refund", () => {
+    // $1000 quote. Shop collected $500 then issued a $200 refund.
+    // Net shop collected = $300. Outstanding = $700.
+    const result = computeContactReconciliation({
+      quote: 1000,
+      shopPercentage: 30,
+      transactions: [
+        tx({ gross: 500, recipient: "shop" }),
+        tx({ gross: 200, recipient: "shop", type: "refund" }),
+      ],
+    });
+    expect(result.collected).toBe(300);
+    expect(result.outstanding).toBe(700);
+    expect(result.isFullyPaid).toBe(false);
+  });
+
+  test("refund without quote — fallback path also subtracts splits", () => {
+    // When quote is null, the engine falls back to summing per-tx splits.
+    // The refund must subtract from shopOwedFromTx too, not just gross.
+    const result = computeContactReconciliation({
+      quote: null,
+      shopPercentage: 30,
+      transactions: [
+        tx({ gross: 100, recipient: "shop", type: "deposit" }),
+        tx({ gross: 100, recipient: "shop", type: "refund" }),
+      ],
+    });
+    expect(result.collected).toBe(0);
+    expect(result.shopShouldReceive).toBe(0); // fallback sum: 30 - 30 = 0
+    expect(result.artistShouldReceive).toBe(0); // fallback sum: 70 - 70 = 0
+  });
+
+  test("manual artist_direct refund (cash returned by artist) subtracts from artistActual", () => {
+    // Edge case: owner manually refunds a cash payment the artist took.
+    // Plan §12.4 calls this out as the rare manual path.
+    const result = computeContactReconciliation({
+      quote: 1000,
+      shopPercentage: 30,
+      transactions: [
+        tx({ gross: 500, recipient: "artist_direct", method: "cash" }),
+        tx({ gross: 100, recipient: "artist_direct", method: "cash", type: "refund" }),
+      ],
+    });
+    expect(result.artistActualReceived).toBe(400);
+    expect(result.shopActualReceived).toBe(0);
     expect(result.collected).toBe(400);
   });
 
