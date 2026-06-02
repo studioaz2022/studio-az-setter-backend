@@ -424,6 +424,23 @@ async function updateContact(contactId, body) {
 }
 
 /**
+ * Append one or more tags to a contact. Uses the dedicated
+ * /contacts/{contactId}/tags endpoint (POST), which does NOT replace
+ * existing tags — only appends. Idempotent on GHL's side: re-adding an
+ * existing tag is a no-op. Used by the refund-form win-back flow (§6.4).
+ *
+ * Returns the SDK response; throws on hard errors so the caller can decide
+ * whether to fail loudly.
+ */
+async function addTagsToContact(contactId, tags = []) {
+  if (!contactId) throw new Error("contactId is required to add tags");
+  if (!Array.isArray(tags) || tags.length === 0) {
+    return { skipped: true, reason: "no tags supplied" };
+  }
+  return ghlSdk.contacts.addTags({ contactId }, { tags });
+}
+
+/**
  * Create a task on a contact using GHL v2 API
  */
 async function createTaskForContact(contactId, task = {}) {
@@ -1249,6 +1266,7 @@ module.exports = {
   getContactV2,
   createContact,
   updateContact,
+  addTagsToContact,
   lookupContactIdByEmailOrPhone,
   upsertContactFromWidget,
   updateSystemFields,

@@ -322,9 +322,18 @@ async function main() {
       },
       { ip: "1.2.3.4", userAgent: "smoke/1.0" }
     );
+    // Phase 5 note: the seeded row has a synthetic square_payment_id which
+    // doesn't exist in Square sandbox, so Square's refund call fails. The
+    // service falls into the manual-review branch (correct behavior — money
+    // didn't move). This is NOT a Phase 3 regression; the lifecycle still
+    // captures answers and CAS-flips to completed. To exercise the actual
+    // money path against sandbox, write a separate smoke test that seeds a
+    // real $1 Square sandbox payment, or rely on the Phase 5 unit suite.
     check(
-      "Submit valid → success + refundStatus='pending' (single deposit path)",
-      result.success === true && result.data.refundStatus === "pending"
+      "Submit valid → success + refundStatus is resolved (Phase 5 returns refunded OR manual_review)",
+      result.success === true &&
+        (result.data.refundStatus === "refunded" ||
+          result.data.refundStatus === "manual_review")
     );
 
     // Verify what landed in the DB.

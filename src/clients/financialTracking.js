@@ -58,6 +58,15 @@ async function recordTransaction({
   notes,
   tipAmount,
   servicePrice,
+  // §6.7 Phase 5 — Refund flow uses these to mirror the ORIGINAL deposit's
+  // split exactly, not the artist's current commission rate. Without this,
+  // a rate change between deposit and refund would leave a phantom owe/owed.
+  // All four must be supplied together; otherwise we fall back to the live
+  // commission lookup like every other transaction.
+  shopPercentageOverride,
+  artistPercentageOverride,
+  shopAmountOverride,
+  artistAmountOverride,
 }) {
   if (!supabase) {
     console.log('[Financial] Supabase not initialized, skipping transaction recording');
@@ -66,12 +75,38 @@ async function recordTransaction({
 
   console.log(`[Financial] Recording transaction: $${grossAmount} for ${contactName}`);
 
-  // Get commission rate
-  const commissionRate = await getArtistCommissionRate(artistId, locationId);
+  // Determine the split source. The overrides are an all-or-nothing bundle so
+  // we don't end up with a half-overridden row (e.g. correct amount but wrong
+  // percentage on file). If any one is supplied without the others, log and
+  // ignore the partial override.
+  const hasFullOverride =
+    typeof shopAmountOverride === "number" &&
+    typeof artistAmountOverride === "number" &&
+    typeof shopPercentageOverride === "number" &&
+    typeof artistPercentageOverride === "number";
+  if (!hasFullOverride && (shopAmountOverride != null || artistAmountOverride != null ||
+                            shopPercentageOverride != null || artistPercentageOverride != null)) {
+    console.warn(
+      "[Financial] Partial split override ignored — must supply all of " +
+      "{shopAmountOverride, artistAmountOverride, shopPercentageOverride, artistPercentageOverride} or none."
+    );
+  }
 
-  // Calculate amounts
-  const shopAmount = (grossAmount * commissionRate.shop_percentage) / 100;
-  const artistAmount = (grossAmount * commissionRate.artist_percentage) / 100;
+  let commissionRate;
+  let shopAmount;
+  let artistAmount;
+  if (hasFullOverride) {
+    commissionRate = {
+      shop_percentage: shopPercentageOverride,
+      artist_percentage: artistPercentageOverride,
+    };
+    shopAmount = shopAmountOverride;
+    artistAmount = artistAmountOverride;
+  } else {
+    commissionRate = await getArtistCommissionRate(artistId, locationId);
+    shopAmount = (grossAmount * commissionRate.shop_percentage) / 100;
+    artistAmount = (grossAmount * commissionRate.artist_percentage) / 100;
+  }
 
   // Determine settlement status based on who received payment
   let settlementStatus = 'pending';

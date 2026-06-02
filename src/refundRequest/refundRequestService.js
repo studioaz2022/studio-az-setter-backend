@@ -16,8 +16,14 @@ const { createClient } = require("@supabase/supabase-js");
 const {
   getContact,
   sendConversationMessage,
+  addTagsToContact,
 } = require("../clients/ghlClient");
 const { getOpportunitiesByContact } = require("../clients/ghlOpportunityClient");
+const { transitionToStage } = require("../ai/opportunityManager");
+const { OPPORTUNITY_STAGES, GHL_USER_IDS } = require("../config/constants");
+const { refundPayment } = require("../payments/squareClient");
+const { recordTransaction } = require("../clients/financialTracking");
+const { sendPushToGhlUser } = require("../services/taskNotifications");
 
 // ---- Module-local Supabase client ----
 //
@@ -620,16 +626,238 @@ async function getRefundRequestByToken(token) {
 }
 
 // =====================================================================
-//                       submitRefundRequest (Phase 3 stub)
+//                       Phase 5 helpers (money + CRM + notifications)
 // =====================================================================
 
 /**
- * Phase 3: persist the form answers ONLY. Money + Lost stay stubbed; Phase 5
- * wires them in. Returns success once the row is updated.
+ * Push an APNs alert to BOTH the owner (Lionel) and the admin (Maria) when a
+ * refund needs manual review (§6.5). Reasons we escalate:
+ *   - multi/missing deposit detected at /send time
+ *   - Square refund call failed
  *
- * Double-submit guard uses a compare-and-set update:
- *   UPDATE refund_requests SET status='completed', ... WHERE token=$1 AND status='pending'
- * If 0 rows changed, the token was already submitted/expired → 410.
+ * Failure-soft: a push delivery error must NEVER prevent the submit from
+ * succeeding — the money side already settled (or is on its way) and the
+ * user-facing form needs to terminate.
+ */
+async function notifyRefundManualReview({ contactId, contactName, reason }) {
+  const safeName = contactName || "Unknown client";
+  const recipients = [GHL_USER_IDS.LIONEL, GHL_USER_IDS.MARIA].filter(Boolean);
+  for (const ghlUserId of recipients) {
+    try {
+      await sendPushToGhlUser(ghlUserId, (language) => {
+        const isEs = language === "es";
+        return {
+          type: "refund_manual_review",
+          title: isEs ? "Reembolso requiere revisión" : "Refund needs review",
+          body: isEs
+            ? `${safeName}: ${reason}. Procesa el reembolso manualmente.`
+            : `${safeName}: ${reason}. Process this refund manually.`,
+          contactId,
+        };
+      });
+    } catch (err) {
+      console.warn(
+        `[refundRequest] manual-review push to ${ghlUserId} failed: ${err.message}`
+      );
+    }
+  }
+}
+
+/**
+ * Look up the original deposit's `transactions` row by its
+ * `square_payment_id`. We need it for two reasons:
+ *   1. So the refund row carries the EXACT split the deposit recorded — a
+ *      commission-rate change between deposit and refund would otherwise leave
+ *      `netToArtist` skewed (Phase 2 just sums whatever is on the rows).
+ *   2. So we can copy `artist_ghl_id` + `location_id` onto the refund row.
+ *
+ * Returns null if no row found — caller logs and skips the ledger mirror.
+ */
+async function lookupOriginalDepositTxn(squarePaymentId) {
+  if (!squarePaymentId) return null;
+  const { data, error } = await supabase
+    .from("transactions")
+    .select(
+      "id, contact_id, contact_name, artist_ghl_id, gross_amount, shop_amount, artist_amount, shop_percentage, artist_percentage, location_id, payment_method"
+    )
+    .eq("square_payment_id", squarePaymentId)
+    .is("superseded_by", null)
+    .is("deleted_at", null)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.warn(
+      `[refundRequest] original deposit lookup failed for ${squarePaymentId}: ${error.message}`
+    );
+    return null;
+  }
+  return data;
+}
+
+/**
+ * Post the refund as a NEW positive-gross `transaction_type:'refund'` row
+ * (§6.7). Mirrors the deposit's split exactly via the recordTransaction
+ * override path so the Phase 2 reconciliation engine nets correctly.
+ *
+ * Returns the inserted row or null on failure (failure does NOT roll back the
+ * Square refund — the money has already moved; the row can be backfilled
+ * later from the `refund.updated` webhook or by hand).
+ */
+async function postRefundLedgerRow({
+  refundedTxn,
+  contactName,
+  squareRefundId,
+  refundAmountCents,
+}) {
+  if (!refundedTxn) return null;
+  const grossAmountDollars = refundAmountCents / 100;
+  try {
+    return await recordTransaction({
+      contactId: refundedTxn.contact_id,
+      contactName: contactName || refundedTxn.contact_name || "Unknown",
+      artistId: refundedTxn.artist_ghl_id,
+      transactionType: "refund",
+      paymentMethod: "square",
+      paymentRecipient: "shop",
+      grossAmount: grossAmountDollars,
+      // §6.7 gotcha #3: refund row stores the Square REFUND id, NOT the
+      // original payment id. The (square_payment_id, location_id) unique
+      // index would collide otherwise.
+      squarePaymentId: squareRefundId,
+      locationId: refundedTxn.location_id,
+      sessionDate: new Date().toISOString(),
+      notes: `Refund ${squareRefundId} for deposit payment ${refundedTxn.id} — refund form`,
+      // §5.4 override bundle: mirror the deposit's split exactly so a
+      // commission-rate change between deposit and refund doesn't skew
+      // netToArtist.
+      shopPercentageOverride: Number(refundedTxn.shop_percentage),
+      artistPercentageOverride: Number(refundedTxn.artist_percentage),
+      shopAmountOverride: Number(refundedTxn.shop_amount),
+      artistAmountOverride: Number(refundedTxn.artist_amount),
+    });
+  } catch (err) {
+    console.error(
+      `[refundRequest] postRefundLedgerRow failed for refund ${squareRefundId}: ${err.message}`
+    );
+    return null;
+  }
+}
+
+/**
+ * Mirror the refund into InstantDB (rent-tracker) as a `refund` service-income
+ * row with **negative** amount so the tile aggregates net out (§6.7).
+ *
+ * The existing writeServiceIncome guards on Lionel — non-Lionel deposits are
+ * never mirrored in the first place, so the refund row likewise skips.
+ * Failure here is non-fatal; logged and ignored.
+ */
+async function mirrorRefundToInstantDb({
+  refundedTxn,
+  refundAmountCents,
+  squareRefundId,
+}) {
+  if (!refundedTxn) return { skipped: "no-original-txn" };
+  try {
+    const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
+    return await writeServiceIncome({
+      senderName: refundedTxn.contact_name || "Unknown",
+      // Negative so the tile aggregate (sum of amounts) nets out the original
+      // deposit row. The rent-tracker frontend will need Phase 7 rendering
+      // changes to show this nicely; for now the SUM is correct.
+      amount: -(refundAmountCents / 100),
+      method: "square",
+      type: "refund",
+      paidAt: new Date(),
+      notes: `Refund ${squareRefundId} for deposit payment ${refundedTxn.id}`,
+      // Use the Square REFUND id for dedup so a retry doesn't double-write.
+      squarePaymentId: squareRefundId,
+      // Heuristic: tattoo location. Phase 7 may need a broader mapping.
+      location: "tattoo",
+      barberGhlId: refundedTxn.artist_ghl_id,
+    });
+  } catch (err) {
+    console.warn(
+      `[refundRequest] InstantDB mirror failed for refund ${squareRefundId}: ${err.message}`
+    );
+    return { skipped: "error", error: err.message };
+  }
+}
+
+/**
+ * Move the opportunity to COLD_NURTURE_LOST with the §6.6 analytics fields,
+ * and seed the winback tag if the client opted in. Wrapped in independent
+ * try/catch blocks so a GHL hiccup on Lost-transition doesn't kill the
+ * winback tag write (or vice versa).
+ *
+ * Returns { lostMoved: bool, winbackTagged: bool } purely for logging.
+ */
+async function postLostTransitionAndWinback({
+  contactId,
+  refundRow,
+  reasonCode,
+  refundType,
+  winbackOptIn,
+  winbackEarliestMonth,
+}) {
+  let lostMoved = false;
+  let winbackTagged = false;
+
+  // Lost transition (§6.4 + §6.6).
+  try {
+    const result = await transitionToStage(
+      contactId,
+      OPPORTUNITY_STAGES.COLD_NURTURE_LOST,
+      {
+        allowRegression: true,
+        lastStageBeforeLostOverride: mapDropOffToLastStage(refundRow.drop_off_stage),
+        lostReason: mapReasonCodeToLostReason(reasonCode),
+        refundType,
+      }
+    );
+    lostMoved = !!result?.opportunityId;
+  } catch (err) {
+    console.error(
+      `[refundRequest] COLD_NURTURE_LOST transition failed for ${contactId}: ${err.message}`
+    );
+  }
+
+  // Win-back tag (§6.4). Only if the client opted in AND supplied a month.
+  if (winbackOptIn && winbackEarliestMonth) {
+    try {
+      await addTagsToContact(contactId, [`winback-${winbackEarliestMonth}`]);
+      winbackTagged = true;
+    } catch (err) {
+      console.warn(
+        `[refundRequest] winback tag failed for ${contactId}: ${err.message}`
+      );
+    }
+  }
+
+  return { lostMoved, winbackTagged };
+}
+
+// =====================================================================
+//                       submitRefundRequest (Phase 5)
+// =====================================================================
+
+/**
+ * Phase 5: persist answers, refund the deposit, mirror the ledger, move the
+ * opportunity to Lost, seed the win-back tag. Multi/missing deposit path
+ * skips the Square call and notifies the owner + admin instead.
+ *
+ * Failure isolation (carefully):
+ *   - Money side (Square refund + ledger row): mandatory; failure → refund_status=failed
+ *     + manual-review push. We still mark status='completed' (the form ran;
+ *     the user gets a real response) and the owner reconciles by hand.
+ *   - CRM side (Lost transition + winback tag + InstantDB mirror): best-effort;
+ *     wrapped in per-call try/catches inside the helpers. A GHL hiccup never
+ *     blocks the response.
+ *   - Double-submit guard: an initial CAS update sets status='completed' before
+ *     any side effects. A concurrent submit hits the CAS and returns 410.
+ *     Square's own idempotency-key dedup means even if the CAS race were lost,
+ *     the same token would produce the same refund (not two).
+ *
+ * Returns the form-facing payload: { refundStatus, showRefundPath, refundAmountCents }.
  */
 async function submitRefundRequest(token, answers, requestMeta = {}) {
   if (!token || typeof token !== "string") {
@@ -642,11 +870,11 @@ async function submitRefundRequest(token, answers, requestMeta = {}) {
     return { success: false, error: errors.join("; "), httpStatus: 400 };
   }
 
-  // 2. Read the row to derive analytics fields + idempotency check.
+  // 2. Read the row — we need contact_id + square_payment_id + multi flag.
   const { data: row, error: readErr } = await supabase
     .from("refund_requests")
     .select(
-      "id, status, drop_off_stage, refund_amount_cents, multi_or_missing_deposit, expires_at"
+      "id, status, contact_id, drop_off_stage, refund_amount_cents, multi_or_missing_deposit, expires_at, square_payment_id, currency"
     )
     .eq("token", token)
     .limit(1)
@@ -672,14 +900,12 @@ async function submitRefundRequest(token, answers, requestMeta = {}) {
   // 3. Build the analytics rollup fields (§6.6).
   const last_stage_before_lost = mapDropOffToLastStage(row.drop_off_stage);
   const lost_reason = mapReasonCodeToLostReason(answers.reason_code);
-  // refund_type is set in Phase 5 once the refund actually fires. For now
-  // we record the manual_review branch (which doesn't depend on the refund
-  // outcome) so the form's success copy stays accurate.
-  const refund_type = row.multi_or_missing_deposit ? null : null;
 
-  // 4. CAS update — only takes effect if status is still 'pending'.
+  // 4. CAS update #1 — claim the row by flipping status='completed' and storing
+  // answers. This is the double-submit guard. refund_status stays
+  // 'not_attempted' / 'manual_review' (from /send) until the money side resolves.
   const now = new Date().toISOString();
-  const { data: updated, error: updErr } = await supabase
+  const { data: claimed, error: claimErr } = await supabase
     .from("refund_requests")
     .update({
       reason_code: answers.reason_code,
@@ -690,7 +916,6 @@ async function submitRefundRequest(token, answers, requestMeta = {}) {
       winback_earliest_month: answers.winback_earliest_month || null,
       last_stage_before_lost,
       lost_reason,
-      refund_type,
       submitted_ip: requestMeta.ip || null,
       submitted_user_agent: requestMeta.userAgent || null,
       submitted_at: now,
@@ -701,31 +926,156 @@ async function submitRefundRequest(token, answers, requestMeta = {}) {
     .select()
     .maybeSingle();
 
-  if (updErr) {
-    console.error(`[refundRequest] submit update error: ${updErr.message}`);
+  if (claimErr) {
+    console.error(`[refundRequest] submit CAS error: ${claimErr.message}`);
     return { success: false, error: "internal", httpStatus: 500 };
   }
-  if (!updated) {
-    // CAS lost: token went from pending → completed/expired between read and
-    // update (concurrent submit, or the lazy-expire we missed). Re-read to
-    // give the caller a precise error.
+  if (!claimed) {
     return { success: false, error: "already_submitted", httpStatus: 410 };
   }
 
-  // Phase 5 will run here:
-  //   - If row.multi_or_missing_deposit → notifyRefundManualReview (no Square call).
-  //   - Else → refundPayment + insert refund ledger row.
-  //   - Either path → transitionToStage(COLD_NURTURE_LOST, { lostReason, refundType }).
-  //   - Either path → seed winback tag.
   console.log(
-    `[refundRequest] Submit received (Phase 3 stub) — token=${token.slice(0, 8)}… stage=${row.drop_off_stage} multi/missing=${row.multi_or_missing_deposit}`
+    `[refundRequest] Submit claimed — token=${token.slice(0, 8)}… stage=${row.drop_off_stage} multi/missing=${row.multi_or_missing_deposit}`
   );
+
+  // Resolve a display name once for downstream logging / pushes. Non-blocking.
+  let contactName = "Client";
+  try {
+    const contact = await getContact(row.contact_id);
+    contactName =
+      contact?.firstName ||
+      contact?.first_name ||
+      contact?.contactName ||
+      contactName;
+  } catch (_) {
+    /* non-fatal */
+  }
+
+  // ===================================================================
+  //   BRANCH A — multi/missing deposit → manual review (§6.5)
+  // ===================================================================
+  if (row.multi_or_missing_deposit) {
+    const reason = row.square_payment_id
+      ? "multiple paid deposits"
+      : "no deposit on file";
+
+    // Lost transition + winback FIRST so the analytics still fire even if the
+    // push delivery flakes.
+    await postLostTransitionAndWinback({
+      contactId: row.contact_id,
+      refundRow: row,
+      reasonCode: answers.reason_code,
+      // No refund_type until the owner settles by hand. Plan §6.6 says leave
+      // null on the manual-review path until settlement.
+      refundType: null,
+      winbackOptIn: answers.winback_opt_in,
+      winbackEarliestMonth: answers.winback_earliest_month,
+    });
+
+    // Notify owner + admin via APNs (§6.5).
+    await notifyRefundManualReview({
+      contactId: row.contact_id,
+      contactName,
+      reason,
+    });
+
+    return {
+      success: true,
+      data: {
+        refundStatus: "manual_review",
+        showRefundPath: false,
+        refundAmountCents: row.refund_amount_cents,
+      },
+    };
+  }
+
+  // ===================================================================
+  //   BRANCH B — single-deposit auto path
+  // ===================================================================
+
+  // Snapshot the original deposit txn FIRST so we have its commission split
+  // even if the Square call later succeeds and we crash mid-flight.
+  const originalTxn = await lookupOriginalDepositTxn(row.square_payment_id);
+  if (!originalTxn) {
+    // The deposit exists in checkout_sessions (Phase 3 confirmed it at /send)
+    // but its mirror ledger row is missing. This is an edge case — escalate.
+    console.error(
+      `[refundRequest] No ledger row for original deposit ${row.square_payment_id} (token=${token.slice(0, 8)}…)`
+    );
+  }
+
+  let squareRefundId = null;
+  let refundStatus = "failed";
+  let refundType = null;
+
+  try {
+    const refund = await refundPayment({
+      paymentId: row.square_payment_id,
+      amountCents: row.refund_amount_cents,
+      idempotencyKey: token, // helper truncates to 45 chars
+      currency: row.currency || "USD",
+      reason: `Refund form — ${answers.reason_code}`,
+    });
+    squareRefundId = refund.refundId;
+    refundStatus = "refunded"; // PENDING and COMPLETED both count as success
+    refundType = "deposit_refunded";
+  } catch (squareErr) {
+    console.error(
+      `[refundRequest] Square refund failed for ${row.square_payment_id}: ${squareErr.message}`
+    );
+    refundStatus = "failed";
+    // Notify owner + admin — they need to retry manually.
+    await notifyRefundManualReview({
+      contactId: row.contact_id,
+      contactName,
+      reason: `Square refund failed: ${squareErr.message}`,
+    });
+  }
+
+  // Money moved → mirror it. Failure here is logged; the row can be
+  // reconciled by the (optional) refund.updated webhook later.
+  if (refundStatus === "refunded" && squareRefundId && originalTxn) {
+    await postRefundLedgerRow({
+      refundedTxn: originalTxn,
+      contactName,
+      squareRefundId,
+      refundAmountCents: row.refund_amount_cents,
+    });
+    await mirrorRefundToInstantDb({
+      refundedTxn: originalTxn,
+      refundAmountCents: row.refund_amount_cents,
+      squareRefundId,
+    });
+  }
+
+  // Lost transition + winback tag — best-effort.
+  await postLostTransitionAndWinback({
+    contactId: row.contact_id,
+    refundRow: row,
+    reasonCode: answers.reason_code,
+    refundType,
+    winbackOptIn: answers.winback_opt_in,
+    winbackEarliestMonth: answers.winback_earliest_month,
+  });
+
+  // Final UPDATE — record the refund outcome onto the request row.
+  await supabase
+    .from("refund_requests")
+    .update({
+      refund_status: refundStatus,
+      refund_type: refundType,
+      square_refund_id: squareRefundId,
+    })
+    .eq("token", token);
 
   return {
     success: true,
     data: {
-      refundStatus: row.multi_or_missing_deposit ? "manual_review" : "pending",
-      showRefundPath: !row.multi_or_missing_deposit,
+      // refundStatus shape exposed to the form. PENDING and COMPLETED look the
+      // same to the user ("on its way"); failure shows a "we'll follow up"
+      // success page (never an error — money may or may not have moved).
+      refundStatus: refundStatus === "refunded" ? "refunded" : "manual_review",
+      showRefundPath: refundStatus === "refunded",
       refundAmountCents: row.refund_amount_cents,
     },
   };
@@ -831,6 +1181,12 @@ module.exports = {
   createRefundRequest,
   getRefundRequestByToken,
   submitRefundRequest,
+  // Phase 5 helpers — exported for direct tests + Phase 7 manual-refund reuse.
+  notifyRefundManualReview,
+  lookupOriginalDepositTxn,
+  postRefundLedgerRow,
+  mirrorRefundToInstantDb,
+  postLostTransitionAndWinback,
   // Exported for tests + Phase 5/6 reuse:
   validateSubmission,
   mapDropOffToLastStage,
