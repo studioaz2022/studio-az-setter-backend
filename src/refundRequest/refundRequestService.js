@@ -24,6 +24,7 @@ const { OPPORTUNITY_STAGES, GHL_USER_IDS } = require("../config/constants");
 const { refundPayment } = require("../payments/squareClient");
 const { recordTransaction } = require("../clients/financialTracking");
 const { sendPushToGhlUser } = require("../services/taskNotifications");
+const { createShortLink } = require("../payments/shortLinks");
 
 // ---- Module-local Supabase client ----
 //
@@ -507,10 +508,27 @@ async function createRefundRequest(contactId) {
   }
 
   // 6. Send SMS. Failure here should NOT roll back the row — staff can resend.
-  const url = `${REFUND_FORM_BASE_URL}/r/${token}`;
+  const longUrl = `${REFUND_FORM_BASE_URL}/r/${token}`;
+
+  // Shorten via the existing pay.studioaztattoo.com short-link table — but
+  // serve it under refund.studioaztattoo.com/s/<code> via a Vercel rewrite,
+  // so the host name the client sees matches the action ("refund").
+  // Non-fatal: if shortening fails for any reason, fall back to the long
+  // URL — the SMS still works, just longer. We never block the refund flow
+  // on cosmetic shortening.
+  let shareUrl = longUrl;
+  try {
+    const { code } = await createShortLink(longUrl, null);
+    shareUrl = `${REFUND_FORM_BASE_URL}/s/${code}`;
+  } catch (err) {
+    console.warn(
+      `[refundRequest] short-link mint failed for ${contactId}: ${err.message} — falling back to long URL`
+    );
+  }
+
   const smsBody = isSpanish
-    ? `Hola ${firstName}, lamentamos que no podamos seguir adelante. Por favor completa este formulario corto para procesar tu reembolso: ${url}`
-    : `Hi ${firstName}, we're sorry it didn't work out. Please complete this short form to process your refund: ${url}`;
+    ? `Hola ${firstName}, lamentamos que no podamos seguir adelante. Por favor completa este formulario corto para procesar tu reembolso: ${shareUrl}`
+    : `Hi ${firstName}, we're sorry it didn't work out. Please complete this short form to process your refund: ${shareUrl}`;
 
   try {
     await sendConversationMessage({
@@ -529,13 +547,13 @@ async function createRefundRequest(contactId) {
     return {
       success: true,
       token,
-      url,
+      url: shareUrl,
       reused: false,
       smsWarning: err.message,
     };
   }
 
-  return { success: true, token, url, reused: false };
+  return { success: true, token, url: shareUrl, reused: false };
 }
 
 // =====================================================================

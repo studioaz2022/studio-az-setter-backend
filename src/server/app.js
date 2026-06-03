@@ -6584,6 +6584,49 @@ function createApp() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // SHORT LINK LOOKUP (JSON) — for other Vercel apps that want to redirect on
+  // their own domain instead of bouncing through pay.studioaztattoo.com.
+  // First caller: refund-form's /s/[code] route (refund.studioaztattoo.com/s/abc123).
+  // Public read — short codes themselves are 36^6 unguessable for our purposes,
+  // and the destination is a refund-form token URL that has its own 30-day TTL.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/short-links/:code", async (req, res) => {
+    const { code } = req.params;
+    if (!/^[a-z0-9]{6}$/.test(code)) {
+      return res.status(404).json({ success: false, error: "not_found" });
+    }
+    try {
+      const { createClient } = require("@supabase/supabase-js");
+      const supabase = createClient(
+        process.env.SUPABASE_URL,
+        process.env.SUPABASE_SERVICE_ROLE_KEY
+      );
+      const { data, error } = await supabase
+        .from("short_links")
+        .select("destination_url, click_count")
+        .eq("code", code)
+        .single();
+      if (error || !data) {
+        return res.status(404).json({ success: false, error: "not_found" });
+      }
+      // Fire-and-forget click increment.
+      supabase
+        .from("short_links")
+        .update({ click_count: (data.click_count || 0) + 1 })
+        .eq("code", code)
+        .then(() => {});
+      return res.json({
+        success: true,
+        destinationUrl: data.destination_url,
+      });
+    } catch (err) {
+      console.error(`[ShortLinkLookup] Error resolving ${code}:`, err.message);
+      return res.status(500).json({ success: false, error: "server_error" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // SHORT LINK REDIRECT — pay.studioaztattoo.com/:code
   // ═══════════════════════════════════════════════════════════════════════════
 
