@@ -220,6 +220,12 @@ async function handleInboundMessage({
     for (const call of result.toolUses) {
       const out = await executeTool(call.name, call.input || {}, toolCtx);
       toolTrace.push({ name: call.name, input: call.input, output: out });
+      // Surface tool calls in the Render logs so a live tail can confirm tools fired
+      // (e.g. fetch_available_slots → create_hold_with_deposit_link) and didn't error.
+      if (!dryRun) {
+        const inputStr = JSON.stringify(call.input || {});
+        console.log(`🔧 [v2 tool] ${call.name}(${inputStr.length > 160 ? inputStr.slice(0, 160) + "…" : inputStr}) -> ok=${out?.ok}${out?.error ? ` error=${out.error}` : ""}`);
+      }
       toolResults.push({
         type: "tool_result",
         tool_use_id: call.id,
