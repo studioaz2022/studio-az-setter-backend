@@ -56,6 +56,7 @@ async function recordTransaction({
   squarePaymentId,
   locationId,
   notes,
+  environment = "production", // "sandbox" for test-card payments → excluded from real revenue
   tipAmount,
   servicePrice,
   // §6.7 Phase 5 — Refund flow uses these to mirror the ORIGINAL deposit's
@@ -142,6 +143,7 @@ async function recordTransaction({
     notes: notes,
     service_price: computedServicePrice,
     tip_amount: tipAmount != null ? tipAmount : null,
+    environment,
   };
 
   const { data, error } = await supabase
@@ -363,8 +365,8 @@ async function isPaymentAlreadyProcessed(squarePaymentId, locationId = null) {
 /**
  * Handle Square payment financial tracking
  */
-async function handleSquarePaymentFinancials(payment, contactId, contactName, artistId) {
-  console.log(`[Financial] Processing Square payment: ${payment.id}`);
+async function handleSquarePaymentFinancials(payment, contactId, contactName, artistId, environment = "production") {
+  console.log(`[Financial] Processing Square payment: ${payment.id}${environment === "sandbox" ? " (SANDBOX TEST)" : ""}`);
 
   try {
     // Get amount in dollars (Square sends cents)
@@ -394,7 +396,8 @@ async function handleSquarePaymentFinancials(payment, contactId, contactName, ar
       sessionDate: new Date(),
       squarePaymentId: payment.id,
       locationId: process.env.GHL_LOCATION_ID || 'studio_az_tattoo',
-      notes: `Square payment ${payment.id}`
+      notes: `Square payment ${payment.id}${environment === "sandbox" ? " [SANDBOX TEST]" : ""}`,
+      environment,
     });
 
     console.log(`[Financial] Successfully recorded Square payment`);

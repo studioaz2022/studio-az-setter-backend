@@ -1274,29 +1274,44 @@ function createApp() {
   });
 
   app.post("/square/webhook", async (req, res) => {
-    const secret = process.env.SQUARE_WEBHOOK_SECRET;
+    const prodSecret = process.env.SQUARE_WEBHOOK_SECRET;
+    // Optional sandbox webhook signing key — set ONLY if a Square sandbox webhook subscription
+    // points at this same URL. Lets us accept (and tag) test-card payments without a separate endpoint.
+    const sandboxSecret = process.env.SQUARE_SANDBOX_WEBHOOK_SECRET;
     // FIX: Correct header name for Square HMAC-SHA256 signature
     const signature = req.get("x-square-hmacsha256-signature") || "";
 
-    if (!secret) {
+    if (!prodSecret && !sandboxSecret) {
       console.warn("⚠️ Missing SQUARE_WEBHOOK_SECRET");
       return res.status(401).send("missing secret");
     }
 
-    // FIX: Square signature = HMAC-SHA256(webhookUrl + requestBody, signatureKey)
+    // Square signature = HMAC-SHA256(webhookUrl + requestBody, signatureKey). The sandbox
+    // subscription uses the SAME URL, so the only difference is which signing key matches —
+    // and that's also how we know the event is a sandbox (test) payment.
     const raw = req.rawBody || Buffer.from("");
     const notificationUrl = "https://studio-az-setter-backend.onrender.com/square/webhook";
     const stringToSign = notificationUrl + raw.toString();
-    const expected = crypto.createHmac("sha256", secret).update(stringToSign).digest("base64");
+    const sign = (key) => crypto.createHmac("sha256", key).update(stringToSign).digest("base64");
 
-    if (signature !== expected) {
+    let isSandbox = false;
+    let verified = false;
+    if (prodSecret && signature === sign(prodSecret)) {
+      verified = true;
+    } else if (sandboxSecret && signature === sign(sandboxSecret)) {
+      verified = true;
+      isSandbox = true;
+    }
+
+    if (!verified) {
       console.error("❌ Square signature mismatch:", {
         receivedSignature: signature ? signature.substring(0, 20) + "..." : "(empty)",
-        expectedSignature: expected.substring(0, 20) + "...",
+        triedSandbox: !!sandboxSecret,
         notificationUrl,
       });
       return res.status(401).send("invalid signature");
     }
+    if (isSandbox) console.log("🧪 [Square webhook] SANDBOX (test-card) event verified");
 
     let payload = {};
     try {
@@ -1413,7 +1428,7 @@ function createApp() {
               console.warn(`[Financial] Could not resolve artist user ID for contact ${contactId} — recording as 'unknown'. assignedTo=${contact?.assignedTo} cf.assigned_artist=${cf.assigned_artist} cf.inquired_technician=${cf.inquired_technician}`);
             }
             try {
-              await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist);
+              await handleSquarePaymentFinancials(payment, contactId, contactName, assignedArtist, isSandbox ? "sandbox" : "production");
               depositNewlyRecorded = true; // we are the one true recorder → safe to fire side-effects
               if (!COMPACT_MODE) {
                 console.log(`[Financial] Successfully recorded payment for contact ${contactId}`);
@@ -1429,8 +1444,11 @@ function createApp() {
             }
           }
 
-          // Mirror tattoo deposit to InstantDB for rent tracker (non-fatal)
-          if (!alreadyProcessed) {
+          // Mirror tattoo deposit to InstantDB for rent tracker (non-fatal).
+          // Skip for SANDBOX test payments — rent tracking is real-money artist settlement and
+          // must not be inflated by test-card deposits (the transactions row is tagged sandbox
+          // instead, so the earnings flow is still visible + filterable).
+          if (!alreadyProcessed && !isSandbox) {
             try {
               const { writeServiceIncome } = require("../rentTracker/serviceIncomeWriter");
               const { weekOfDate } = require("../rentTracker/tenantMatcher");
