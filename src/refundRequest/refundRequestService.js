@@ -18,9 +18,15 @@ const {
   sendConversationMessage,
   addTagsToContact,
 } = require("../clients/ghlClient");
+const { listAppointmentsForContact } = require("../clients/ghlCalendarClient");
 const { getOpportunitiesByContact } = require("../clients/ghlOpportunityClient");
 const { transitionToStage } = require("../ai/opportunityManager");
-const { OPPORTUNITY_STAGES, GHL_USER_IDS } = require("../config/constants");
+const {
+  OPPORTUNITY_STAGES,
+  GHL_USER_IDS,
+  CONSULTATION_CALENDARS,
+  APPOINTMENT_STATUS,
+} = require("../config/constants");
 const { refundPayment } = require("../payments/squareClient");
 const { recordTransaction } = require("../clients/financialTracking");
 const { sendPushToGhlUser } = require("../services/taskNotifications");
@@ -127,7 +133,58 @@ function generateRefundToken() {
 async function consultDidHappen(contactId, contact = null) {
   if (!contactId) return { happened: false, validity: "unknown" };
 
-  // 1. Primary signal — Fireflies transcript in Supabase.
+  // 0. PRIMARY signal — GHL appointment status.
+  //
+  // The most authoritative check: did the contact actually have a
+  // consultation appointment that's now in the past, and was it NOT
+  // cancelled or marked no-show? Anything else (status="new"/"confirmed"/
+  // "showed" with a past startTime, no late edits flipping it to cancelled)
+  // counts as "happened" — staff didn't mark it no-show, so we assume it
+  // happened, per owner direction (refund-form Phase X UX rebuild 2026-06-03).
+  //
+  // We filter to CONSULTATION_CALENDARS specifically — tattoo-appointment
+  // calendars don't count as "consult" for the purpose of the consult-quality
+  // Likert. We don't include translator calendars (Lionel/Maria online) here
+  // because those aren't artist consults.
+  const consultCalendarIds = new Set(Object.values(CONSULTATION_CALENDARS));
+  const skippedStatuses = new Set([
+    APPOINTMENT_STATUS.CANCELLED, // "cancelled"
+    APPOINTMENT_STATUS.NOSHOW,    // "noshow"
+    APPOINTMENT_STATUS.INVALID,   // "invalid"
+    // Also catch the case-variants we've seen in webhook payloads.
+    "Cancelled",
+    "Noshow",
+    "no_show",
+    "no-show",
+  ]);
+  try {
+    const events = await listAppointmentsForContact(contactId);
+    const now = Date.now();
+    const validConsult = (events || []).find((evt) => {
+      const calId = evt.calendarId || evt.calendar_id;
+      if (!consultCalendarIds.has(calId)) return false;
+      const start = evt.startTime || evt.start_time;
+      if (!start) return false;
+      if (new Date(start).getTime() > now) return false; // future appt
+      const status = evt.appointmentStatus || evt.appoinmentStatus || evt.status;
+      if (skippedStatuses.has(status)) return false;
+      return true;
+    });
+    if (validConsult) {
+      return { happened: true, validity: "valid" };
+    }
+    // If we successfully fetched appointments AND none qualify, treat this
+    // as the authoritative "no" — but still fall through to Fireflies/Gemini
+    // below in case the appointment was deleted but the consult clearly
+    // happened (rare but possible).
+  } catch (err) {
+    console.warn(
+      `[refundRequest] consultDidHappen GHL appointments fetch failed for ${contactId}: ${err.message}`
+    );
+    // Fall through — don't fail the derivation on a transient GHL hiccup.
+  }
+
+  // 1. Secondary signal — Fireflies transcript in Supabase.
   try {
     const { data: rows, error } = await supabase
       .from("fireflies_transcripts")
@@ -161,7 +218,7 @@ async function consultDidHappen(contactId, contact = null) {
     console.warn(
       `[refundRequest] consultDidHappen Supabase lookup failed for ${contactId}: ${err.message}`
     );
-    // Fall through to GHL signals — don't fail the whole derivation.
+    // Fall through to GHL custom fields — don't fail the whole derivation.
   }
 
   // 2 + 3. GHL custom fields. Re-use a contact record if the caller already
