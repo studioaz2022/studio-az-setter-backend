@@ -86,6 +86,16 @@ async function runV2Inbound({ payload, contact = {}, contactId, contactName, mes
       if (!dryRun) pushResumeApproval({ contactId, contactName, draftMessage: "(resuming)" }).catch(() => {});
     }
 
+    // 2b. Re-entry guard for the auto-enroll (form) path. A GHL workflow can re-fire the form
+    //     webhook minutes after the lead already booked (observed: appointment-created → workflow
+    //     → /ghl/form-webhook again with a "New form submission" placeholder). The opener is a
+    //     ONE-TIME enrollment event, so if the lead is already enrolled (active) or further along
+    //     (completed), DON'T re-run discovery — that re-greets a booked lead out of nowhere.
+    //     A genuine new SMS goes through the message webhook (non-autoEnroll) and is unaffected.
+    if (autoEnroll && (currentStatus === FUNNEL_STATUSES.ACTIVE || currentStatus === FUNNEL_STATUSES.COMPLETED)) {
+      return { action: "skip_already_enrolled", reason: `form webhook re-fired for funnel_status=${currentStatus}; opener suppressed` };
+    }
+
     // 3. Funnel gate — or auto-enroll. A consultation-form submission is an unambiguous
     //    tattoo lead, so we skip the classifier and enroll directly (active).
     const entrySource = entrySourceOverride || deriveEntrySource(payload);

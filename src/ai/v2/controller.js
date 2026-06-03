@@ -30,6 +30,23 @@ function sanitizeOutput(text) {
   return typeof text === "string" ? text.replace(/[—–]/g, "-") : text;
 }
 
+// Phrases that betray leaked chain-of-thought / planning text rather than a real message to the
+// lead (observed in prod: "It looks like Joan... I'll reach out warmly to Maria... Since the
+// context says she requested Joan..."). A genuine text talks TO the lead ("you/your"), never
+// ABOUT them in the third person or about "the context"/"the system". Conservative on purpose —
+// these strings essentially never occur in a real customer text.
+const REASONING_MARKERS =
+  /\b(the context\b|based on the context|since the context|i'?ll (reach out|acknowledge|mention|offer|let (her|him|them))|let me (reach out|acknowledge|mention|offer)|the system('s| is| shows| showing| right now| doesn'?t))\b/i;
+
+/** Drop any bubble that is clearly internal reasoning rather than a message to the lead. */
+function stripReasoningBubbles(bubbles) {
+  const cleaned = bubbles.filter((b) => !REASONING_MARKERS.test(b));
+  if (cleaned.length !== bubbles.length) {
+    console.warn(`⚠️ [v2 controller] stripped ${bubbles.length - cleaned.length} reasoning-leak bubble(s)`);
+  }
+  return cleaned.length ? cleaned : bubbles; // never return empty — fall back to original
+}
+
 const MAX_TOOL_ITERATIONS = 6; // safety cap on the tool-use loop
 
 // Load the static system prompt + objection principles once at module init.
@@ -258,7 +275,8 @@ async function handleInboundMessage({
   }
 
   const text = sanitizeOutput(result?.text || "");
-  const bubbles = text.split(/\n\s*\n/).map((s) => sanitizeOutput(s.trim())).filter(Boolean);
+  const rawBubbles = text.split(/\n\s*\n/).map((s) => sanitizeOutput(s.trim())).filter(Boolean);
+  const bubbles = stripReasoningBubbles(rawBubbles);
 
   // Log detected objections for the Phase 6 tuning loop (best-effort; no-op until table exists).
   // Skip in dryRun so tests don't write rows.
@@ -286,4 +304,4 @@ async function handleInboundMessage({
   };
 }
 
-module.exports = { handleInboundMessage, buildContextBlock, normalizeHistory, sanitizeMessages, SYSTEM_PROMPT_PATH };
+module.exports = { handleInboundMessage, buildContextBlock, normalizeHistory, sanitizeMessages, sanitizeOutput, stripReasoningBubbles, SYSTEM_PROMPT_PATH };
