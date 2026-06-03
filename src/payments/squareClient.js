@@ -19,6 +19,28 @@ const SQUARE_BASE_URL = isProd
   ? "https://connect.squareup.com"
   : "https://connect.squareupsandbox.com";
 
+// Optional Square SANDBOX credentials — used ONLY for allowlisted test contacts so the team can
+// pay a real (test-card) deposit end-to-end without touching live money. Fully gated: if these
+// are unset, nothing changes and every contact uses the primary (production) Square account.
+// IMPORTANT: only set these AFTER applying the `environment` column migration on checkout_sessions
+// (supabase/migrations/*_add_environment_to_checkout_sessions.sql).
+const SQUARE_SANDBOX_ACCESS_TOKEN = process.env.SQUARE_SANDBOX_ACCESS_TOKEN;
+const SQUARE_SANDBOX_LOCATION_ID = process.env.SQUARE_SANDBOX_LOCATION_ID;
+const SQUARE_SANDBOX_BASE_URL = "https://connect.squareupsandbox.com";
+const SANDBOX_READY = !!(SQUARE_SANDBOX_ACCESS_TOKEN && SQUARE_SANDBOX_LOCATION_ID);
+
+/** Pick the Square account/credentials for this charge. `useSandbox` only takes effect when the
+ *  sandbox creds are configured; otherwise it safely falls back to the primary account. */
+function squareEnv(useSandbox = false) {
+  if (useSandbox && SANDBOX_READY) {
+    return { label: "sandbox", baseUrl: SQUARE_SANDBOX_BASE_URL, token: SQUARE_SANDBOX_ACCESS_TOKEN, locationId: SQUARE_SANDBOX_LOCATION_ID };
+  }
+  if (useSandbox && !SANDBOX_READY) {
+    console.warn("[Square] sandbox requested but SQUARE_SANDBOX_* not configured — using production account");
+  }
+  return { label: "production", baseUrl: SQUARE_BASE_URL, token: SQUARE_ACCESS_TOKEN, locationId: SQUARE_LOCATION_ID };
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
@@ -96,6 +118,7 @@ async function createDepositLinkForContact({
   artistName = null,
   contactName = null,
   language = "en",
+  useSandbox = false,
 }) {
   if (!contactId) {
     throw new Error("contactId is required");
@@ -106,8 +129,9 @@ async function createDepositLinkForContact({
   if (paymentType !== "deposit" && paymentType !== "consult") {
     throw new Error('paymentType must be "deposit" or "consult"');
   }
-  if (!SQUARE_LOCATION_ID) {
-    throw new Error("SQUARE_LOCATION_ID is not set");
+  const env = squareEnv(useSandbox);
+  if (!env.locationId) {
+    throw new Error(`Square location id is not set for ${env.label}`);
   }
 
   // Title + description come from the artist's stated intent, NOT the amount —
@@ -123,17 +147,17 @@ async function createDepositLinkForContact({
       contactId,
       amountCents,
       title,
-      env: isProd ? "production" : "sandbox",
+      env: env.label,
     });
   }
 
   // 1. Create Square Order with reference_id for webhook tracing
   const orderResponse = await axios.post(
-    `${SQUARE_BASE_URL}/v2/orders`,
+    `${env.baseUrl}/v2/orders`,
     {
       idempotency_key: `order-${contactId}-${Date.now()}`,
       order: {
-        location_id: SQUARE_LOCATION_ID,
+        location_id: env.locationId,
         reference_id: contactId,
         metadata: {
           business,
@@ -153,7 +177,7 @@ async function createDepositLinkForContact({
     },
     {
       headers: {
-        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${env.token}`,
         "Content-Type": "application/json",
       },
     }
@@ -184,6 +208,9 @@ async function createDepositLinkForContact({
       business,
       payment_type: paymentType,
       language: lang,
+      // Only write the environment column once sandbox is configured (i.e. the migration that
+      // adds it has been applied). Until then, omit it so prod inserts are byte-for-byte unchanged.
+      ...(SANDBOX_READY ? { environment: env.label } : {}),
     });
 
   if (dbError) {
@@ -239,6 +266,7 @@ async function getCheckoutSession(sessionId) {
     business: data.business,
     paymentType: data.payment_type,
     language: data.language || "en",
+    environment: data.environment || "production", // which Square account this session belongs to
     createdAt: data.created_at,
     expiresAt: data.expires_at,
     // Internal fields for payment processing (not sent to frontend)
@@ -274,7 +302,9 @@ async function processCheckoutPayment(sessionId, sourceId, buyerEmail) {
     throw new Error("Checkout session has expired");
   }
 
-  // 2. Process payment via Square Payments API
+  // 2. Process payment via Square Payments API — on the SAME account the order was created on
+  //    (sandbox sessions must charge sandbox, or the order_id won't be found).
+  const env = squareEnv(session.environment === "sandbox");
   const paymentBody = {
     idempotency_key: `pay-${sessionId}-${Date.now()}`,
     source_id: sourceId,
@@ -283,7 +313,7 @@ async function processCheckoutPayment(sessionId, sourceId, buyerEmail) {
       currency: session.currency,
     },
     order_id: session._squareOrderId,
-    location_id: SQUARE_LOCATION_ID,
+    location_id: env.locationId,
     autocomplete: true,
     ...(buyerEmail && {
       buyer_email_address: buyerEmail,
@@ -291,11 +321,11 @@ async function processCheckoutPayment(sessionId, sourceId, buyerEmail) {
   };
 
   const response = await axios.post(
-    `${SQUARE_BASE_URL}/v2/payments`,
+    `${env.baseUrl}/v2/payments`,
     paymentBody,
     {
       headers: {
-        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        Authorization: `Bearer ${env.token}`,
         "Content-Type": "application/json",
       },
     }
@@ -506,4 +536,5 @@ module.exports = {
   processCheckoutPayment,
   refundPayment,
   getContactIdFromOrder,
+  squareEnv, // exported for tests
 };

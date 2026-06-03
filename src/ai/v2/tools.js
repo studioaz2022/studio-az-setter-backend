@@ -349,7 +349,8 @@ const HANDLERS = {
     });
     const holdId = appt?.id || appt?.appointment?.id || appt?.appointmentId || null;
 
-    // 2. $100 refundable deposit link.
+    // 2. $100 refundable deposit link. Test phones charge the Square SANDBOX account (if configured)
+    //    so the deposit can be paid with a test card without moving real money.
     const deposit = await createDepositLinkForContact({
       contactId: ctx.contactId,
       amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
@@ -357,6 +358,7 @@ const HANDLERS = {
       language: ctx.language || "en",
       contactName: ctx.contactName || null,
       artistName: artist,
+      useSandbox: isAllowlistedTestPhone(ctx?.contact),
     });
 
     // 3. Persist booking state (crash-recovery + iOS widgets).
@@ -394,6 +396,7 @@ const HANDLERS = {
       language: ctx.language || "en",
       contactName: ctx.contactName || null,
       artistName: null,
+      useSandbox: isAllowlistedTestPhone(ctx?.contact),
     });
     await updateContact(ctx.contactId, {
       customField: {
