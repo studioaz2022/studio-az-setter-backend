@@ -125,9 +125,14 @@ async function runV2Inbound({ payload, contact = {}, contactId, contactName, mes
     });
 
     // 5. Send the reply (one message per bubble).
+    // AI_BUBBLE_DELAY_MS: pause between bubbles. Default 0 (fast — good for testing). Set it to
+    // ~2000-3000 in prod to (a) stop carriers delivering rapid-fire bubbles OUT OF ORDER and
+    // (b) make the multi-bubble cadence feel human instead of bot-rapid. Same lever for both.
+    const bubbleDelayMs = Math.max(0, parseInt(process.env.AI_BUBBLE_DELAY_MS || "0", 10) || 0);
     if (!dryRun) {
-      for (const bubble of result.bubbles) {
-        try { await sendConversationMessage({ contactId, body: bubble, channelContext }); }
+      for (let bi = 0; bi < result.bubbles.length; bi++) {
+        if (bi > 0 && bubbleDelayMs) await new Promise((r) => setTimeout(r, bubbleDelayMs));
+        try { await sendConversationMessage({ contactId, body: result.bubbles[bi], channelContext }); }
         catch (err) { console.error("[v2 pipeline] send failed:", err.message); }
       }
     }

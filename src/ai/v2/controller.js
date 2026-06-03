@@ -14,6 +14,21 @@ const { generateReply, MODELS } = require("./anthropicClient");
 const { getActiveToolDefinitions, executeTool } = require("./tools");
 const { decideModel } = require("./escalation");
 const { recordObjectionEvent } = require("./objectionStore");
+const { isAllowlistedTestPhone } = require("./botVersion");
+
+/** Today's date in America/Chicago, e.g. "Wednesday, June 3, 2026" — so the bot can resolve
+ *  relative requests ("next Monday", "next week") into real dates for fetch_available_slots. */
+function todayInChicago() {
+  return new Intl.DateTimeFormat("en-US", {
+    timeZone: "America/Chicago", weekday: "long", year: "numeric", month: "long", day: "numeric",
+  }).format(new Date());
+}
+
+/** Strip em/en dashes from outgoing text — they read as an "AI tell." Replace with a plain hyphen,
+ *  which is normal in casual texting. Belt-and-suspenders alongside the system-prompt rule. */
+function sanitizeOutput(text) {
+  return typeof text === "string" ? text.replace(/[—–]/g, "-") : text;
+}
 
 const MAX_TOOL_ITERATIONS = 6; // safety cap on the tool-use loop
 
@@ -44,6 +59,7 @@ try {
 function buildContextBlock(contact = {}, extra = {}) {
   const cf = contact?.customField || contact?.customFields || {};
   const lines = ["CONTEXT (current lead — use naturally, don't recite):"];
+  lines.push(`- today is ${todayInChicago()} (America/Chicago). Use this to resolve "next week", "next Monday", etc. into real dates when you fetch slots.`);
   const name = `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
   if (name) lines.push(`- name: ${name}`);
   const lang = extra.language || cf.language_preference;
@@ -53,8 +69,10 @@ function buildContextBlock(contact = {}, extra = {}) {
     if (cf.previous_conversation_summary) lines.push(`- last time: ${cf.previous_conversation_summary}`);
   }
   // Artist the lead asked for / was assigned to — so the bot books the RIGHT calendar and
-  // references them by name, instead of volunteering a random artist.
-  const artist = cf.inquired_technician || cf.assigned_artist;
+  // references them by name, instead of volunteering a random artist. For test phones, the
+  // booking routes to Claudia's test calendar, so name Claudia here too — otherwise the bot
+  // sees "Joan" in context but "Claudia" in the slot results and narrates the mismatch.
+  const artist = isAllowlistedTestPhone(contact) ? "Claudia" : (cf.inquired_technician || cf.assigned_artist);
   if (artist && String(artist).trim()) lines.push(`- artist: ${artist}`);
   // Tattoo brief (from the consult form / prior discovery) so the opener is targeted, not generic.
   const brief = [
@@ -239,8 +257,8 @@ async function handleInboundMessage({
     }
   }
 
-  const text = result?.text || "";
-  const bubbles = text.split(/\n\s*\n/).map((s) => s.trim()).filter(Boolean);
+  const text = sanitizeOutput(result?.text || "");
+  const bubbles = text.split(/\n\s*\n/).map((s) => sanitizeOutput(s.trim())).filter(Boolean);
 
   // Log detected objections for the Phase 6 tuning loop (best-effort; no-op until table exists).
   // Skip in dryRun so tests don't write rows.

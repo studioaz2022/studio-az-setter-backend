@@ -106,6 +106,28 @@ async function turn(contact, history, userMsg, { formOpener = false } = {}) {
   check("never delegates deposit to 'a team member'", !FAB_RX.test(allText2));
   console.log(`  tools: [${tools2.join(" → ")}]`);
 
+  // ───────────────────────── Scenario 3: stated day/time preference ─────────────────────────
+  console.log("\n" + "=".repeat(64));
+  console.log("SCENARIO 3 — lead asks for 'next Monday after 4pm' (slot-preference honoring)");
+  console.log("=".repeat(64));
+  const h3 = [];
+  const traces3 = [];
+  console.log("\n— opener —");
+  await turn(VIDEO_LEAD, h3, "New form submission", { formOpener: true });
+  console.log("\n— lead states a constraint —");
+  const r3 = await turn(VIDEO_LEAD, h3, "can we do next monday, sometime after 4pm?");
+  r3.toolTrace.forEach((t) => traces3.push(t));
+  const fetchCall = traces3.find((t) => t.name === "fetch_available_slots");
+  check("called fetch_available_slots", !!fetchCall);
+  check("passed a date/time constraint (earliest_date or after_time)",
+    !!fetchCall && (!!fetchCall.input.earliest_date || !!fetchCall.input.after_time));
+
+  // Global: no em/en dashes anywhere the bot spoke (all 3 scenarios).
+  const allBot = [...h1, ...h2, ...h3].filter((m) => m.role === "assistant").map((m) => m.content).join("\n");
+  check("no em/en dashes in ANY bot message (—/–)", !/[—–]/.test(allBot));
+  // Global: never narrated calendar/system mechanics.
+  check("never narrated 'the system' / wrong-artist calendar mechanics", !/\b(the system|claudia's times|joan's times|calendar)\b/i.test(allBot));
+
   console.log("\n" + "─".repeat(64));
   console.log(`RESULT: ${pass} passed, ${fail} failed`);
   process.exit(fail === 0 ? 0 : 1);

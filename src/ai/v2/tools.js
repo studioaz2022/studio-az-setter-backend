@@ -114,12 +114,15 @@ const TOOL_DEFINITIONS = [
   {
     name: "fetch_available_slots",
     description:
-      "Get upcoming consultation time slots. Call when the lead is ready to book or asks about availability. Returns a short list of real openings across the active artists.",
+      "Get upcoming consultation time slots. Call when the lead is ready to book or asks about availability. Returns a short list of real openings. IMPORTANT: if the lead stated a day/time preference (e.g. 'next week', 'next Monday', 'after 4pm', 'mornings'), pass it via earliest_date / after_time / before_time so the results actually match — don't offer times that violate what they asked for.",
     input_schema: {
       type: "object",
       properties: {
         consult_type: { type: "string", enum: ["online", "in_person"], description: "Video (online) or in-person consult." },
         artist: { type: "string", enum: ["Andrew", "Joan", "any"], description: "Preferred artist, or 'any' to see all." },
+        earliest_date: { type: "string", description: "Optional YYYY-MM-DD. Only return slots ON or AFTER this date. Use the lead's wording + today's date from context (e.g. 'next Monday' → that Monday's date)." },
+        after_time: { type: "string", description: "Optional 24h HH:MM (America/Chicago). Only slots at/after this local time. e.g. lead says 'after 4pm' → '16:00'." },
+        before_time: { type: "string", description: "Optional 24h HH:MM (America/Chicago). Only slots at/before this local time. e.g. 'before noon' → '12:00'." },
       },
       required: ["consult_type"],
     },
@@ -236,6 +239,42 @@ function readHoldId(ctx) {
   return cf[SYSTEM_FIELDS.HOLD_APPOINTMENT_ID] || null;
 }
 
+const CHICAGO_TZ = "America/Chicago";
+
+/** Local (America/Chicago) date "YYYY-MM-DD" + minutes-of-day for an ISO instant. */
+function localDateParts(iso) {
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-CA", {
+      timeZone: CHICAGO_TZ, year: "numeric", month: "2-digit", day: "2-digit",
+      hour: "2-digit", minute: "2-digit", hour12: false,
+    }).formatToParts(new Date(iso)).map((p) => [p.type, p.value])
+  );
+  const hour = parseInt(parts.hour, 10) % 24; // some envs emit "24" for midnight
+  return { date: `${parts.year}-${parts.month}-${parts.day}`, minutesOfDay: hour * 60 + parseInt(parts.minute, 10) };
+}
+
+/** Parse "HH:MM" (24h) → minutes-of-day, or null. */
+function parseHHMM(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || "").trim());
+  if (!m) return null;
+  return parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+}
+
+/** Apply the lead's stated date/time constraints to a slot list (each slot has .startTime). */
+function filterSlotsByPreference(slots, { earliest_date, after_time, before_time } = {}) {
+  const earliest = earliest_date && /^\d{4}-\d{2}-\d{2}$/.test(String(earliest_date).trim()) ? String(earliest_date).trim() : null;
+  const afterMin = parseHHMM(after_time);
+  const beforeMin = parseHHMM(before_time);
+  if (!earliest && afterMin == null && beforeMin == null) return slots;
+  return slots.filter((s) => {
+    const { date, minutesOfDay } = localDateParts(s.startTime);
+    if (earliest && date < earliest) return false;
+    if (afterMin != null && minutesOfDay < afterMin) return false;
+    if (beforeMin != null && minutesOfDay > beforeMin) return false;
+    return true;
+  });
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Handlers — each returns a plain object the model sees. Throwing is caught by executeTool.
 // ──────────────────────────────────────────────────────────────────────────────
@@ -255,8 +294,17 @@ const HANDLERS = {
         console.error(`[tool fetch_available_slots] ${t.artist} failed:`, err.message);
       }
     }
-    all.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
-    const slots = all.slice(0, MAX_SLOTS_RETURNED).map((s) => ({
+    const byStart = (a, b) => new Date(a.startTime) - new Date(b.startTime);
+    all.sort(byStart);
+    // Honor the lead's stated day/time preference (next week / after 4pm / mornings) BEFORE
+    // slicing — otherwise we'd only ever return the earliest few and silently ignore what they asked.
+    const constrained = !!(input.earliest_date || input.after_time || input.before_time);
+    const filtered = filterSlotsByPreference(all, input);
+    // If the constraint knocked out everything, fall back to the nearest unfiltered slots but
+    // FLAG them as non-matching, so the bot offers them honestly ("nothing in that window — closest is…").
+    const noMatch = constrained && all.length > 0 && filtered.length === 0;
+    const chosen = noMatch ? all : filtered;
+    const slots = chosen.slice(0, MAX_SLOTS_RETURNED).map((s) => ({
       start_time: s.startTime,
       end_time: s.endTime,
       calendar_id: s.calendarId,
@@ -264,7 +312,15 @@ const HANDLERS = {
       consult_type: mode,
       display: formatSlotDisplay(s.startTime, ctx.language),
     }));
-    return { ok: true, count: slots.length, slots };
+    return {
+      ok: true,
+      count: slots.length,
+      matched_preference: !noMatch,
+      slots,
+      ...(noMatch
+        ? { note: "NONE of these match the requested day/time window — they're the closest available. Offer them as alternatives honestly ('I don't have anything in that window, the closest is…'); do NOT claim they match what they asked for." }
+        : {}),
+    };
   },
 
   async create_hold_with_deposit_link(input, ctx) {
@@ -427,13 +483,18 @@ const DRY_RUN = {
     // Echo the requested artist so dry-run fidelity matches production routing (the real
     // handler returns the lead's artist via resolveConsultTargets, not a hardcoded one).
     const artist = input.artist && input.artist !== "any" ? input.artist : "Joan";
-    const base = Date.parse("2026-06-05T15:00:00Z");
-    const slots = [0, 1, 2].map((i) => {
+    const base = Date.parse("2026-06-05T15:00:00Z"); // 10:00 AM America/Chicago
+    const raw = [0, 1, 2].map((i) => {
       const st = new Date(base + i * 86400000).toISOString();
       const et = new Date(base + i * 86400000 + 30 * 60000).toISOString();
-      return { start_time: st, end_time: et, calendar_id: `CAL_${artist.toUpperCase()}`, artist, consult_type: mode, display: formatSlotDisplay(st) };
+      return { startTime: st, endTime: et, calendarId: `CAL_${artist.toUpperCase()}`, artist };
     });
-    return { ok: true, count: slots.length, slots };
+    const constrained = !!(input.earliest_date || input.after_time || input.before_time);
+    const filtered = filterSlotsByPreference(raw, input);
+    const noMatch = constrained && filtered.length === 0;
+    const chosen = noMatch ? raw : filtered;
+    const slots = chosen.map((s) => ({ start_time: s.startTime, end_time: s.endTime, calendar_id: s.calendarId, artist: s.artist, consult_type: mode, display: formatSlotDisplay(s.startTime) }));
+    return { ok: true, count: slots.length, matched_preference: !noMatch, slots, ...(noMatch ? { note: "no slots match the requested window; nearest alternatives shown." } : {}) };
   },
   create_hold_with_deposit_link: (input) => ({
     ok: true, hold_id: "HOLD_TEST_123", deposit_url: "https://squareup.com/checkout/TEST", slot_display: formatSlotDisplay(input.start_time), hold_minutes: HOLD_MINUTES,
