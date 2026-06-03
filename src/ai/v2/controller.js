@@ -52,7 +52,26 @@ function buildContextBlock(contact = {}, extra = {}) {
     lines.push(`- returning client: yes${cf.total_tattoos_completed ? ` (${cf.total_tattoos_completed} prior tattoos)` : ""}`);
     if (cf.previous_conversation_summary) lines.push(`- last time: ${cf.previous_conversation_summary}`);
   }
+  // Tattoo brief (from the consult form / prior discovery) so the opener is targeted, not generic.
+  const brief = [
+    ["placement", cf.tattoo_placement],
+    ["size", cf.tattoo_size],
+    ["style", cf.tattoo_style],
+    ["color", cf.tattoo_color_preference],
+    ["their idea", cf.tattoo_summary],
+    ["timeline", cf.how_soon_is_client_deciding],
+    ["first tattoo?", cf.first_tattoo],
+    ["consult type pref", cf.consultation_type],
+  ];
+  for (const [label, val] of brief) {
+    if (val !== undefined && val !== null && String(val).trim() !== "") lines.push(`- ${label}: ${val}`);
+  }
   if (extra.faqMode) lines.push("- deposit already paid → FAQ MODE: be calm/brief, don't push or sell.");
+  if (extra.formOpener) {
+    lines.push(
+      "- ⚡ THIS LEAD JUST SUBMITTED THE CONSULTATION FORM and has NOT texted yet. The user turn is a system placeholder, not their words. Write a warm FIRST outreach message: greet them by name, reference their tattoo idea from the brief above, and move toward booking a paid consult. Do NOT reply as if answering a question, and do NOT ask them to repeat anything already in the brief."
+    );
+  }
   return lines.length > 1 ? lines.join("\n") : null;
 }
 
@@ -119,6 +138,7 @@ async function handleInboundMessage({
   latestMessageText,
   language,
   faqMode = false,
+  formOpener = false,
   useTools = true,
   dryRun = false,
   forceModel = null,
@@ -141,7 +161,7 @@ async function handleInboundMessage({
   // System = static cached prefix (system prompt + objection principles) + dynamic
   // (uncached) context block. Cache breakpoint sits on the objection principles so the
   // whole static prefix is cached and the per-contact context after it is not.
-  const contextBlock = buildContextBlock(contact, { language, faqMode });
+  const contextBlock = buildContextBlock(contact, { language, faqMode, formOpener });
   const system = [{ text: SYSTEM_PROMPT }];
   if (OBJECTION_PRINCIPLES) system.push({ text: OBJECTION_PRINCIPLES, cache: true });
   else system[0].cache = true; // fall back to caching the system prompt alone

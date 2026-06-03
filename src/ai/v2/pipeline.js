@@ -49,7 +49,7 @@ function deriveEntrySource(payload) {
  * @param {boolean}[args.dryRun] assemble without sending/writing
  * @returns {Promise<{action:string, [key:string]:any}>}
  */
-async function runV2Inbound({ payload, contact = {}, contactId, contactName, messageText, rawMessages = [], channelContext, language, dryRun = false } = {}) {
+async function runV2Inbound({ payload, contact = {}, contactId, contactName, messageText, rawMessages = [], channelContext, language, dryRun = false, autoEnroll = false, entrySource: entrySourceOverride } = {}) {
   const cf = contact?.customField || contact?.customFields || {};
   const persist = async (fields) => {
     if (dryRun || !contactId) return;
@@ -86,12 +86,24 @@ async function runV2Inbound({ payload, contact = {}, contactId, contactName, mes
       if (!dryRun) pushResumeApproval({ contactId, contactName, draftMessage: "(resuming)" }).catch(() => {});
     }
 
-    // 3. Funnel gate.
-    const gate = await routeInbound({
-      contact,
-      messages: [messageText],
-      entrySource: deriveEntrySource(payload),
-    });
+    // 3. Funnel gate — or auto-enroll. A consultation-form submission is an unambiguous
+    //    tattoo lead, so we skip the classifier and enroll directly (active).
+    const entrySource = entrySourceOverride || deriveEntrySource(payload);
+    let gate;
+    if (autoEnroll) {
+      gate = {
+        action: ACTIONS.ENROLL_ENGAGE,
+        reason: "auto-enrolled (consultation form submission)",
+        classifierResult: null,
+        proposed: {
+          [SYSTEM_FIELDS.FUNNEL_STATUS]: FUNNEL_STATUSES.ACTIVE,
+          [SYSTEM_FIELDS.FUNNEL_ENTRY_SOURCE]: entrySource,
+          [SYSTEM_FIELDS.FUNNEL_ENTRY_DATE]: new Date().toISOString(),
+        },
+      };
+    } else {
+      gate = await routeInbound({ contact, messages: [messageText], entrySource });
+    }
     if (gate.action === ACTIONS.SILENT || gate.action === ACTIONS.MARK_NOT_A_LEAD) {
       await persist(gate.proposed);
       return { action: gate.action, reason: gate.reason, classifier: gate.classifierResult };
@@ -108,6 +120,7 @@ async function runV2Inbound({ payload, contact = {}, contactId, contactName, mes
       latestMessageText: messageText,
       language: language || cf[SYSTEM_FIELDS.LANGUAGE_PREFERENCE],
       faqMode,
+      formOpener: autoEnroll, // form leads get a proactive opener, not a literal reply
       dryRun,
     });
 

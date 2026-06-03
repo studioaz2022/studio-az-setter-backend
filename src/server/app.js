@@ -1186,6 +1186,30 @@ function createApp() {
         const channelContext = deriveChannelContext(payload, effectiveContact);
         console.log("📡 Channel context:", channelContext);
 
+        // ═══ v2 AI SETTER — form-lead routing (Phase 5; flag-gated, default off) ═══
+        // A consult-form submission is an unambiguous tattoo lead → auto-enroll (skip the
+        // classifier) and let v2 send a targeted opener. Isolated + never throws; only taken
+        // when the contact resolves to v2 (test-phone allowlist / ai_bot_version / global flag).
+        if (resolveBotVersion(effectiveContact) === "v2") {
+          try {
+            const v2res = await runV2Inbound({
+              payload: { locationId: process.env.GHL_LOCATION_ID, messageType: "form" },
+              contact: effectiveContact,
+              contactId,
+              contactName: `${effectiveContact?.firstName || ""} ${effectiveContact?.lastName || ""}`.trim() || null,
+              messageText: syntheticText,
+              rawMessages,
+              channelContext,
+              autoEnroll: true,
+              entrySource: "website_form",
+            });
+            console.log(`🤖 [v2 form] action=${v2res.action}${v2res.model ? ` model=${v2res.model.includes("sonnet") ? "sonnet" : "haiku"}` : ""}`);
+          } catch (err) {
+            console.error("🤖 [v2 form] pipeline error (v1 NOT run for this v2 lead):", err.message || err);
+          }
+          return; // v2 owns this form lead
+        }
+
         const result = await handleInboundMessage({
           contact: effectiveContact,
           aiPhase: null,
