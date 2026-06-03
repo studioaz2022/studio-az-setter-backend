@@ -123,6 +123,19 @@ const TATTOO_FIELDS = {
   FIRST_TATTOO: "first_tattoo",
   TATTOO_CONCERNS: "tattoo_concerns",
   TATTOO_PHOTO_DESCRIPTION: "tattoo_photo_description",
+  // Raw consult-method choice from the web widget (video call vs message-based). See
+  // CONSULT_PREFERENCE_VALUES for the value strings the form writes.
+  CONSULTATION_PREFERENCE: "consultation_preference",
+};
+
+// Consult-method choices the website widget writes into `consultation_preference`.
+// "Video Call with Coordinator" / "Video Call with Translator" → live video consult (book a slot).
+// "Message-Based Consultation" → async text consult (deposit-only, NO calendar slot).
+// The widget never offers in-person, so the v2 bot must not propose it to web-form leads.
+const CONSULT_PREFERENCE_VALUES = {
+  VIDEO_COORDINATOR: "Video Call with Coordinator",
+  VIDEO_TRANSLATOR: "Video Call with Translator",
+  MESSAGE_BASED: "Message-Based Consultation",
 };
 
 // Deposit Configuration
@@ -280,6 +293,7 @@ module.exports = {
   SYSTEM_FIELDS,
   FUNNEL_STATUSES,
   TATTOO_FIELDS,
+  CONSULT_PREFERENCE_VALUES,
   DEPOSIT_CONFIG,
   LANGUAGES,
   TAGS,

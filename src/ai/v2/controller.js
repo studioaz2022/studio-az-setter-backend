@@ -52,6 +52,10 @@ function buildContextBlock(contact = {}, extra = {}) {
     lines.push(`- returning client: yes${cf.total_tattoos_completed ? ` (${cf.total_tattoos_completed} prior tattoos)` : ""}`);
     if (cf.previous_conversation_summary) lines.push(`- last time: ${cf.previous_conversation_summary}`);
   }
+  // Artist the lead asked for / was assigned to — so the bot books the RIGHT calendar and
+  // references them by name, instead of volunteering a random artist.
+  const artist = cf.inquired_technician || cf.assigned_artist;
+  if (artist && String(artist).trim()) lines.push(`- artist: ${artist}`);
   // Tattoo brief (from the consult form / prior discovery) so the opener is targeted, not generic.
   const brief = [
     ["placement", cf.tattoo_placement],
@@ -61,10 +65,26 @@ function buildContextBlock(contact = {}, extra = {}) {
     ["their idea", cf.tattoo_summary],
     ["timeline", cf.how_soon_is_client_deciding],
     ["first tattoo?", cf.first_tattoo],
-    ["consult type pref", cf.consultation_type],
   ];
   for (const [label, val] of brief) {
     if (val !== undefined && val !== null && String(val).trim() !== "") lines.push(`- ${label}: ${val}`);
+  }
+  // Consult format the lead ALREADY chose on the website form. Honor it — don't re-ask
+  // online/in-person, and never offer in-person (the form never presents it).
+  const pref = String(cf.consultation_preference || "").trim();
+  if (pref) {
+    const isMessageBased = /message/i.test(pref);
+    if (isMessageBased) {
+      lines.push(`- consult format (ALREADY CHOSEN on the form): message-based / async text — there is NO live call.`);
+      lines.push(
+        "- ⚠️ This is a MESSAGE-BASED consult: do NOT ask online vs in-person, do NOT fetch time slots, do NOT book a calendar hold. Move toward the $100 refundable deposit and use send_deposit_link (NOT create_hold_with_deposit_link). The consult happens over text."
+      );
+    } else {
+      lines.push(`- consult format (ALREADY CHOSEN on the form): ${pref} → treat as an ONLINE video consult.`);
+      lines.push(
+        "- The lead already picked a video consult on the form. Do NOT ask online vs in-person — go straight to offering video times. NEVER offer in-person (the form doesn't offer it)."
+      );
+    }
   }
   if (extra.faqMode) lines.push("- deposit already paid → FAQ MODE: be calm/brief, don't push or sell.");
   if (extra.formOpener) {

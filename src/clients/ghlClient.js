@@ -154,6 +154,9 @@ const CUSTOM_FIELD_MAP = {
   budget_range: "8onn1kDyobzZUP1dR7Q9",
   tattoo_photo_description: "vmE7glOhOfrSu5rDrjAA",
   consultation_type: "gM2PVo90yNBDHekV5G64",
+  // Raw consult-method choice from the widget (Video Call w/ Coordinator | Translator,
+  // or Message-Based Consultation). Stored so the v2 bot doesn't re-ask. Created 2026-06-03.
+  consultation_preference: "Rr8j1rOdJHN7FrRFvxvi",
 };
 
 // 🔹 Reverse mapping: GHL field ID -> friendly name

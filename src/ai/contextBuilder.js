@@ -25,6 +25,10 @@ function getGhlFieldIdMapping() {
         "ra4nk80wma8eqklcfxst": "how_soon_is_client_deciding",
         "qqdydmy1fnldidlcmnbc": "first_tattoo",
         "ptrjy8tbbjlnrwqepdnp": "tattoo_photo_description",
+        // Consult method already chosen on the web form (created 2026-06-03). Lets the v2 bot
+        // honor "Video Call w/ Coordinator | Translator" or "Message-Based Consultation" instead
+        // of re-asking online/in-person (the form never offers in-person).
+        "rr8j1rodjhn7frrfvxvi": "consultation_preference",
         // v2 funnel fields (created 2026-06-02). Without these, normalizeCustomFields can't
         // map the ID back to the friendly key, so v2 reads of funnel_status/etc. silently fail
         // (e.g. a backfilled paused_manual lead would read as unset → bot would wrongly engage).

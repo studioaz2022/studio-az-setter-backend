@@ -23,26 +23,70 @@ const { createDepositLinkForContact } = require("../../payments/squareClient");
 const { updateContact } = require("../../clients/ghlClient");
 const { handleHumanHandoff } = require("../../clients/aiSetterEventHandler");
 const { scheduleFollowup } = require("./followupScheduler");
+const { isAllowlistedTestPhone } = require("./botVersion");
+const { getArtistPreferenceFromContact } = require("../artistRouter");
 const {
   SYSTEM_FIELDS,
   TATTOO_FIELDS,
   FUNNEL_STATUSES,
   CALENDARS,
   IN_PERSON_CONSULTATION_CALENDARS,
+  GHL_USER_IDS,
   DEPOSIT_CONFIG,
 } = require("../../config/constants");
 
-// Active artists only (Claudia is a test account — excluded). Consult calendars by mode.
-const ACTIVE_CONSULT_CALENDARS = {
-  online: [
-    { artist: "Andrew", calendarId: CALENDARS.ANDREW_ONLINE },
-    { artist: "Joan", calendarId: CALENDARS.JOAN_ONLINE },
-  ],
-  in_person: [
-    { artist: "Andrew", calendarId: IN_PERSON_CONSULTATION_CALENDARS.ANDREW_IN_PERSON },
-    { artist: "Joan", calendarId: IN_PERSON_CONSULTATION_CALENDARS.JOAN_IN_PERSON },
-  ],
+// Per-artist consult calendars + the GHL user id to assign the appointment to, by mode.
+// Claudia is the TEST account: real leads never route to her, but the test-phone allowlist
+// (AI_BOT_V2_PHONES) does, so end-to-end tests don't clutter Andrew's/Joan's real calendars.
+const ARTIST_CONSULT = {
+  Andrew: { online: CALENDARS.ANDREW_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.ANDREW_IN_PERSON, userId: GHL_USER_IDS.ANDREW },
+  Joan: { online: CALENDARS.JOAN_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.JOAN_IN_PERSON, userId: GHL_USER_IDS.JOAN },
+  Claudia: { online: CALENDARS.CLAUDIA_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.CLAUDIA_IN_PERSON, userId: GHL_USER_IDS.CLAUDIA },
 };
+const ACTIVE_ARTISTS = ["Andrew", "Joan"]; // workload pool when the lead has no specific artist
+
+/** Match an artist string (any case) to a known consult artist key (Andrew/Joan/Claudia), or null. */
+function consultArtistKey(name) {
+  if (!name) return null;
+  const lc = String(name).trim().toLowerCase();
+  return Object.keys(ARTIST_CONSULT).find((k) => k.toLowerCase() === lc) || null;
+}
+
+/**
+ * Which artist calendar(s) to pull/book for this contact.
+ *   - test phone  → Claudia's test calendar only (keeps real calendars clean)
+ *   - explicit artist requested by the model → that artist
+ *   - else → the lead's chosen/assigned artist (inquired_technician / assigned_artist),
+ *            falling back to the active workload pool (Andrew + Joan)
+ * Returns [{ artist, calendarId, assignedUserId }].
+ */
+function resolveConsultTargets(ctx, requestedArtist, mode) {
+  const m = mode === "in_person" ? "in_person" : "online";
+  if (isAllowlistedTestPhone(ctx?.contact)) {
+    const c = ARTIST_CONSULT.Claudia;
+    return [{ artist: "Claudia", calendarId: c[m], assignedUserId: c.userId }];
+  }
+  let names;
+  const reqKey = consultArtistKey(requestedArtist);
+  if (requestedArtist && requestedArtist !== "any" && reqKey) {
+    names = [reqKey];
+  } else {
+    const prefKey = consultArtistKey(getArtistPreferenceFromContact(ctx?.contact));
+    names = prefKey && ACTIVE_ARTISTS.includes(prefKey) ? [prefKey] : ACTIVE_ARTISTS;
+  }
+  return names.map((n) => ({ artist: n, calendarId: ARTIST_CONSULT[n][m], assignedUserId: ARTIST_CONSULT[n].userId }));
+}
+
+/** Resolve the GHL user id to assign a hold to (test → Claudia; else artist or calendar match). */
+function resolveAssignedUserId(ctx, artist, calendarId) {
+  if (isAllowlistedTestPhone(ctx?.contact)) return GHL_USER_IDS.CLAUDIA;
+  const key = consultArtistKey(artist);
+  if (key) return ARTIST_CONSULT[key].userId;
+  for (const c of Object.values(ARTIST_CONSULT)) {
+    if (c.online === calendarId || c.in_person === calendarId) return c.userId;
+  }
+  return null;
+}
 
 const SLOT_LOOKAHEAD_DAYS = 14;
 const MAX_SLOTS_RETURNED = 5;
@@ -95,6 +139,12 @@ const TOOL_DEFINITIONS = [
       },
       required: ["start_time", "end_time", "calendar_id"],
     },
+  },
+  {
+    name: "send_deposit_link",
+    description:
+      "Generate the $100 refundable deposit link WITHOUT booking a calendar time. Use this ONLY for a MESSAGE-BASED (async text) consultation — there's no scheduled call, so the lead just pays the deposit and the consult happens over text. For a VIDEO consult with a specific time, use create_hold_with_deposit_link instead. Never claim a human will send the link — this tool returns the real link for you to send.",
+    input_schema: { type: "object", properties: {} },
   },
   {
     name: "cancel_appointment",
@@ -192,18 +242,17 @@ function readHoldId(ctx) {
 const HANDLERS = {
   async fetch_available_slots(input, ctx) {
     const mode = input.consult_type === "in_person" ? "in_person" : "online";
-    const wanted = input.artist && input.artist !== "any" ? input.artist : null;
-    const calendars = ACTIVE_CONSULT_CALENDARS[mode].filter((c) => !wanted || c.artist === wanted);
+    const targets = resolveConsultTargets(ctx, input.artist, mode);
     const start = new Date();
     const end = new Date(Date.now() + SLOT_LOOKAHEAD_DAYS * 86400000);
 
     const all = [];
-    for (const cal of calendars) {
+    for (const t of targets) {
       try {
-        const slots = await getCalendarFreeSlots(cal.calendarId, start, end);
-        for (const s of slots) all.push({ ...s, artist: cal.artist });
+        const slots = await getCalendarFreeSlots(t.calendarId, start, end);
+        for (const s of slots) all.push({ ...s, artist: t.artist });
       } catch (err) {
-        console.error(`[tool fetch_available_slots] ${cal.artist} failed:`, err.message);
+        console.error(`[tool fetch_available_slots] ${t.artist} failed:`, err.message);
       }
     }
     all.sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
@@ -219,10 +268,19 @@ const HANDLERS = {
   },
 
   async create_hold_with_deposit_link(input, ctx) {
-    const { start_time, end_time, calendar_id, artist = null, consult_type = "online" } = input;
-    if (!start_time || !end_time || !calendar_id) {
-      return { ok: false, error: "start_time, end_time, and calendar_id are required" };
+    let { start_time, end_time, calendar_id, artist = null, consult_type = "online" } = input;
+    if (!start_time || !end_time) {
+      return { ok: false, error: "start_time and end_time are required" };
     }
+    // Test phones always book onto Claudia's test calendar, even if the model echoes back a
+    // real-artist calendar id from fetch_available_slots — keeps Andrew/Joan calendars clean.
+    if (isAllowlistedTestPhone(ctx?.contact)) {
+      const m = consult_type === "in_person" ? "in_person" : "online";
+      calendar_id = ARTIST_CONSULT.Claudia[m];
+      artist = "Claudia";
+    }
+    if (!calendar_id) return { ok: false, error: "calendar_id is required" };
+    const assignedUserId = resolveAssignedUserId(ctx, artist, calendar_id);
     // 1. Tentative hold (status "new").
     const appt = await createAppointment({
       calendarId: calendar_id,
@@ -231,6 +289,7 @@ const HANDLERS = {
       endTime: end_time,
       title: "Tattoo Consultation",
       appointmentStatus: "new",
+      assignedUserId,
     });
     const holdId = appt?.id || appt?.appointment?.id || appt?.appointmentId || null;
 
@@ -268,6 +327,26 @@ const HANDLERS = {
       slot_display: display,
       hold_minutes: HOLD_MINUTES,
     };
+  },
+
+  async send_deposit_link(input, ctx) {
+    // Deposit-only path for message-based (async) consults — no calendar slot/hold.
+    const deposit = await createDepositLinkForContact({
+      contactId: ctx.contactId,
+      amountCents: DEPOSIT_CONFIG.DEFAULT_AMOUNT_CENTS,
+      paymentType: "deposit",
+      language: ctx.language || "en",
+      contactName: ctx.contactName || null,
+      artistName: null,
+    });
+    await updateContact(ctx.contactId, {
+      customField: {
+        [SYSTEM_FIELDS.DEPOSIT_LINK_URL]: deposit.url,
+        [SYSTEM_FIELDS.DEPOSIT_LINK_SENT]: "true",
+        [SYSTEM_FIELDS.PENDING_SLOT_MODE]: "message",
+      },
+    });
+    return { ok: true, deposit_url: deposit.url, consult_mode: "message" };
   },
 
   async cancel_appointment(input, ctx) {
@@ -345,17 +424,21 @@ const HANDLERS = {
 const DRY_RUN = {
   fetch_available_slots: (input) => {
     const mode = input.consult_type === "in_person" ? "in_person" : "online";
+    // Echo the requested artist so dry-run fidelity matches production routing (the real
+    // handler returns the lead's artist via resolveConsultTargets, not a hardcoded one).
+    const artist = input.artist && input.artist !== "any" ? input.artist : "Joan";
     const base = Date.parse("2026-06-05T15:00:00Z");
     const slots = [0, 1, 2].map((i) => {
       const st = new Date(base + i * 86400000).toISOString();
       const et = new Date(base + i * 86400000 + 30 * 60000).toISOString();
-      return { start_time: st, end_time: et, calendar_id: "CAL_ANDREW", artist: "Andrew", consult_type: mode, display: formatSlotDisplay(st) };
+      return { start_time: st, end_time: et, calendar_id: `CAL_${artist.toUpperCase()}`, artist, consult_type: mode, display: formatSlotDisplay(st) };
     });
     return { ok: true, count: slots.length, slots };
   },
   create_hold_with_deposit_link: (input) => ({
     ok: true, hold_id: "HOLD_TEST_123", deposit_url: "https://squareup.com/checkout/TEST", slot_display: formatSlotDisplay(input.start_time), hold_minutes: HOLD_MINUTES,
   }),
+  send_deposit_link: () => ({ ok: true, deposit_url: "https://squareup.com/checkout/TEST", consult_mode: "message" }),
   cancel_appointment: (input) => ({ ok: true, cancelled_appointment_id: input.appointment_id || "HOLD_TEST_123" }),
   reschedule_appointment: (input) => ({ ok: true, rescheduled_appointment_id: "HOLD_TEST_123", new_slot_display: formatSlotDisplay(input.start_time) }),
   update_lead_fields: (input) => ({ ok: true, saved: Object.keys(input.fields || {}).length, ignored: [] }),
@@ -397,4 +480,4 @@ function getActiveToolDefinitions() {
   return TOOL_DEFINITIONS.filter((t) => followupsOn || t.name !== "schedule_followup");
 }
 
-module.exports = { TOOL_DEFINITIONS, getActiveToolDefinitions, executeTool, HANDLERS, ACTIVE_CONSULT_CALENDARS, LEAD_FIELD_MAP };
+module.exports = { TOOL_DEFINITIONS, getActiveToolDefinitions, executeTool, HANDLERS, ARTIST_CONSULT, resolveConsultTargets, LEAD_FIELD_MAP };
