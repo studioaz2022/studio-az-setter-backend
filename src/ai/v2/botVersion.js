@@ -12,8 +12,8 @@
 // The phone allowlist exists so a specific test number routes to v2 from the VERY FIRST
 // touch (incl. a brand-new contact created by the consultation form, which can't carry the
 // per-contact field yet) without flipping anyone else. Matching is format-agnostic: both
-// sides are reduced to their last 10 digits, so "+16123827435", "(612) 382-7435",
-// "16123827435", "6123827435" all match the same allowlist entry.
+// sides are reduced to their last 10 digits, so "+15551234567", "(555) 123-4567",
+// "15551234567", "5551234567" all match the same allowlist entry.
 //
 // This is intentionally dormant during Phase 0: the global default is "v1" and
 // no contact carries the override, so v2 is never selected until we wire the
