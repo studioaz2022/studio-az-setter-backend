@@ -26,6 +26,7 @@ const {
   GHL_USER_IDS,
   CONSULTATION_CALENDARS,
   APPOINTMENT_STATUS,
+  GHL_CUSTOM_FIELD_IDS,
 } = require("../config/constants");
 const { refundPayment } = require("../payments/squareClient");
 const { recordTransaction } = require("../clients/financialTracking");
@@ -453,8 +454,19 @@ async function createRefundRequest(contactId) {
   }
 
   const firstName = contact.firstName || contact.first_name || "there";
-  const cf = contact.customField || contact.customFields || {};
-  const langPref = cf.language_preference || "english";
+  // `getContact` normalizes customField into an object keyed by field *ID*
+  // (not field name), e.g. { "ETxasC6QlyxRaKU18kbz": "Spanish" }. Reading by
+  // name (`cf.language_preference`) always returned undefined, so every
+  // Spanish-preferred contact silently fell through to English. Read by ID.
+  const cf = contact.customField || {};
+  let langPref = cf[GHL_CUSTOM_FIELD_IDS.LANGUAGE_PREFERENCE];
+  // Fallback: if customField is the raw v2 array (un-normalized), find by id.
+  if (langPref == null && Array.isArray(contact.customFields)) {
+    langPref = contact.customFields.find(
+      (f) => f.id === GHL_CUSTOM_FIELD_IDS.LANGUAGE_PREFERENCE
+    )?.value;
+  }
+  langPref = langPref || "english";
   const isSpanish =
     String(langPref).toLowerCase().includes("span") ||
     String(langPref).toLowerCase() === "es";
