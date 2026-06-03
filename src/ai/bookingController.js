@@ -1432,6 +1432,186 @@ async function createConsultAppointment({
 }
 
 /**
+ * Owner-mirrored manual consult booking (iOS admin flow).
+ *
+ * Used when an admin/owner (Maria or Lionel) manually books an ONLINE consult for an
+ * already-deposited tattoo lead from the iOS app. Creates TWO paired appointments that
+ * share one PairingKey so the existing /ghl/appointment-webhook keeps them in sync on
+ * cancel / reschedule (no new sync code needed — the admins' online calendars are already
+ * the webhook's sibling set):
+ *   1. The artist's online consult appointment (assigned to the tattoo artist).
+ *   2. An owner "mirror" appointment on the signed-in admin's online calendar (Maria/Lionel),
+ *      assigned to that admin — so the consult lands on the booking admin's calendar too.
+ *
+ * Deposit is assumed already paid in this flow, so both appointments are created CONFIRMED
+ * and no hold message is sent (unlike createConsultAppointment's AI flow).
+ *
+ * @param {Object} p
+ * @param {string}  p.contactId        - GHL contact id of the lead
+ * @param {string}  p.artistCalendarId - artist's ONLINE consult calendar id
+ * @param {string}  p.artistUserId     - artist's GHL user id (assignee of the artist appt)
+ * @param {string}  p.ownerUserId      - signed-in admin's GHL user id (Maria or Lionel)
+ * @param {string}  p.startTime        - ISO datetime
+ * @param {string}  p.endTime          - ISO datetime
+ * @param {string}  [p.title]          - appointment title (defaults to "Online Consultation")
+ * @param {string}  [p.notes]          - optional admin notes prepended to the description
+ * @param {boolean} [p.createMeet=true]- create a Google Meet + invite client/artist/owner
+ * @returns {Promise<{pairingKey:string, artistAppointment:Object, ownerAppointment:Object, meetUrl:(string|null)}>}
+ */
+async function bookOwnerMirroredConsult({
+  contactId,
+  artistCalendarId,
+  artistUserId,
+  ownerUserId,
+  startTime,
+  endTime,
+  title,
+  notes,
+  createMeet = true,
+}) {
+  // Map the signed-in admin's user id to their online mirror calendar.
+  const OWNER_MIRROR = {
+    [TRANSLATOR_USER_IDS.LIONEL]: { calendarId: TRANSLATOR_CALENDARS.LIONEL_ONLINE, name: "Lionel" },
+    [TRANSLATOR_USER_IDS.MARIA]: { calendarId: TRANSLATOR_CALENDARS.MARIA_ONLINE, name: "Maria" },
+  };
+
+  if (!contactId) throw new Error("contactId is required");
+  if (!artistCalendarId) throw new Error("artistCalendarId is required");
+  if (!artistUserId) throw new Error("artistUserId is required");
+  if (!startTime || !endTime) throw new Error("startTime and endTime are required");
+
+  const owner = OWNER_MIRROR[ownerUserId];
+  if (!owner) {
+    throw new Error(
+      `ownerUserId "${ownerUserId}" is not a mirror-capable admin (only Maria or Lionel)`
+    );
+  }
+  if (owner.calendarId === artistCalendarId) {
+    throw new Error("Owner mirror calendar cannot be the same as the artist calendar");
+  }
+
+  // Fetch contact for the client name + email (best-effort; booking proceeds without it).
+  let contact = null;
+  try {
+    contact = await getContact(contactId);
+  } catch (err) {
+    console.warn("⚠️ [owner-mirror] Failed to fetch contact (continuing):", err.message || err);
+  }
+  const clientName =
+    [contact?.firstName || contact?.first_name, contact?.lastName || contact?.last_name]
+      .filter(Boolean)
+      .join(" ")
+      .trim() || "Client";
+
+  const apptTitle = title || "Online Consultation";
+  const pairingKey = generatePairingKey();
+
+  // Online consult: spin up a Google Meet and invite client + artist + owner.
+  let meetUrl = null;
+  if (createMeet) {
+    try {
+      const attendeeEmails = [];
+      if (contact?.email) attendeeEmails.push(contact.email);
+      if (GHL_USER_EMAILS[artistUserId]) attendeeEmails.push(GHL_USER_EMAILS[artistUserId]);
+      if (GHL_USER_EMAILS[ownerUserId]) attendeeEmails.push(GHL_USER_EMAILS[ownerUserId]);
+
+      const meetResp = await createGoogleMeet({
+        summary: apptTitle,
+        description: `Consultation for ${clientName}`,
+        startISO: startTime,
+        endISO: endTime,
+        attendees: attendeeEmails,
+      });
+      meetUrl = meetResp.meetUrl || meetResp.htmlLink || null;
+      console.log("📹 [owner-mirror] Google Meet created:", meetUrl);
+
+      if (meetUrl) {
+        try {
+          await subscribeToMeetSpace(meetUrl, contactId, {
+            calendarEventTitle: apptTitle,
+            scheduledStart: startTime,
+            scheduledEnd: endTime,
+          });
+        } catch (subErr) {
+          console.warn("⚠️ [owner-mirror] Meet space subscribe failed (non-blocking):", subErr.message);
+        }
+      }
+    } catch (meetErr) {
+      console.warn(
+        "⚠️ [owner-mirror] Failed to create Google Meet (continuing without link):",
+        meetErr.response?.data || meetErr.message
+      );
+    }
+  }
+
+  // Online meeting location config (mirrors createConsultAppointment's online branch).
+  const meetingLocationType = "custom";
+  const meetingLocationId = "custom_0";
+  const address = meetUrl || "Online consult";
+
+  // Build a shared description carrying the admin note, Meet link, and the PairingKey
+  // (the webhook extracts PairingKey from notes to find and sync the sibling).
+  const descParts = [`Consultation for ${clientName}`];
+  if (notes && notes.trim()) descParts.push(notes.trim());
+  if (meetUrl) descParts.push(`Google Meet: ${meetUrl}\nPlease join a few minutes early.`);
+  descParts.push(pairingKey);
+  const description = descParts.join("\n\n");
+
+  const appointmentStatus = APPOINTMENT_STATUS.CONFIRMED;
+
+  // 1) Artist appointment (assigned to the tattoo artist).
+  const artistAppointment = await createAppointment({
+    calendarId: artistCalendarId,
+    contactId,
+    startTime,
+    endTime,
+    title: apptTitle,
+    description,
+    appointmentStatus,
+    assignedUserId: artistUserId,
+    address,
+    meetingLocationType,
+    meetingLocationId,
+  });
+
+  // 2) Owner mirror appointment (assigned to the signed-in admin).
+  let ownerAppointment = null;
+  try {
+    ownerAppointment = await createAppointment({
+      calendarId: owner.calendarId,
+      contactId,
+      startTime,
+      endTime,
+      title: apptTitle,
+      description,
+      appointmentStatus,
+      assignedUserId: ownerUserId,
+      address,
+      meetingLocationType,
+      meetingLocationId,
+    });
+  } catch (mirrorErr) {
+    // Don't let a mirror failure orphan the artist appointment silently — surface it.
+    console.error(
+      "❌ [owner-mirror] Artist appointment created but owner mirror FAILED:",
+      mirrorErr.response?.data || mirrorErr.message
+    );
+    throw new Error(
+      `Artist appointment ${artistAppointment?.id} created, but owner mirror failed: ${mirrorErr.message}`
+    );
+  }
+
+  console.log("✅ [owner-mirror] Paired consult created:", {
+    pairingKey,
+    artistAppointmentId: artistAppointment?.id,
+    ownerAppointmentId: ownerAppointment?.id,
+    owner: owner.name,
+  });
+
+  return { pairingKey, artistAppointment, ownerAppointment, meetUrl };
+}
+
+/**
  * Check if user's message indicates they're selecting a time slot
  * This is a heuristic check - looks for patterns like "option 1", day names, times, etc.
  */
@@ -1460,6 +1640,7 @@ function isTimeSelection(messageText, availableSlots = []) {
 module.exports = {
   handleAppointmentOffer,
   createConsultAppointment,
+  bookOwnerMirroredConsult,
   parseTimeSelection,
   isTimeSelection,
   generateSuggestedSlots,

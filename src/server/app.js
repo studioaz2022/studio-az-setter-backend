@@ -77,7 +77,7 @@ const {
   ARTIST_NAME_TO_ID,
   ARTIST_ASSIGNED_USER_IDS,
 } = require("../config/constants");
-const { formatSlotDisplay } = require("../ai/bookingController");
+const { formatSlotDisplay, bookOwnerMirroredConsult } = require("../ai/bookingController");
 const {
   listAppointmentsForContact,
   updateAppointmentStatus,
@@ -1787,7 +1787,12 @@ function createApp() {
         const isTranslatorCalendar = translatorCalendarSet.has(calendarId);
         const isConsultationCalendar = consultationCalendarSet.has(calendarId);
 
-        // Handle consultation calendar appointments - check for consultation ended
+        // Handle consultation calendar appointments - schedule post-consult quote verification.
+        // NOTE: artist ONLINE calendars are ALSO in CONSULTATION_CALENDARS. We must NOT early-return
+        // for those, or paired-appointment cancel/reschedule sync (below) never fires from the artist
+        // side — e.g. when the CONTACT cancels the consult. So: run the consultation handler, then
+        // fall through to pairing sync whenever this is also an artist/translator calendar. Pure
+        // consultation calendars (e.g. in-person) have no sibling and return below.
         if (isConsultationCalendar) {
           console.log("📋 Consultation calendar detected, checking for consultation end...");
           await handleConsultationAppointment(contactId, {
@@ -1798,11 +1803,10 @@ function createApp() {
             rawStatus,
             isCancelled,
           });
-          return;
         }
 
         if (!isArtistCalendar && !isTranslatorCalendar) {
-          console.log("ℹ️ Calendar not in artist, translator, or consultation list, skipping sync");
+          console.log("ℹ️ Calendar not in artist or translator list, skipping pairing sync");
           return;
         }
 
@@ -6373,6 +6377,78 @@ function createApp() {
       return res.json({ success: true, ...result });
     } catch (err) {
       return sendFillError(res, err, "POST fill-token");
+    }
+  });
+
+  // POST /api/appointments/book-with-mirror
+  // iOS manual booking: an admin/owner (Maria or Lionel) books an ONLINE consult for a
+  // deposited tattoo lead. Creates the artist's appointment AND a paired "mirror" on the
+  // signed-in admin's online calendar so the consult lands on both calendars. The two share
+  // one PairingKey, so /ghl/appointment-webhook keeps them in sync on cancel / reschedule.
+  // Internal-only (x-internal-key, same gate iOS already uses for fill-token).
+  // Body: { contactId, artistCalendarId, artistUserId, ownerUserId, startTime, endTime, title?, notes?, createMeet? }
+  app.post("/api/appointments/book-with-mirror", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const {
+        contactId,
+        artistCalendarId,
+        artistUserId,
+        ownerUserId,
+        startTime,
+        endTime,
+        title,
+        notes,
+        createMeet,
+      } = req.body || {};
+
+      if (!contactId || !artistCalendarId || !artistUserId || !ownerUserId || !startTime || !endTime) {
+        return res.status(400).json({
+          success: false,
+          error:
+            "contactId, artistCalendarId, artistUserId, ownerUserId, startTime, and endTime are required",
+        });
+      }
+
+      // Guardrail: artist appointment must be on a known artist ONLINE calendar.
+      const artistOnlineCalendars = new Set(Object.values(CALENDARS).filter(Boolean));
+      if (!artistOnlineCalendars.has(artistCalendarId)) {
+        return res.status(400).json({
+          success: false,
+          error: `artistCalendarId "${artistCalendarId}" is not a known artist online calendar`,
+        });
+      }
+
+      // Guardrail: only Maria or Lionel can be the mirror owner.
+      if (ownerUserId !== TRANSLATOR_USER_IDS.LIONEL && ownerUserId !== TRANSLATOR_USER_IDS.MARIA) {
+        return res.status(400).json({
+          success: false,
+          error: "ownerUserId must be Maria or Lionel (the mirror-capable admins)",
+        });
+      }
+
+      const result = await bookOwnerMirroredConsult({
+        contactId,
+        artistCalendarId,
+        artistUserId,
+        ownerUserId,
+        startTime,
+        endTime,
+        title,
+        notes,
+        createMeet: createMeet !== false,
+      });
+
+      return res.json({
+        success: true,
+        pairingKey: result.pairingKey,
+        artistAppointmentId: result.artistAppointment?.id || null,
+        ownerAppointmentId: result.ownerAppointment?.id || null,
+        meetUrl: result.meetUrl || null,
+      });
+    } catch (err) {
+      console.error("❌ [book-with-mirror] error:", err.message || err);
+      return res.status(500).json({ success: false, error: err.message });
     }
   });
 
