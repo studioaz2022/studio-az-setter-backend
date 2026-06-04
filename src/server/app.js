@@ -10126,13 +10126,34 @@ function createApp() {
         const isBlockRow = (r) =>
           r.calendar_id === BLOCK_CALENDAR_ID || BLOCK_ID_RE.test(r.id || "");
 
+        // Drop GHL tombstone rows BEFORE rendering. When an appt is
+        // rescheduled or replaced via the GHL widget the original row
+        // is kept with status='invalid' — a forensic artifact, not a
+        // real booking. The frontend's only "dim me" set is
+        // {cancelled, noshow}; an invalid row therefore rendered as a
+        // normal full-opacity card and stacked on top of (or under)
+        // the real replacement booking that occupied the same slot.
+        // User-found bug 2026-06-04: Lionel's 3pm on 2026-06-03 had
+        // an invalid Sam Stevens row at the same slot as the real
+        // Eliel booking; the dashboard showed Sam Stevens instead of
+        // Eliel. Existing analytics codepaths already treat invalid
+        // as filtered-out (see status check elsewhere in this file);
+        // the schedule endpoint is the inconsistent one.
+        // We KEEP cancelled/noshow visible (the desk has explicitly
+        // asked to see them dimmed) — invalid is different because
+        // it's GHL's "this row is gone" tombstone, not a meaningful
+        // operational decision the desk made.
+        const filteredRows = (rows || []).filter(
+          (r) => (r.status || "").toLowerCase() !== "invalid"
+        );
+
         // Group by staff; collect off-roster assignees. Blocks stay on
         // their staffer's column (a barber's break belongs there) but are
         // tagged isBlock for the UI.
         const byStaff = new Map();
         const offRoster = new Map();
         let blockCount = 0;
-        for (const r of rows || []) {
+        for (const r of filteredRows) {
           if (isBlockRow(r)) {
             r.isBlock = true;
             blockCount++;
@@ -10166,7 +10187,7 @@ function createApp() {
         // day legitimately has old per-day timestamps even when the
         // pipeline is perfectly healthy.
         let dayNewest = null;
-        for (const r of rows || []) {
+        for (const r of filteredRows) {
           const t = r.ghl_updated_at || r.updated_at;
           if (t && (!dayNewest || new Date(t) > new Date(dayNewest))) dayNewest = t;
         }
@@ -11316,7 +11337,14 @@ function createApp() {
         const busy = (rows || [])
           .filter((r) => {
             const s = (r.status || "").toLowerCase();
-            return s !== "cancelled" && s !== "canceled" && s !== "noshow";
+            // "invalid" = GHL tombstone for a superseded/replaced row.
+            // It does NOT occupy the slot anymore — same as cancelled.
+            return (
+              s !== "cancelled" &&
+              s !== "canceled" &&
+              s !== "noshow" &&
+              s !== "invalid"
+            );
           })
           .map((r) => ({
             id: r.id,
@@ -11742,7 +11770,15 @@ function createApp() {
         }
         const conflict = (busyRows || []).find((r) => {
           const s = (r.status || "").toLowerCase();
-          if (s === "cancelled" || s === "canceled" || s === "noshow") return false;
+          // Same status set as /availability — "invalid" is a GHL
+          // tombstone and should not block a real booking attempt.
+          if (
+            s === "cancelled" ||
+            s === "canceled" ||
+            s === "noshow" ||
+            s === "invalid"
+          )
+            return false;
           const rs = new Date(r.start_time).getTime();
           const re = new Date(r.end_time || r.start_time).getTime();
           return !(endMs <= rs || startMs >= re);
