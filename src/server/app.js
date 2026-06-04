@@ -10165,6 +10165,90 @@ function createApp() {
           bucket.get(uid).push(r);
         }
 
+        // Slot history collapse (user-found 2026-06-04). Pattern:
+        //   Client A books → A cancels → Client B books into the
+        //   freed slot. Both rows live in the cache at the same
+        //   start_time for the same barber. Default render order
+        //   put the cancelled row on top of the confirmed row,
+        //   blocking clicks on the active appt. Per user choice:
+        //   the grid should show ONE card per slot (the active one)
+        //   with prior cancelled/no-show rows folded into a
+        //   `slotHistory[]` field exposed for The Slip.
+        // Rules:
+        //   - Group by EXACT start_time within a staff's column.
+        //   - If a group has >=1 active row AND >=1 dimmed (cancelled/
+        //     canceled/noshow) row → the active row "absorbs" the
+        //     dimmed siblings as slotHistory. Dimmed siblings disappear
+        //     from the column.
+        //   - If a group has >=2 active rows → leave alone (a real
+        //     double-book — both should be visible). Vanishingly rare
+        //     given our pre-write guard, but not impossible.
+        //   - If a group has ONLY dimmed rows (no active replacement)
+        //     → leave them all on the grid so the desk still sees
+        //     the cancellation history.
+        //   - Blocks (isBlock) are independent of this collapse —
+        //     they don't represent client bookings.
+        const DIMMED = new Set(["cancelled", "canceled", "noshow"]);
+        const collapseSlotHistory = (appts) => {
+          const groups = new Map();
+          for (const a of appts) {
+            // Skip blocks from grouping — they're not client bookings.
+            if (a.isBlock) continue;
+            const key = a.start_time || "";
+            if (!groups.has(key)) groups.set(key, []);
+            groups.get(key).push(a);
+          }
+          const toAbsorb = new Set(); // ids to drop from main list
+          for (const [, group] of groups) {
+            if (group.length < 2) continue;
+            const dimmed = group.filter((g) =>
+              DIMMED.has((g.status || "").toLowerCase())
+            );
+            const active = group.filter(
+              (g) => !DIMMED.has((g.status || "").toLowerCase())
+            );
+            // Need at least one active + one dimmed to collapse.
+            if (active.length === 0 || dimmed.length === 0) continue;
+            // Pick the "primary" active row to attach history to.
+            // If multiple actives, the newest by ghl_updated_at wins
+            // (most recent booking is what the desk most likely cares
+            // about); ties broken by id ASC for determinism.
+            const primary = active
+              .slice()
+              .sort((x, y) => {
+                const tx = x.ghl_updated_at || x.updated_at || "";
+                const ty = y.ghl_updated_at || y.updated_at || "";
+                if (tx === ty) return (x.id || "").localeCompare(y.id || "");
+                return ty.localeCompare(tx);
+              })[0];
+            primary.slotHistory = dimmed
+              .slice()
+              .sort((x, y) => {
+                const tx = x.ghl_updated_at || x.updated_at || "";
+                const ty = y.ghl_updated_at || y.updated_at || "";
+                return ty.localeCompare(tx); // newest cancellation first
+              })
+              .map((d) => ({
+                id: d.id,
+                title: d.title,
+                status: d.status,
+                start_time: d.start_time,
+                end_time: d.end_time,
+                contact_id: d.contact_id,
+                calendar_id: d.calendar_id,
+                ghl_updated_at: d.ghl_updated_at,
+              }));
+            for (const d of dimmed) toAbsorb.add(d.id);
+          }
+          return appts.filter((a) => !toAbsorb.has(a.id));
+        };
+
+        // Apply the collapse to every staff column.
+        for (const [uid, appts] of byStaff)
+          byStaff.set(uid, collapseSlotHistory(appts));
+        for (const [uid, appts] of offRoster)
+          offRoster.set(uid, collapseSlotHistory(appts));
+
         const staff = resolved.roster.map((m) => ({
           ghlUserId: m.ghlUserId,
           name: m.name,
