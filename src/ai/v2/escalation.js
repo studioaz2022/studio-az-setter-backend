@@ -42,6 +42,18 @@ function isObjectionish(text) {
   return !!detectObjectionV2(text) || PUSHBACK_RE.test(text);
 }
 
+// A specific clock time in the BOT's OWN prior messages means we've reached the scheduling close
+// (a slot has been offered, and what follows is confirming + booking it). That's the highest-stakes
+// moment and the one Haiku keeps fumbling — it understands the lead fine but fails to fire the
+// create_hold tool and loops on "which day?" So we route the close to Sonnet. This is a routing
+// signal that looks ONLY at the bot's own output (matches en "10:00 AM" / es "10:00 a. m."); it does
+// NOT interpret the lead's words, so it adds no conversational rules.
+const TIME_OFFERED_RE = /\b\d{1,2}(:\d{2})?\s*[ap]\.?\s?m\b/i;
+
+function botOfferedTime(history = []) {
+  return (history || []).some((m) => m.role === "assistant" && TIME_OFFERED_RE.test(m.content || ""));
+}
+
 /**
  * Count how many of the lead's (user) turns look like objections/pushback. 3+ ⇒ circling.
  * @param {Array} history normalized turns ({role, content})
@@ -63,7 +75,7 @@ function countObjectionTurns(history = [], latestMessageText = "") {
  * @param {Array}  [args.history] prior normalized turns
  * @returns {{escalate:boolean, model:string, reason:string|null, objectionId:string|null}}
  */
-function decideModel({ latestMessageText = "", history = [] } = {}) {
+function decideModel({ latestMessageText = "", history = [], faqMode = false } = {}) {
   const objection = detectObjectionV2(latestMessageText);
   const objectionId = objection ? objection.id : null;
 
@@ -71,10 +83,15 @@ function decideModel({ latestMessageText = "", history = [] } = {}) {
   const objectionTurns = countObjectionTurns(history, latestMessageText);
   const circling = objectionTurns >= 3;
 
+  // Scheduling close: the bot has already put a specific time on the table and the deposit isn't
+  // paid yet → route the confirm-and-book turns to Sonnet. (Skip in faqMode — the sale's done.)
+  const schedulingClose = !faqMode && botOfferedTime(history);
+
   let reason = null;
   if (objection) reason = `objection:${objectionId}`;
   else if (PUSHBACK_RE.test(latestMessageText)) reason = "pushback";
   if (circling) reason = reason ? `${reason}+circling` : "circling";
+  if (schedulingClose) reason = reason ? `${reason}+scheduling_close` : "scheduling_close";
 
   const escalate = !!reason;
   return {
@@ -85,4 +102,4 @@ function decideModel({ latestMessageText = "", history = [] } = {}) {
   };
 }
 
-module.exports = { decideModel, isObjectionish, countObjectionTurns, PUSHBACK_RE };
+module.exports = { decideModel, isObjectionish, countObjectionTurns, botOfferedTime, PUSHBACK_RE };

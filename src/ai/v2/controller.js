@@ -210,7 +210,7 @@ async function handleInboundMessage({
   if (!messages.length) throw new Error("no usable messages after sanitize");
 
   // Escalation: hard turns (objection / pushback / circling) go to Sonnet, else Haiku.
-  const escalation = decideModel({ latestMessageText, history: normalizedHistory });
+  const escalation = decideModel({ latestMessageText, history: normalizedHistory, faqMode });
   const model = forceModel || escalation.model;
 
   // System = static cached prefix (system prompt + objection principles) + dynamic
