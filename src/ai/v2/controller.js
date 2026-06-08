@@ -117,14 +117,14 @@ function buildContextBlock(contact = {}, extra = {}) {
     } else {
       lines.push(`- consult format (ALREADY CHOSEN on the form): ${pref} → treat as an ONLINE video consult.`);
       lines.push(
-        "- The lead already picked a video consult on the form. Do NOT ask online vs in-person — go straight to offering video times. NEVER offer in-person (the form doesn't offer it)."
+        "- The lead already picked a video consult on the form. Do NOT ask online vs in-person — go straight into scheduling it (follow the Scheduling flow: ask what time of day works FIRST, don't lead with a list of dated times). NEVER offer in-person (the form doesn't offer it)."
       );
     }
   }
   if (extra.faqMode) lines.push("- deposit already paid → FAQ MODE: be calm/brief, don't push or sell.");
   if (extra.formOpener) {
     lines.push(
-      "- ⚡ THIS LEAD JUST SUBMITTED THE CONSULTATION FORM and has NOT texted yet. The user turn is a system placeholder, not their words. Write a warm FIRST outreach message: greet them by name, reference their tattoo idea from the brief above, and move toward booking a paid consult. Do NOT reply as if answering a question, and do NOT ask them to repeat anything already in the brief."
+      "- ⚡ THIS LEAD JUST SUBMITTED THE CONSULTATION FORM and has NOT texted yet. The user turn is a system placeholder, not their words. Write a warm FIRST outreach message: greet them by name, reference their tattoo idea from the brief above, and move toward booking a paid consult. Do NOT reply as if answering a question, and do NOT ask them to repeat anything already in the brief. For a video consult, do NOT list specific times/dates in this first message and do NOT call fetch_available_slots yet — greet, reference their idea, briefly frame the $100 refundable video consult, and ask what time of day generally works (mornings or afternoons). Offer real times only AFTER they answer."
     );
   }
   return lines.length > 1 ? lines.join("\n") : null;
