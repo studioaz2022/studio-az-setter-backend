@@ -68,16 +68,6 @@ const BARBER_DATA = [
     },
   },
   {
-    name: 'Albe Herrera',
-    ghlUserId: 'm0i0Q9vfa2YTmxLrrriK',
-    photoUrl: 'https://storage.googleapis.com/msgsndr/GLRkNAxfPtWTqTiN83xj/media/674e5a20d9a12ed259a96d7a.jpeg',
-    calendars: {
-      haircut: 'h9VQL30IBqr6TTiKwAQm',
-      haircut_beard: 'NZSQNzPM10Fe6mUuJuyU',
-      beard_trim: 'xLjnOmLqToiknndXnvbk',
-    },
-  },
-  {
     name: 'Liam Meagher',
     ghlUserId: 'GBzpanPloybTcnPEIzpE',
     photoUrl: 'https://storage.googleapis.com/msgsndr/GLRkNAxfPtWTqTiN83xj/media/67a460d2d78c08132ea508a1.jpeg',

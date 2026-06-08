@@ -19,7 +19,7 @@ const { BARBER_LOCATION_ID } = require("../src/config/kioskConfig");
   const ROSTER = new Set([
     "1kFG5FWdUDhXLUX46snG", "zKiZ5w3ImX0bA7zrFIZx", "XrbRTwVGMwgcGOgD2a5n",
     "sLkO5CwFrhdcM7EOtTvg", "47m7vgAy8cwELwCBE3LT", "Dm20lBxWvG393LUoxuEV",
-    "m0i0Q9vfa2YTmxLrrriK", "GBzpanPloybTcnPEIzpE", "F6m7GBKeyIRcehYkubfe",
+    "GBzpanPloybTcnPEIzpE", "F6m7GBKeyIRcehYkubfe",
   ]);
   const off = {};
   data.forEach((r) => {
