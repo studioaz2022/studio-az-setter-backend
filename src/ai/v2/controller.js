@@ -257,9 +257,18 @@ async function handleInboundMessage({
       toolTrace.push({ name: call.name, input: call.input, output: out });
       // Surface tool calls in the Render logs so a live tail can confirm tools fired
       // (e.g. fetch_available_slots → create_hold_with_deposit_link) and didn't error.
+      // Tagged with contactId so the decision trail is filterable per lead, and with a
+      // short result summary (slot count / hold id / deposit link) so a tail shows not just
+      // THAT a tool ran but WHAT it returned — the difference between "fetched 5 slots" and
+      // "booked hold abc123" when debugging why a booking did or didn't happen.
       if (!dryRun) {
         const inputStr = JSON.stringify(call.input || {});
-        console.log(`🔧 [v2 tool] ${call.name}(${inputStr.length > 160 ? inputStr.slice(0, 160) + "…" : inputStr}) -> ok=${out?.ok}${out?.error ? ` error=${out.error}` : ""}`);
+        let summary = `ok=${out?.ok}`;
+        if (out?.error) summary += ` error=${out.error}`;
+        if (Array.isArray(out?.slots)) summary += ` slots=${out.slots.length}${out.matched_preference === false ? " (no-match)" : ""}`;
+        if (out?.hold_id) summary += ` hold=${out.hold_id}`;
+        if (out?.deposit_url) summary += ` deposit_link✓`;
+        console.log(`🔧 [v2 tool] contact=${contactId || "?"} ${call.name}(${inputStr.length > 200 ? inputStr.slice(0, 200) + "…" : inputStr}) -> ${summary}`);
       }
       toolResults.push({
         type: "tool_result",
@@ -277,6 +286,14 @@ async function handleInboundMessage({
   const text = sanitizeOutput(result?.text || "");
   const rawBubbles = text.split(/\n\s*\n/).map((s) => sanitizeOutput(s.trim())).filter(Boolean);
   const bubbles = stripReasoningBubbles(rawBubbles);
+
+  // One-line per-turn decision summary (model + which tools fired this turn + bubble count) so a
+  // log tail tells the story of a turn at a glance — e.g. spotting a turn that re-fetched slots
+  // instead of booking, without correlating scattered lines by timestamp.
+  if (!dryRun) {
+    const toolsThisTurn = toolTrace.map((t) => t.name).join(",") || "none";
+    console.log(`🧭 [v2 turn] contact=${contactId || "?"} model=${result?.model || model} tools=[${toolsThisTurn}] bubbles=${bubbles.length}`);
+  }
 
   // Log detected objections for the Phase 6 tuning loop (best-effort; no-op until table exists).
   // Skip in dryRun so tests don't write rows.
