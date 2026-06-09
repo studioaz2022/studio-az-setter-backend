@@ -10543,6 +10543,62 @@ function createApp() {
     });
 
     /**
+     * GET /api/frontdesk/contact?location=&contactId=
+     * Tiny read-only fetcher that returns just enough contact data to
+     * pre-fill the BookingSheet's edit-mode contact summary card:
+     *   { id, firstName, lastName, contactName, phone, email,
+     *     assignedTo, assignedToName }
+     * Phase 3.15d/16d. Uses the right SDK per location.
+     */
+    app.get("/api/frontdesk/contact", async (req, res) => {
+      try {
+        const contactId = (req.query.contactId || "").toString();
+        const resolved = fdResolveLocation(req.query.location);
+        if (!contactId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "contactId is required" });
+        }
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+        const r = await sdk.contacts.getContact({ contactId });
+        const c = r?.contact || r;
+        if (!c?.id) {
+          return res
+            .status(404)
+            .json({ success: false, error: "Contact not found" });
+        }
+        res.json({
+          success: true,
+          contact: {
+            id: c.id,
+            firstName: c.firstName || null,
+            lastName: c.lastName || null,
+            contactName:
+              c.contactName ||
+              [c.firstName, c.lastName].filter(Boolean).join(" ") ||
+              null,
+            phone: c.phone || null,
+            email: c.email || null,
+            assignedTo: c.assignedTo || null,
+          },
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ GET /api/frontdesk/contact error:", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
+
+    /**
      * GET /api/frontdesk/conversation?location=&contactId=&limit=
      * Read a contact's conversation thread (Phase 2.14). Own clean
      * read — NOT via ghlClient.getConversationHistory which is
