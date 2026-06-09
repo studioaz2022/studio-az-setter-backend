@@ -12058,6 +12058,493 @@ function createApp() {
         res.status(500).json({ success: false, error: msg });
       }
     });
+
+    /**
+     * POST /api/frontdesk/edit   (Phase 3.15d)
+     * Reschedule + edit one appointment in a single round-trip.
+     * Covers the "Reschedule / Edit" button in The Slip — the user
+     * can change ANY of: time/date, duration, barber, calendar (which
+     * picks the service), title, notes, AND the underlying contact's
+     * name / phone — all from one panel. Backend orchestrates the
+     * (optional) updateContact + the editAppointment in one
+     * transaction-ish flow.
+     *
+     * Body:
+     *   {
+     *     location,
+     *     appointmentId,                  // who we're editing
+     *     actionId,                       // idempotency uuid
+     *     actingStaffGhlUserId?, actingStaffName?,
+     *     changes: {                      // any subset; empty = no-op
+     *       staffGhlUserId?,              // reassign
+     *       calendarId?,                  // change service/calendar
+     *       startTime?,                   // ISO; moves the appt
+     *       durationMinutes?,             // 5..480
+     *       title?, notes?,
+     *       contactPatch?: {              // contact-level write
+     *         firstName?, lastName?, phone?,
+     *       },
+     *     },
+     *   }
+     *
+     * Flow:
+     *   1. Validate inputs + scope (appt exists in cache + location).
+     *   2. actionId idempotency lookup via the audit log; return prior
+     *      result if same id already succeeded.
+     *   3. Pre-write double-book guard ONLY when time/duration/staff
+     *      changes are present. Exclude this appt's own id from the
+     *      busy set (a row's own slot doesn't conflict with itself).
+     *   4. updateContact for contactPatch if provided.
+     *   5. editAppointment with whatever fields actually changed.
+     *   6. Audit row with action="edit", payload describing the
+     *      change set (compact — only changed fields are recorded).
+     */
+    app.post("/api/frontdesk/edit", async (req, res) => {
+      const {
+        location,
+        appointmentId,
+        actionId = null,
+        actingStaffGhlUserId = null,
+        actingStaffName = null,
+        changes = {},
+      } = req.body || {};
+
+      const resolved = fdResolveLocation(location);
+
+      // Trim the changes object to known keys + meaningful values.
+      // (Avoids storing junk in the audit log if the FE sends extras.)
+      const allowedChangeKeys = new Set([
+        "staffGhlUserId",
+        "calendarId",
+        "startTime",
+        "durationMinutes",
+        "title",
+        "notes",
+        "contactPatch",
+      ]);
+      const cleanChanges = {};
+      for (const [k, v] of Object.entries(changes || {})) {
+        if (!allowedChangeKeys.has(k)) continue;
+        if (v === undefined || v === null) continue;
+        if (typeof v === "string" && v.trim() === "") continue;
+        cleanChanges[k] = v;
+      }
+      if (
+        cleanChanges.contactPatch &&
+        typeof cleanChanges.contactPatch === "object"
+      ) {
+        const cp = {};
+        for (const [k, v] of Object.entries(cleanChanges.contactPatch)) {
+          if (
+            ["firstName", "lastName", "phone"].includes(k) &&
+            typeof v === "string" &&
+            v.trim() !== ""
+          ) {
+            cp[k] = v.trim();
+          }
+        }
+        if (Object.keys(cp).length === 0) delete cleanChanges.contactPatch;
+        else cleanChanges.contactPatch = cp;
+      }
+
+      const auditBase = {
+        location: resolved?.label || (location ?? null),
+        acting_staff_ghl_user_id: actingStaffGhlUserId,
+        acting_staff_name: actingStaffName,
+        action: "edit",
+        target_type: "appointment",
+        target_id: appointmentId || null,
+        payload: {
+          actionId,
+          changes: cleanChanges,
+        },
+      };
+
+      async function logAudit(result, summary, errorText = null, extra = {}) {
+        if (!supabase) return;
+        try {
+          await supabase.from("frontdesk_audit_log").insert([
+            { ...auditBase, ...extra, summary, result, error_text: errorText },
+          ]);
+        } catch (e) {
+          console.warn(
+            "[frontdesk/edit] audit insert failed (non-fatal):",
+            e.message
+          );
+        }
+      }
+
+      try {
+        if (!supabase) {
+          return res
+            .status(503)
+            .json({ success: false, error: "Supabase not configured" });
+        }
+        if (!resolved) {
+          await logAudit("failed", "edit rejected: invalid location", "Invalid location");
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!appointmentId) {
+          await logAudit(
+            "failed",
+            "edit rejected: missing appointmentId",
+            "appointmentId is required"
+          );
+          return res
+            .status(400)
+            .json({ success: false, error: "appointmentId is required" });
+        }
+        if (Object.keys(cleanChanges).length === 0) {
+          await logAudit(
+            "failed",
+            "edit rejected: no-op (empty changes)",
+            "changes is empty"
+          );
+          return res.status(400).json({
+            success: false,
+            error: "No changes provided",
+          });
+        }
+
+        // Scope guard: confirm the appt exists in this location's cache.
+        const { data: cacheRow, error: cacheErr } = await supabase
+          .from("appointments")
+          .select(
+            "id, calendar_id, contact_id, title, status, location_id, start_time, end_time, assigned_user_id"
+          )
+          .eq("id", appointmentId)
+          .eq("location_id", resolved.locationId)
+          .maybeSingle();
+        if (cacheErr) {
+          await logAudit(
+            "failed",
+            `edit cache lookup failed for ${appointmentId}`,
+            cacheErr.message
+          );
+          return res.status(500).json({ success: false, error: cacheErr.message });
+        }
+        if (!cacheRow) {
+          await logAudit(
+            "failed",
+            `edit rejected: ${appointmentId} not in ${resolved.label} cache`,
+            "appointment not found in cache for this location"
+          );
+          return res.status(404).json({
+            success: false,
+            error: "Appointment not found in cache for this location",
+          });
+        }
+
+        // Idempotency (Section 10.3): if this actionId already succeeded
+        // for an edit on THIS appointment, return the prior result.
+        if (actionId) {
+          try {
+            const { data: prior } = await supabase
+              .from("frontdesk_audit_log")
+              .select("target_id, result, payload")
+              .eq("action", "edit")
+              .eq("result", "success")
+              .eq("target_id", appointmentId)
+              .filter("payload->>actionId", "eq", actionId)
+              .order("created_at", { ascending: false })
+              .limit(1);
+            if (Array.isArray(prior) && prior[0]?.target_id) {
+              return res.json({
+                success: true,
+                appointmentId,
+                dedup: true,
+              });
+            }
+          } catch (dedupErr) {
+            console.warn(
+              "[frontdesk/edit] dedup lookup failed (continuing):",
+              dedupErr.message
+            );
+          }
+        }
+
+        // Roster sanity if reassigning.
+        if (cleanChanges.staffGhlUserId) {
+          const member = resolved.roster.find(
+            (m) => m.ghlUserId === cleanChanges.staffGhlUserId
+          );
+          if (!member) {
+            await logAudit(
+              "failed",
+              `edit rejected: staff ${cleanChanges.staffGhlUserId} not on ${resolved.label} roster`,
+              "Staff not on this location's roster"
+            );
+            return res
+              .status(404)
+              .json({ success: false, error: "Staff not on this location's roster" });
+          }
+        }
+
+        // Time/duration validation.
+        let startMs = null;
+        let endMs = null;
+        let durationMinutes = null;
+        if (cleanChanges.startTime !== undefined) {
+          const parsed = Date.parse(cleanChanges.startTime);
+          if (!Number.isFinite(parsed)) {
+            await logAudit(
+              "failed",
+              `edit rejected: bad startTime "${cleanChanges.startTime}"`,
+              "startTime not parseable as ISO"
+            );
+            return res.status(400).json({
+              success: false,
+              error: "startTime must be an ISO timestamp",
+            });
+          }
+          startMs = parsed;
+        }
+        if (cleanChanges.durationMinutes !== undefined) {
+          const d = parseInt(cleanChanges.durationMinutes, 10);
+          if (!Number.isFinite(d) || d < 5 || d > 480) {
+            await logAudit(
+              "failed",
+              `edit rejected: bad durationMinutes ${cleanChanges.durationMinutes}`,
+              "durationMinutes must be 5..480"
+            );
+            return res.status(400).json({
+              success: false,
+              error: "durationMinutes must be between 5 and 480",
+            });
+          }
+          durationMinutes = d;
+        }
+
+        // If either time or duration is changing, we need both to compute
+        // the new [startMs, endMs) window. Fall back to existing values
+        // for whichever side wasn't supplied.
+        const existingStartMs = new Date(cacheRow.start_time).getTime();
+        const existingEndMs = new Date(
+          cacheRow.end_time || cacheRow.start_time
+        ).getTime();
+        const effectiveStartMs = startMs ?? existingStartMs;
+        const existingDurMinutes = Math.max(
+          5,
+          Math.round((existingEndMs - existingStartMs) / 60000)
+        );
+        const effectiveDurMinutes = durationMinutes ?? existingDurMinutes;
+        endMs = effectiveStartMs + effectiveDurMinutes * 60 * 1000;
+
+        const effectiveStaffId =
+          cleanChanges.staffGhlUserId || cacheRow.assigned_user_id;
+
+        // Pre-write double-book guard (Section 11) — ONLY when the
+        // time/duration/staff is meaningfully changing. If nothing
+        // time-related changed, skip the check (it'd be the appt's
+        // own row and always pass — wasteful round-trip).
+        const slotIsMoving =
+          cleanChanges.startTime !== undefined ||
+          cleanChanges.durationMinutes !== undefined ||
+          (cleanChanges.staffGhlUserId &&
+            cleanChanges.staffGhlUserId !== cacheRow.assigned_user_id);
+        if (slotIsMoving) {
+          const dayStartIso = new Date(
+            effectiveStartMs - 24 * 60 * 60 * 1000
+          ).toISOString();
+          const dayEndIso = new Date(
+            effectiveStartMs + 24 * 60 * 60 * 1000
+          ).toISOString();
+          const { data: busyRows, error: busyErr } = await supabase
+            .from("appointments")
+            .select("id, title, start_time, end_time, status, assigned_user_id")
+            .eq("location_id", resolved.locationId)
+            .eq("assigned_user_id", effectiveStaffId)
+            .gte("start_time", dayStartIso)
+            .lte("start_time", dayEndIso);
+          if (busyErr) {
+            await logAudit(
+              "failed",
+              "edit rejected: pre-write check failed",
+              busyErr.message
+            );
+            return res.status(500).json({ success: false, error: busyErr.message });
+          }
+          const conflict = (busyRows || []).find((r) => {
+            if (r.id === appointmentId) return false; // excludes self
+            const s = (r.status || "").toLowerCase();
+            if (
+              s === "cancelled" ||
+              s === "canceled" ||
+              s === "noshow" ||
+              s === "invalid"
+            )
+              return false;
+            const rs = new Date(r.start_time).getTime();
+            const re = new Date(r.end_time || r.start_time).getTime();
+            return !(endMs <= rs || effectiveStartMs >= re);
+          });
+          if (conflict) {
+            const conflictTitle =
+              (conflict.title || "").trim() || "another booking";
+            const conflictTime = new Date(conflict.start_time).toLocaleString(
+              "en-US",
+              {
+                timeZone: "America/Chicago",
+                hour: "numeric",
+                minute: "2-digit",
+              }
+            );
+            const memberName =
+              resolved.roster.find((m) => m.ghlUserId === effectiveStaffId)
+                ?.name || "this staff";
+            const msg = `That ${conflictTime} with ${memberName.split(" ")[0]} is already booked — pick another`;
+            await logAudit(
+              "failed",
+              `edit rejected: slot collision with ${conflict.id}`,
+              msg
+            );
+            return res.status(409).json({
+              success: false,
+              error: msg,
+              conflict: { id: conflict.id, title: conflictTitle },
+            });
+          }
+        }
+
+        // Resolve the right SDK by location.
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        // ── Contact patch first (so the appt title can pick up the
+        //    new name if both fields change in the same call) ──────
+        let contactUpdated = false;
+        if (cleanChanges.contactPatch) {
+          if (!cacheRow.contact_id) {
+            await logAudit(
+              "failed",
+              "edit contactPatch rejected: no contact_id on appointment",
+              "appointment has no contact_id"
+            );
+            return res.status(400).json({
+              success: false,
+              error: "Appointment has no contact to update",
+            });
+          }
+          try {
+            await sdk.contacts.updateContact(
+              { contactId: cacheRow.contact_id },
+              cleanChanges.contactPatch
+            );
+            contactUpdated = true;
+          } catch (cErr) {
+            const cm = cErr.response?.data?.message || cErr.message;
+            await logAudit(
+              "failed",
+              `edit contact update failed for ${cacheRow.contact_id}`,
+              cm
+            );
+            return res.status(500).json({
+              success: false,
+              error: `Couldn't update contact: ${cm}`,
+            });
+          }
+        }
+
+        // ── Build the editAppointment payload ─────────────────────
+        const apptPatch = { toNotify: false, ignoreFreeSlotValidation: true };
+        if (cleanChanges.staffGhlUserId)
+          apptPatch.assignedUserId = cleanChanges.staffGhlUserId;
+        if (cleanChanges.calendarId)
+          apptPatch.calendarId = cleanChanges.calendarId;
+        if (cleanChanges.title !== undefined)
+          apptPatch.title = cleanChanges.title;
+        if (cleanChanges.notes !== undefined)
+          apptPatch.description = cleanChanges.notes;
+        if (
+          cleanChanges.startTime !== undefined ||
+          cleanChanges.durationMinutes !== undefined
+        ) {
+          apptPatch.startTime = new Date(effectiveStartMs).toISOString();
+          apptPatch.endTime = new Date(endMs).toISOString();
+        }
+        // If we hit the SDK with an empty patch (e.g. ONLY contactPatch
+        // was supplied), still issue the editAppointment so the cache
+        // gets a webhook nudge and the audit row reflects a clean save.
+        // But guard against `editAppointment({}, {})` blowing up — at
+        // minimum supply toNotify so the schema is non-empty.
+
+        let editResult = null;
+        try {
+          editResult = await sdk.calendars.editAppointment(
+            { eventId: appointmentId },
+            apptPatch
+          );
+        } catch (eErr) {
+          const em = eErr.response?.data?.message || eErr.message || String(eErr);
+          await logAudit("failed", `edit GHL update failed`, em);
+          return res.status(500).json({
+            success: false,
+            error: `Couldn't update appointment: ${em}`,
+          });
+        }
+
+        // Describe the change for the audit summary.
+        const changeNames = Object.keys(cleanChanges).filter(
+          (k) => k !== "contactPatch"
+        );
+        if (cleanChanges.contactPatch) changeNames.push("contact");
+        const titleHint =
+          (cleanChanges.title || cacheRow.title || "").toString().trim() ||
+          appointmentId;
+        const summary = `Edited ${titleHint} (${
+          changeNames.length ? changeNames.join(", ") : "no fields"
+        })`;
+        await logAudit("success", summary);
+
+        // Optimistic cache mirror so the next 20s poll lands on truth
+        // even if the GHL webhook is briefly slow. Match the
+        // editAppointment fields we wrote. Non-fatal on failure.
+        try {
+          const cacheUpdate = {};
+          if (apptPatch.assignedUserId !== undefined)
+            cacheUpdate.assigned_user_id = apptPatch.assignedUserId;
+          if (apptPatch.calendarId !== undefined)
+            cacheUpdate.calendar_id = apptPatch.calendarId;
+          if (apptPatch.title !== undefined) cacheUpdate.title = apptPatch.title;
+          if (apptPatch.description !== undefined)
+            cacheUpdate.notes = apptPatch.description;
+          if (apptPatch.startTime !== undefined)
+            cacheUpdate.start_time = apptPatch.startTime;
+          if (apptPatch.endTime !== undefined)
+            cacheUpdate.end_time = apptPatch.endTime;
+          if (Object.keys(cacheUpdate).length > 0) {
+            await supabase
+              .from("appointments")
+              .update(cacheUpdate)
+              .eq("id", appointmentId)
+              .eq("location_id", resolved.locationId);
+          }
+        } catch (mirrorErr) {
+          console.warn(
+            "[frontdesk/edit] cache mirror failed (non-fatal):",
+            mirrorErr.message
+          );
+        }
+
+        return res.json({
+          success: true,
+          appointmentId,
+          appliedChanges: cleanChanges,
+          contactUpdated,
+          appointment: editResult || null,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ POST /api/frontdesk/edit error:", msg);
+        await logAudit("failed", `edit uncaught error`, msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
   }
 
   /**
