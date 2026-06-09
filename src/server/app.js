@@ -12507,11 +12507,18 @@ function createApp() {
         }
 
         // ── Build the editAppointment payload ─────────────────────
+        // GHL's editAppointment is NOT a true partial PATCH: round-robin
+        // calendars reject the request with "assignedUserId is missing"
+        // if it's omitted, even when only time/duration is changing.
+        // We always include assignedUserId + calendarId, falling back to
+        // the cached row's current values when the user didn't change
+        // them. Same pattern as the calendars PUT gotcha (see
+        // feedback_ghl_calendar_put memory).
         const apptPatch = { toNotify: false, ignoreFreeSlotValidation: true };
-        if (cleanChanges.staffGhlUserId)
-          apptPatch.assignedUserId = cleanChanges.staffGhlUserId;
-        if (cleanChanges.calendarId)
-          apptPatch.calendarId = cleanChanges.calendarId;
+        apptPatch.assignedUserId =
+          cleanChanges.staffGhlUserId || cacheRow.assigned_user_id;
+        apptPatch.calendarId =
+          cleanChanges.calendarId || cacheRow.calendar_id;
         if (cleanChanges.title !== undefined)
           apptPatch.title = cleanChanges.title;
         if (cleanChanges.notes !== undefined)
