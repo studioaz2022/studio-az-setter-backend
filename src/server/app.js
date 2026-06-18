@@ -13300,6 +13300,160 @@ function createApp() {
   });
 
   /**
+   * GET /api/kiosk/walk-in-slots-v2?service=haircut|haircut_beard|beard_trim&days=0
+   *
+   * Walk-in availability sourced from GHL getSlots on the dedicated "WalkIn ·"
+   * calendars (5-min interval, 0 booking-notice, associated to each barber's
+   * real per-service Schedule). Unlike v1 (which computed gaps from the stale
+   * openHours and produced slots GHL would reject), every slot here is one GHL
+   * will actually accept — so bookings can't fail with "slot no longer
+   * available", and the times reflect the barber's true schedule.
+   *
+   * Tiers (days=0): now / 5-10 / 10-20 / later. The "later" tier is collapsed
+   * to one slot per 15-minute display window (earliest valid slot in each) so
+   * the 5-min granularity never overwhelms the screen, without hiding a window.
+   * Response shape matches v1 so the kiosk renders it unchanged.
+   *
+   * Anna Kinkead is excluded (not in WALK_IN_CALENDARS) — appointment flow only.
+   */
+  app.get("/api/kiosk/walk-in-slots-v2", async (req, res) => {
+    const { service, days: daysParam } = req.query;
+    if (!service || !["haircut", "haircut_beard", "beard_trim"].includes(service)) {
+      return res.status(400).json({
+        success: false,
+        error: 'service must be "haircut", "haircut_beard", or "beard_trim"',
+      });
+    }
+    const days = Math.min(Math.max(parseInt(daysParam) || 0, 0), 7);
+
+    try {
+      const { WALK_IN_CALENDARS, BARBER_DATA } = require("../config/kioskConfig");
+      const shopTZ = "America/Chicago";
+      const now = new Date();
+
+      // Date range: now → end of the target day (Central)
+      const todayCT = now.toLocaleDateString("en-CA", { timeZone: shopTZ });
+      const [yr, mo, dy] = todayCT.split("-").map(Number);
+      const targetDay = new Date(yr, mo - 1, dy + days);
+      const startMs = now.getTime();
+      const endMs = new Date(targetDay.getFullYear(), targetDay.getMonth(), targetDay.getDate() + 1).getTime();
+
+      const barbersById = {};
+      BARBER_DATA.forEach((b) => { barbersById[b.ghlUserId] = b; });
+
+      // Price map is keyed by the website (source) calendar ids — the WalkIn
+      // calendars carry no price, so we look up price via the source cal id.
+      let priceMap = new Map();
+      try { priceMap = await getServicePriceMap(); } catch (e) { /* non-fatal */ }
+
+      const entries = Object.entries(WALK_IN_CALENDARS)
+        .map(([userId, cals]) => ({ userId, calendarId: cals[service] }))
+        .filter((e) => e.calendarId && barbersById[e.userId]);
+
+      const tierOrder = { now: 0, "5-10": 1, "10-20": 2, later: 3 };
+
+      const results = await Promise.all(entries.map(async ({ userId, calendarId }) => {
+        const barber = barbersById[userId];
+        try {
+          const [calInfo, slotData] = await Promise.all([
+            ghlBarber.calendars.getCalendar({ calendarId }).catch(() => null),
+            ghlBarber.calendars.getSlots({
+              calendarId,
+              startDate: String(startMs),
+              endDate: String(endMs),
+              timezone: shopTZ,
+            }).catch((err) => {
+              console.warn(`⚠️ [KIOSK v2] getSlots failed for ${barber.name}:`, err.message);
+              return null;
+            }),
+          ]);
+          if (!slotData) return null;
+
+          let slotDurationMinutes = 30;
+          if (calInfo) {
+            const cal = calInfo.calendar || calInfo;
+            if (cal.slotDuration) {
+              const unit = (cal.slotDurationUnit || "mins").toLowerCase();
+              slotDurationMinutes = unit.startsWith("hour") ? cal.slotDuration * 60 : cal.slotDuration;
+            }
+          }
+          const durMs = slotDurationMinutes * 60 * 1000;
+
+          // Flatten GHL's date-keyed slot strings (ISO with -05:00/-06:00 offset)
+          const starts = [];
+          for (const k of Object.keys(slotData)) {
+            if (k === "traceId") continue;
+            const arr = slotData[k]?.slots || [];
+            for (const s of arr) starts.push(s);
+          }
+          if (!starts.length) return null;
+          starts.sort();
+
+          const classify = (iso) => {
+            if (days > 0) return "later";
+            const diffMin = (new Date(iso).getTime() - now.getTime()) / 60000;
+            if (diffMin <= 7) return "now";       // next ~5-min mark counts as "now"
+            if (diffMin <= 12) return "5-10";
+            if (diffMin <= 22) return "10-20";
+            return "later";
+          };
+
+          const near = [];   // now / 5-10 / 10-20 — show every fine-grained option
+          const laterSeen = new Set();
+          const later = [];  // collapsed to one slot per 15-min display window
+          for (const iso of starts) {
+            const tier = classify(iso);
+            const slot = {
+              startTime: iso,
+              endTime: new Date(new Date(iso).getTime() + durMs).toISOString(),
+              tier,
+            };
+            if (tier !== "later") { near.push(slot); continue; }
+            // window key from the local HH:MM in the ISO string (offset-aware)
+            const dateKey = iso.slice(0, 10);
+            const minOfDay = parseInt(iso.slice(11, 13), 10) * 60 + parseInt(iso.slice(14, 16), 10);
+            const winKey = `${dateKey}_${Math.floor(minOfDay / 15)}`;
+            if (laterSeen.has(winKey)) continue; // keep earliest in each 15-min window
+            laterSeen.add(winKey);
+            later.push(slot);
+          }
+          const slots = [...near, ...later];
+          if (!slots.length) return null;
+
+          const bestTier = slots.reduce((best, s) => (tierOrder[s.tier] < tierOrder[best] ? s.tier : best), "later");
+
+          return {
+            barberName: barber.name,
+            barberGhlUserId: barber.ghlUserId,
+            barberPhoto: barber.photoUrl,
+            calendarId, // the WalkIn calendar — booked directly by walk-in-book
+            slotDuration: slotDurationMinutes,
+            tier: bestTier,
+            slots,
+            price: priceMap.get(barber.calendars[service]) || 0, // price via source cal id
+          };
+        } catch (err) {
+          console.error(`⚠️ [KIOSK v2] availability failed for ${barber.name}:`, err.message);
+          return null;
+        }
+      }));
+
+      let barbers = results.filter(Boolean);
+      barbers.sort((a, b) => {
+        const t = tierOrder[a.tier] - tierOrder[b.tier];
+        if (t !== 0) return t;
+        return new Date(a.slots[0]?.startTime || "9999") - new Date(b.slots[0]?.startTime || "9999");
+      });
+
+      console.log(`✅ [KIOSK v2] ${barbers.length} barbers for ${service}, days=${days} (tiers: ${barbers.map((b) => b.tier).join(", ")})`);
+      return res.json({ success: true, barbers, days });
+    } catch (error) {
+      console.error("❌ [KIOSK v2] Walk-in slots error:", error);
+      return res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  /**
    * POST /api/kiosk/walk-in-book
    * Book a walk-in appointment — creates/finds GHL contact, books on calendar, sends push
    */

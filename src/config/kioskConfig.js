@@ -102,6 +102,28 @@ const BARBER_DATA = [
   },
 ];
 
+// ─────────────────────────────────────────────────────────────────────────
+// Walk-In Kiosk calendars (created 2026-06-18)
+//
+// Dedicated round_robin calendars in the GHL "Walk-In Kiosk" group, each with
+// slotInterval=5min and allowBookingAfter=0 (no booking notice), associated to
+// the same per-service Schedule as the barber's website calendar. These let a
+// walk-in book the next 5-minute mark instantly, while the website calendars
+// keep their booking notice. Keyed by GHL userId. Anna Kinkead is intentionally
+// excluded from walk-ins (she stays in the "I have an appointment" flow only).
+// Source of truth for availability is GHL getSlots on these calendar IDs.
+// ─────────────────────────────────────────────────────────────────────────
+const WALK_IN_CALENDARS = {
+  '1kFG5FWdUDhXLUX46snG': { haircut: 'LpZYqYJEx2JYVMvQopUc', haircut_beard: 'Jg8EbIPhADDjXnEuQ5Kf' }, // Lionel
+  'zKiZ5w3ImX0bA7zrFIZx': { haircut: 'S7qAq8CtnLc6JED651WC', haircut_beard: '7ferPTjhyTAE3eSgVZFV', beard_trim: '3zWRBfoaaVvLOBgzicIT' }, // Drew
+  'XrbRTwVGMwgcGOgD2a5n': { haircut: '0atF9bwnvNghg5uTuQhe', haircut_beard: 'Jko7lsWVtzYE3HHFb3cC', beard_trim: 'AFSQKhFtOnZcU8c5AmPv' }, // Logan
+  'sLkO5CwFrhdcM7EOtTvg': { haircut: 'oiGYuvFPmEdS4mcuQ3ob', haircut_beard: 'zLMuCrTBQEKyzdh6qqbJ' }, // Elle
+  '47m7vgAy8cwELwCBE3LT': { haircut: 'fcczrWI11c7PSxCiRjs4', haircut_beard: 'sVAmMQlzK0QSld88bDFi' }, // David
+  'Dm20lBxWvG393LUoxuEV': { haircut: 'GHVmOlzYsw2zwUuRlLfg', haircut_beard: '7exK7hfElT52v6kqHhZ4', beard_trim: 'BRpryozDSJaGW2tMEi5q' }, // Joshua
+  'GBzpanPloybTcnPEIzpE': { haircut: 'sF0UpmmXPS5X450uUsu8', haircut_beard: '8HLEwHHFaDh13Dfc9yWl', beard_trim: 'STPEOSi9qgn930PiZFtH' }, // Liam
+  'F6m7GBKeyIRcehYkubfe': { haircut: 'hU5u8GW0qEyZ1HU2LwlV', haircut_beard: 'BHhhOkDKJTbtKWt0Ppmj' }, // Gilberto
+};
+
 const TATTOO_LOCATION_ID = process.env.GHL_LOCATION_ID || 'mUemx2jG4wly4kJWBkI4';
 
 const TATTOO_ARTIST_DATA = [
@@ -117,4 +139,4 @@ const TATTOO_ARTIST_DATA = [
   },
 ];
 
-module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID };
+module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID, WALK_IN_CALENDARS };
