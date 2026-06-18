@@ -80,7 +80,7 @@ const BARBER_DATA = [
   {
     name: 'Gilberto Castro',
     ghlUserId: 'F6m7GBKeyIRcehYkubfe',
-    photoUrl: 'https://storage.googleapis.com/msgsndr/GLRkNAxfPtWTqTiN83xj/media/698a50f6a41b878dfb2300da.jpg',
+    photoUrl: 'https://msgsndr-private.storage.googleapis.com/user/F6m7GBKeyIRcehYkubfe/profile/bb4ec4cd-08ec-48d0-8392-5954a87167de.jpg',
     calendars: {
       haircut: '38Uhu6i5W4L5yGJbE0My',
       haircut_beard: '7Bj9t1Gwi0zcJRTwCvYA',
