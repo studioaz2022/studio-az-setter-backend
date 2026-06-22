@@ -10602,6 +10602,160 @@ function createApp() {
     });
 
     /**
+     * GET /api/frontdesk/contact-history?location=&contactId=&excludeId=&limit=
+     *
+     * Fast Supabase read of a contact's full appointment history,
+     * scoped to ONE location (no cross-shop bleed). Returns rows
+     * grouped into `upcoming` (start_time > now) and `past`
+     * (start_time <= now), plus a `summary` block with counts and
+     * the last-visit timestamp so the panel header can show
+     * "12 visits · 1 no-show · last seen 3 weeks ago".
+     *
+     * Why a separate endpoint vs. /contact-appointments:
+     *   - Reads the cache (one Supabase query) instead of GHL
+     *     (per-request rate limit + ~600ms latency).
+     *   - Pre-resolves staff name + service label using the
+     *     location's roster, so the FE doesn't have to.
+     *   - Filters `invalid` tombstones (Section 12-ish).
+     *   - Skips the appointment currently open in the panel (via
+     *     excludeId) so the history list doesn't duplicate it.
+     */
+    app.get("/api/frontdesk/contact-history", async (req, res) => {
+      try {
+        const resolved = fdResolveLocation(req.query.location);
+        const contactId = (req.query.contactId || "").toString();
+        const excludeId = (req.query.excludeId || "").toString() || null;
+        const limit = Math.min(
+          Math.max(parseInt(req.query.limit || "50", 10) || 50, 1),
+          200
+        );
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!contactId) {
+          return res
+            .status(400)
+            .json({ success: false, error: "contactId is required" });
+        }
+
+        // Build calendar_id → service label map from this location's
+        // roster. `member.calendars` is the per-service map for
+        // barbers ({haircut: "...", "haircut-ff": "...", ...}); tattoo
+        // artists store a single calendarId at the top level.
+        const calToLabel = new Map();
+        for (const m of resolved.roster) {
+          if (m.calendars) {
+            for (const [key, cid] of Object.entries(m.calendars)) {
+              if (!cid) continue;
+              if (!calToLabel.has(cid)) calToLabel.set(cid, fdServiceLabel(key));
+            }
+          } else if (m.calendarId) {
+            if (!calToLabel.has(m.calendarId))
+              calToLabel.set(m.calendarId, "Tattoo");
+          }
+        }
+        const rosterById = new Map(
+          resolved.roster.map((m) => [m.ghlUserId, m])
+        );
+
+        const { data: rows, error } = await supabase
+          .from("appointments")
+          .select(
+            "id, title, status, start_time, end_time, assigned_user_id, calendar_id, notes"
+          )
+          .eq("location_id", resolved.locationId)
+          .eq("contact_id", contactId)
+          .order("start_time", { ascending: false })
+          .limit(limit);
+        if (error) {
+          console.error(
+            "[frontdesk/contact-history] supabase error:",
+            error.message
+          );
+          return res
+            .status(500)
+            .json({ success: false, error: error.message });
+        }
+
+        const now = Date.now();
+        const upcoming = [];
+        const past = [];
+        let showed = 0;
+        let noshow = 0;
+        let cancelled = 0;
+        let confirmed = 0;
+        let lastVisitIso = null;
+
+        for (const r of rows || []) {
+          const status = (r.status || "").toLowerCase();
+          if (status === "invalid") continue; // GHL tombstones — hide
+          if (excludeId && r.id === excludeId) continue;
+          const staffName =
+            rosterById.get(r.assigned_user_id)?.name?.split(" ")[0] || null;
+          const serviceName = r.calendar_id
+            ? calToLabel.get(r.calendar_id) || null
+            : null;
+          const enriched = {
+            id: r.id,
+            title: r.title || "",
+            status,
+            startTime: r.start_time,
+            endTime: r.end_time,
+            assignedUserId: r.assigned_user_id,
+            calendarId: r.calendar_id,
+            staffName,
+            serviceName,
+            notes: r.notes || null,
+          };
+          if (status === "showed") showed += 1;
+          else if (status === "noshow") noshow += 1;
+          else if (status === "cancelled" || status === "canceled") cancelled += 1;
+          else if (status === "confirmed" || status === "new") confirmed += 1;
+          // Last visit = most recent past row that wasn't cancelled or
+          // a no-show. `rows` is start_time DESC, so first hit wins.
+          if (
+            !lastVisitIso &&
+            new Date(r.start_time).getTime() <= now &&
+            status !== "cancelled" &&
+            status !== "canceled" &&
+            status !== "noshow"
+          ) {
+            lastVisitIso = r.start_time;
+          }
+          if (new Date(r.start_time).getTime() > now) upcoming.push(enriched);
+          else past.push(enriched);
+        }
+        // Upcoming should read soonest-first; past stays newest-first.
+        upcoming.sort(
+          (a, b) =>
+            new Date(a.startTime).getTime() - new Date(b.startTime).getTime()
+        );
+
+        res.json({
+          success: true,
+          location: resolved.label,
+          contactId,
+          summary: {
+            total: showed + noshow + cancelled + confirmed,
+            showed,
+            noshow,
+            cancelled,
+            confirmed,
+            lastVisit: lastVisitIso,
+          },
+          upcoming,
+          past,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ GET /api/frontdesk/contact-history error:", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
+
+    /**
      * GET /api/frontdesk/conversation?location=&contactId=&limit=
      * Read a contact's conversation thread (Phase 2.14). Own clean
      * read — NOT via ghlClient.getConversationHistory which is
