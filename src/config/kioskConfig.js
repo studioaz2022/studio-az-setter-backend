@@ -100,6 +100,18 @@ const BARBER_DATA = [
       neck_trim: 'rsg2VbiVFGuGiEwUIhdl',
     },
   },
+  {
+    // ⚠️ TEMPORARY TEST BARBER (added 2026-06-22) — "Studio AZ" service account,
+    // used for live walk-in booking tests. All-day schedule (08:00–21:00) so it
+    // always shows "now" availability. REMOVE this entry + WALK_IN_CALENDARS
+    // entry + delete GHL calendar 48a2xaeIgoz2XNMSAwRj when testing is done.
+    name: 'Studio AZ (Test)',
+    ghlUserId: 'mf1uNeKFJ1hTl1ZEvwjW',
+    photoUrl: 'https://msgsndr-private.storage.googleapis.com/user/mf1uNeKFJ1hTl1ZEvwjW/profile/bb1e90b9-7f75-4be0-8cf7-d0c409f45527.png',
+    calendars: {
+      haircut: '48a2xaeIgoz2XNMSAwRj',
+    },
+  },
 ];
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -122,6 +134,7 @@ const WALK_IN_CALENDARS = {
   'Dm20lBxWvG393LUoxuEV': { haircut: 'GHVmOlzYsw2zwUuRlLfg', haircut_beard: '7exK7hfElT52v6kqHhZ4', beard_trim: 'BRpryozDSJaGW2tMEi5q' }, // Joshua
   'GBzpanPloybTcnPEIzpE': { haircut: 'sF0UpmmXPS5X450uUsu8', haircut_beard: '8HLEwHHFaDh13Dfc9yWl', beard_trim: 'STPEOSi9qgn930PiZFtH' }, // Liam
   'F6m7GBKeyIRcehYkubfe': { haircut: 'hU5u8GW0qEyZ1HU2LwlV', haircut_beard: 'BHhhOkDKJTbtKWt0Ppmj' }, // Gilberto
+  'mf1uNeKFJ1hTl1ZEvwjW': { haircut: '48a2xaeIgoz2XNMSAwRj' }, // ⚠️ TEMPORARY TEST BARBER — remove after walk-in testing
 };
 
 const TATTOO_LOCATION_ID = process.env.GHL_LOCATION_ID || 'mUemx2jG4wly4kJWBkI4';
