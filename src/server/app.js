@@ -530,6 +530,9 @@ function createApp() {
                  /^https:\/\/refund-form-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
         // Refund form preview/branch deploys (Vercel)
         callback(null, true);
+      } else if (/^https:\/\/check-[a-z0-9]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
+        // Check-in kiosk preview/branch deploys (Vercel) — project "check-in"
+        callback(null, true);
       } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
         // Allow any private/local network IP (kiosk, local dev)
         callback(null, true);
