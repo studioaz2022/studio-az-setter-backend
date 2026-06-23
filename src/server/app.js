@@ -500,6 +500,7 @@ function createApp() {
         'https://app.onthebusinesscrm.com', // GHL custom domain
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
+        'https://studio-az-checkin-test.vercel.app', // Kiosk check-in TEST site (stable preview alias)
         'https://consent.studioaztattoo.com', // Consent form web app
         'https://refund.studioaztattoo.com', // Refund request form (Phase 6)
         'http://localhost:3003', // Refund form dev (Phase 6)
