@@ -13484,7 +13484,10 @@ function createApp() {
     const days = Math.min(Math.max(parseInt(daysParam) || 0, 0), 7);
 
     try {
-      const { WALK_IN_CALENDARS, BARBER_DATA } = require("../config/kioskConfig");
+      const { WALK_IN_CALENDARS, BARBER_DATA, TEST_WALK_IN_USER_IDS } = require("../config/kioskConfig");
+      // Test-only barbers are hidden from the live kiosk; the preview/test site
+      // passes ?includeTest=1 to surface them.
+      const includeTest = req.query.includeTest === "1";
       const shopTZ = "America/Chicago";
       const now = new Date();
 
@@ -13505,7 +13508,8 @@ function createApp() {
 
       const entries = Object.entries(WALK_IN_CALENDARS)
         .map(([userId, cals]) => ({ userId, calendarId: cals[service] }))
-        .filter((e) => e.calendarId && barbersById[e.userId]);
+        .filter((e) => e.calendarId && barbersById[e.userId])
+        .filter((e) => includeTest || !(TEST_WALK_IN_USER_IDS || []).includes(e.userId));
 
       const tierOrder = { now: 0, "5-10": 1, "10-20": 2, later: 3 };
 
@@ -13696,6 +13700,19 @@ function createApp() {
         } catch (updateErr) {
           console.error("⚠️ [KIOSK] Contact update failed (continuing):", updateErr.message);
         }
+      }
+
+      // Guarantee the walk-in service field is set on the contact, for BOTH new
+      // and returning customers. When getDuplicateContact misses but the phone
+      // already exists, the create-contact branch returns the existing contact
+      // WITHOUT applying customFields — so set it explicitly here every time.
+      try {
+        await ghlBarber.contacts.updateContact(
+          { contactId },
+          { customFields: [{ id: WALK_IN_SERVICE_FIELD_ID, field_value: serviceLabel }] }
+        );
+      } catch (cfErr) {
+        console.error("⚠️ [KIOSK] walk-in service field set failed (continuing):", cfErr.message);
       }
 
       // 2. Book appointment on the barber's calendar

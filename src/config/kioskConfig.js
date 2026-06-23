@@ -137,6 +137,12 @@ const WALK_IN_CALENDARS = {
   'mf1uNeKFJ1hTl1ZEvwjW': { haircut: '48a2xaeIgoz2XNMSAwRj' }, // ⚠️ TEMPORARY TEST BARBER — remove after walk-in testing
 };
 
+// GHL userIds that are TEST-ONLY walk-in barbers. Hidden from the live kiosk by
+// default; only included when the request passes ?includeTest=1 (the preview /
+// test website sets that flag). Lets us test on the preview without real clients
+// on the live kiosk seeing the test barber. Empty this out when testing is done.
+const TEST_WALK_IN_USER_IDS = ['mf1uNeKFJ1hTl1ZEvwjW'];
+
 const TATTOO_LOCATION_ID = process.env.GHL_LOCATION_ID || 'mUemx2jG4wly4kJWBkI4';
 
 const TATTOO_ARTIST_DATA = [
@@ -152,4 +158,4 @@ const TATTOO_ARTIST_DATA = [
   },
 ];
 
-module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID, WALK_IN_CALENDARS };
+module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID, WALK_IN_CALENDARS, TEST_WALK_IN_USER_IDS };
