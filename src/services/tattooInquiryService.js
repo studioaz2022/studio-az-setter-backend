@@ -46,12 +46,14 @@ const LANGUAGE_PREFERENCE_FIELD_ID = "ETxasC6QlyxRaKU18kbz";
 const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
+  megan: "BaSmQL1fkhdjmCYuDRWK",
 };
 
 // Display name lookup for auto-SMS personalization.
 const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
+  megan: "Megan",
 };
 
 // Kill switch — set LANDING_PAGE_AUTO_SMS_ENABLED=false on Render to disable

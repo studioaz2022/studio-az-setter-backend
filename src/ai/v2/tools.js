@@ -42,6 +42,9 @@ const ARTIST_CONSULT = {
   Andrew: { online: CALENDARS.ANDREW_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.ANDREW_IN_PERSON, userId: GHL_USER_IDS.ANDREW },
   Joan: { online: CALENDARS.JOAN_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.JOAN_IN_PERSON, userId: GHL_USER_IDS.JOAN },
   Claudia: { online: CALENDARS.CLAUDIA_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.CLAUDIA_IN_PERSON, userId: GHL_USER_IDS.CLAUDIA },
+  // Megan is a real apprentice artist, but intentionally NOT in ACTIVE_ARTISTS — she only takes
+  // leads who explicitly request her or are manually assigned, never the auto round-robin pool.
+  Megan: { online: CALENDARS.MEGAN_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.MEGAN_IN_PERSON, userId: GHL_USER_IDS.MEGAN },
 };
 const ACTIVE_ARTISTS = ["Andrew", "Joan"]; // workload pool when the lead has no specific artist
 

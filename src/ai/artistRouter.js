@@ -152,13 +152,14 @@ function normalizeArtistName(name) {
   const lower = trimmed.toLowerCase();
   if (lower.includes("joan")) return "Joan";
   if (lower.includes("andrew")) return "Andrew";
+  if (lower.includes("megan")) return "Megan";
   return trimmed;
 }
 
 function detectArtistMention(messageText) {
   if (!messageText) return null;
   const text = String(messageText).toLowerCase();
-  const artists = ["joan", "andrew"];
+  const artists = ["joan", "andrew", "megan"];
 
   for (const artist of artists) {
     const patterns = [
@@ -492,6 +493,12 @@ function getCalendarIdForArtist(artistName, consultMode = "online") {
     return normalizedMode === "in_person" || normalizedMode === "in-person"
       ? CALENDARS.ANDREW_IN_PERSON
       : CALENDARS.ANDREW_ONLINE;
+  }
+
+  if (normalizedArtist.toLowerCase() === "megan") {
+    return normalizedMode === "in_person" || normalizedMode === "in-person"
+      ? CALENDARS.MEGAN_IN_PERSON
+      : CALENDARS.MEGAN_ONLINE;
   }
 
   console.warn(

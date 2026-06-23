@@ -174,6 +174,7 @@ const CALENDARS = {
   JOAN_ONLINE: "Y13HIK8jFgO45zyq4sk7",
   ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
   CLAUDIA_ONLINE: "6RVbtnlSgXsnv2yG18Bo",
+  MEGAN_ONLINE: "bCY1Tl31taMqFwIzwhnQ",
 };
 
 // Artist in-person consultation calendars
@@ -181,6 +182,7 @@ const IN_PERSON_CONSULTATION_CALENDARS = {
   JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
   ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
   CLAUDIA_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
+  MEGAN_IN_PERSON: "94BxNphQPoKjdT0qTbZw",
 };
 
 // Tattoo appointment calendars (in-person sessions)
@@ -188,6 +190,7 @@ const TATTOO_CALENDARS = {
   JOAN_TATTOO: "0oW0C4kLB6qh1qa1WV9c",
   ANDREW_TATTOO: "9KwARaShHhymNjgarXgA",
   CLAUDIA_TATTOO: "Kzfh6YzvT9ck2qknjjJX",
+  MEGAN_TATTOO: "V4BBSwT1ItpeAOvurkA0",
 };
 
 // Translator calendars (online only)
@@ -205,6 +208,8 @@ const CONSULTATION_CALENDARS = {
   JOAN_IN_PERSON: "99Yu0gxVJ1Cc2y87CTJG",
   ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
   ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
+  MEGAN_ONLINE: "bCY1Tl31taMqFwIzwhnQ",
+  MEGAN_IN_PERSON: "94BxNphQPoKjdT0qTbZw",
 };
 
 // GHL User IDs for all team members
@@ -212,6 +217,7 @@ const GHL_USER_IDS = {
   CLAUDIA: "Wl24x1ZrucHuHatM0ODD",
   JOAN: "1wuLf50VMODExBSJ9xPI",
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
+  MEGAN: "BaSmQL1fkhdjmCYuDRWK",
   LIONEL: "1kFG5FWdUDhXLUX46snG",
   MARIA: "uAWhIMemqUPJC1SqCyDR",
 };
@@ -221,6 +227,7 @@ const GHL_USER_EMAILS = {
   "Wl24x1ZrucHuHatM0ODD": "l.jchavez@hotmail.com",       // Claudia
   "O8ChoMYj1BmMWJJsDlvC": "andrew_fernandez1@icloud.com", // Andrew
   "1wuLf50VMODExBSJ9xPI": "cjoanmartinez73@gmail.com",    // Joan
+  "BaSmQL1fkhdjmCYuDRWK": "Mschultz152@gmail.com",         // Megan
   "1kFG5FWdUDhXLUX46snG": "chavezctz@gmail.com",           // Lionel
   "uAWhIMemqUPJC1SqCyDR": "mariaaclaflin@gmail.com",       // Maria
 };
@@ -272,6 +279,7 @@ const APPOINTMENT_STATUS = {
 const ARTIST_ASSIGNED_USER_IDS = {
   JOAN: "1wuLf50VMODExBSJ9xPI",
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
+  MEGAN: "BaSmQL1fkhdjmCYuDRWK",
 };
 
 const ARTIST_NAME_TO_ID = Object.fromEntries(
@@ -285,6 +293,8 @@ const ARTIST_NAME_TO_ID = Object.fromEntries(
 const ARTIST_LANGUAGES = {
   Joan: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
   Andrew: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
+  // ASSUMPTION: Megan is English-speaking. Confirm + adjust if she speaks Spanish.
+  Megan: { speaks: ["English"], needsTranslatorFor: ["Spanish"] },
 };
 
 module.exports = {

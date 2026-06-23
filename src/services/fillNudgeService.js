@@ -35,6 +35,7 @@ const { ARTIST_USER_IDS } = require("./tattooInquiryService");
 const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
+  megan: "Megan",
 };
 
 // Send window in America/Chicago. 9am inclusive, 8pm exclusive (i.e. 9 ≤ hour < 20).

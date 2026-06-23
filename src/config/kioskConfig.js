@@ -156,6 +156,11 @@ const TATTOO_ARTIST_DATA = [
     ghlUserId: 'O8ChoMYj1BmMWJJsDlvC',
     calendarId: '9KwARaShHhymNjgarXgA',
   },
+  {
+    name: 'Megan Schultz',
+    ghlUserId: 'BaSmQL1fkhdjmCYuDRWK',
+    calendarId: 'V4BBSwT1ItpeAOvurkA0',
+  },
 ];
 
 module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID, WALK_IN_CALENDARS, TEST_WALK_IN_USER_IDS };
