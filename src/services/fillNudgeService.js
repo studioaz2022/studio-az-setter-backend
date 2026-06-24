@@ -36,6 +36,7 @@ const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
   megan: "Megan",
+  kaelani: "Kaelani",
 };
 
 // Send window in America/Chicago. 9am inclusive, 8pm exclusive (i.e. 9 ≤ hour < 20).

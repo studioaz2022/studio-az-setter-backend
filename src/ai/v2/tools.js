@@ -45,8 +45,9 @@ const ARTIST_CONSULT = {
   // Megan is a real apprentice artist, but intentionally NOT in ACTIVE_ARTISTS — she only takes
   // leads who explicitly request her or are manually assigned, never the auto round-robin pool.
   Megan: { online: CALENDARS.MEGAN_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.MEGAN_IN_PERSON, userId: GHL_USER_IDS.MEGAN },
+  Kaelani: { online: CALENDARS.KAELANI_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.KAELANI_IN_PERSON, userId: GHL_USER_IDS.KAELANI },
 };
-const ACTIVE_ARTISTS = ["Andrew", "Joan"]; // workload pool when the lead has no specific artist
+const ACTIVE_ARTISTS = ["Andrew", "Joan", "Kaelani"]; // workload pool when the lead has no specific artist
 
 /** Match an artist string (any case) to a known consult artist key (Andrew/Joan/Claudia), or null. */
 function consultArtistKey(name) {

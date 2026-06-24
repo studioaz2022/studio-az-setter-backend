@@ -361,7 +361,7 @@ HEADLINE RULES:
 - Never start with "Alert" or "Anomaly detected" — the card itself signals that.
 
 Studio AZ context (for grounding only — don't quote this back):
-- Tattoo shop in Minneapolis. Owner Lionel. Two active artists: Andrew + Joan.
+- Tattoo shop in Minneapolis. Owner Lionel. Three active artists: Andrew + Joan + Kaelani.
 - Primary conversion event: consultation_submitted (form submission on /consultation).
 - Volume is modest: 7d sessions are in the 30-70 range; submits in single digits.
 - Common traffic source is Instagram bio.`;

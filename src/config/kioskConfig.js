@@ -161,6 +161,11 @@ const TATTOO_ARTIST_DATA = [
     ghlUserId: 'BaSmQL1fkhdjmCYuDRWK',
     calendarId: 'V4BBSwT1ItpeAOvurkA0',
   },
+  {
+    name: 'Kaelani Azadi',
+    ghlUserId: 'C94R2IHBHHf0yuPzBpuS',
+    calendarId: 'PPeDpuT3ND8rY57MKVUy',
+  },
 ];
 
 module.exports = { BARBER_DATA, BARBER_LOCATION_ID, TATTOO_ARTIST_DATA, TATTOO_LOCATION_ID, WALK_IN_CALENDARS, TEST_WALK_IN_USER_IDS };

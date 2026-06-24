@@ -47,6 +47,7 @@ const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
   megan: "BaSmQL1fkhdjmCYuDRWK",
+  kaelani: "C94R2IHBHHf0yuPzBpuS",
 };
 
 // Display name lookup for auto-SMS personalization.
@@ -54,6 +55,7 @@ const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
   megan: "Megan",
+  kaelani: "Kaelani",
 };
 
 // Kill switch — set LANDING_PAGE_AUTO_SMS_ENABLED=false on Render to disable

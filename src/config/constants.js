@@ -175,6 +175,7 @@ const CALENDARS = {
   ANDREW_ONLINE: "yVylpytpJmhu47osg3mN",
   CLAUDIA_ONLINE: "6RVbtnlSgXsnv2yG18Bo",
   MEGAN_ONLINE: "bCY1Tl31taMqFwIzwhnQ",
+  KAELANI_ONLINE: "AZvtzbH1JvsW1r9Zysei",
 };
 
 // Artist in-person consultation calendars
@@ -183,6 +184,7 @@ const IN_PERSON_CONSULTATION_CALENDARS = {
   ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
   CLAUDIA_IN_PERSON: "2EJcAtrllnYOtuSx4Dua",
   MEGAN_IN_PERSON: "94BxNphQPoKjdT0qTbZw",
+  KAELANI_IN_PERSON: "wK9rRHnZDJe5tck0A6ls",
 };
 
 // Tattoo appointment calendars (in-person sessions)
@@ -191,6 +193,7 @@ const TATTOO_CALENDARS = {
   ANDREW_TATTOO: "9KwARaShHhymNjgarXgA",
   CLAUDIA_TATTOO: "Kzfh6YzvT9ck2qknjjJX",
   MEGAN_TATTOO: "V4BBSwT1ItpeAOvurkA0",
+  KAELANI_TATTOO: "PPeDpuT3ND8rY57MKVUy",
 };
 
 // Translator calendars (online only)
@@ -210,6 +213,8 @@ const CONSULTATION_CALENDARS = {
   ANDREW_IN_PERSON: "yKJJJoyEZ6j8tZhVgJ5i",
   MEGAN_ONLINE: "bCY1Tl31taMqFwIzwhnQ",
   MEGAN_IN_PERSON: "94BxNphQPoKjdT0qTbZw",
+  KAELANI_ONLINE: "AZvtzbH1JvsW1r9Zysei",
+  KAELANI_IN_PERSON: "wK9rRHnZDJe5tck0A6ls",
 };
 
 // GHL User IDs for all team members
@@ -218,6 +223,7 @@ const GHL_USER_IDS = {
   JOAN: "1wuLf50VMODExBSJ9xPI",
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
   MEGAN: "BaSmQL1fkhdjmCYuDRWK",
+  KAELANI: "C94R2IHBHHf0yuPzBpuS",
   LIONEL: "1kFG5FWdUDhXLUX46snG",
   MARIA: "uAWhIMemqUPJC1SqCyDR",
 };
@@ -228,6 +234,7 @@ const GHL_USER_EMAILS = {
   "O8ChoMYj1BmMWJJsDlvC": "andrew_fernandez1@icloud.com", // Andrew
   "1wuLf50VMODExBSJ9xPI": "cjoanmartinez73@gmail.com",    // Joan
   "BaSmQL1fkhdjmCYuDRWK": "Mschultz152@gmail.com",         // Megan
+  "C94R2IHBHHf0yuPzBpuS": "azaditatz777@gmail.com",        // Kaelani
   "1kFG5FWdUDhXLUX46snG": "chavezctz@gmail.com",           // Lionel
   "uAWhIMemqUPJC1SqCyDR": "mariaaclaflin@gmail.com",       // Maria
 };
@@ -280,6 +287,7 @@ const ARTIST_ASSIGNED_USER_IDS = {
   JOAN: "1wuLf50VMODExBSJ9xPI",
   ANDREW: "O8ChoMYj1BmMWJJsDlvC",
   MEGAN: "BaSmQL1fkhdjmCYuDRWK",
+  KAELANI: "C94R2IHBHHf0yuPzBpuS",
 };
 
 const ARTIST_NAME_TO_ID = Object.fromEntries(
@@ -295,6 +303,8 @@ const ARTIST_LANGUAGES = {
   Andrew: { speaks: ["Spanish"], needsTranslatorFor: ["English"] },
   // ASSUMPTION: Megan is English-speaking. Confirm + adjust if she speaks Spanish.
   Megan: { speaks: ["English"], needsTranslatorFor: ["Spanish"] },
+  // Kaelani is English-speaking (confirmed 2026-06-24) — translator for Spanish leads.
+  Kaelani: { speaks: ["English"], needsTranslatorFor: ["Spanish"] },
 };
 
 module.exports = {

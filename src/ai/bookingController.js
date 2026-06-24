@@ -33,7 +33,7 @@ const { sendConversationMessage } = require("../clients/ghlClient");
 const { boolField, normalizeCustomFields } = require("./opportunityManager");
 
 // Active artists for time-first slot generation
-const ACTIVE_ARTISTS = ["Joan", "Andrew"];
+const ACTIVE_ARTISTS = ["Joan", "Andrew", "Kaelani"];
 
 /**
  * Generate a unique pairing key for linking artist and translator appointments.

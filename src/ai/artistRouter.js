@@ -11,6 +11,7 @@ const {
   SYSTEM_FIELDS,
   TATTOO_FIELDS,
   CALENDARS,
+  IN_PERSON_CONSULTATION_CALENDARS,
   ARTIST_ASSIGNED_USER_IDS,
   ARTIST_NAME_TO_ID,
 } = require("../config/constants");
@@ -153,13 +154,14 @@ function normalizeArtistName(name) {
   if (lower.includes("joan")) return "Joan";
   if (lower.includes("andrew")) return "Andrew";
   if (lower.includes("megan")) return "Megan";
+  if (lower.includes("kaelani")) return "Kaelani";
   return trimmed;
 }
 
 function detectArtistMention(messageText) {
   if (!messageText) return null;
   const text = String(messageText).toLowerCase();
-  const artists = ["joan", "andrew", "megan"];
+  const artists = ["joan", "andrew", "megan", "kaelani"];
 
   for (const artist of artists) {
     const patterns = [
@@ -485,20 +487,26 @@ function getCalendarIdForArtist(artistName, consultMode = "online") {
 
   if (normalizedArtist.toLowerCase() === "joan") {
     return normalizedMode === "in_person" || normalizedMode === "in-person"
-      ? CALENDARS.JOAN_IN_PERSON
+      ? IN_PERSON_CONSULTATION_CALENDARS.JOAN_IN_PERSON
       : CALENDARS.JOAN_ONLINE;
   }
 
   if (normalizedArtist.toLowerCase() === "andrew") {
     return normalizedMode === "in_person" || normalizedMode === "in-person"
-      ? CALENDARS.ANDREW_IN_PERSON
+      ? IN_PERSON_CONSULTATION_CALENDARS.ANDREW_IN_PERSON
       : CALENDARS.ANDREW_ONLINE;
   }
 
   if (normalizedArtist.toLowerCase() === "megan") {
     return normalizedMode === "in_person" || normalizedMode === "in-person"
-      ? CALENDARS.MEGAN_IN_PERSON
+      ? IN_PERSON_CONSULTATION_CALENDARS.MEGAN_IN_PERSON
       : CALENDARS.MEGAN_ONLINE;
+  }
+
+  if (normalizedArtist.toLowerCase() === "kaelani") {
+    return normalizedMode === "in_person" || normalizedMode === "in-person"
+      ? IN_PERSON_CONSULTATION_CALENDARS.KAELANI_IN_PERSON
+      : CALENDARS.KAELANI_ONLINE;
   }
 
   console.warn(
