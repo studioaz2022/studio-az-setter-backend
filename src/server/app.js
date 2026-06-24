@@ -1753,6 +1753,13 @@ function createApp() {
     // Acknowledge immediately so GHL doesn't retry
     res.status(200).json({ ok: true });
 
+    // Feed the freshness watchdog so the safety-sweep loop knows the
+    // GHL webhook stream is alive (re-arms staleness alerts).
+    try {
+      const { markAppointmentWebhookReceived } = require("../services/cacheReconcileLoop");
+      markAppointmentWebhookReceived();
+    } catch {}
+
     // Process asynchronously
     setImmediate(async () => {
       try {
@@ -8419,6 +8426,13 @@ function createApp() {
         return res.status(401).json({ success: false, error: "Unauthorized" });
       }
 
+      // Feed the freshness watchdog so the safety-sweep loop knows the
+      // GHL webhook stream is alive (re-arms staleness alerts).
+      try {
+        const { markAppointmentWebhookReceived } = require("../services/cacheReconcileLoop");
+        markAppointmentWebhookReceived();
+      } catch {}
+
       const { type } = req.body;
 
       let handledAppointment = false;
@@ -14139,6 +14153,24 @@ function createApp() {
       return res.status(500).json({ success: false, error: fbError });
     }
   });
+
+  // Cache reconcile + webhook staleness watchdog (see
+  // src/services/cacheReconcileLoop.js for context — wired here so it
+  // starts whenever the app boots). Set DISABLE_CACHE_RECONCILE_LOOP=1
+  // to opt out (e.g. in tests).
+  if (process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+    try {
+      const {
+        startCacheReconcileLoop,
+      } = require("../services/cacheReconcileLoop");
+      startCacheReconcileLoop();
+    } catch (err) {
+      console.error(
+        "[app] failed to start cache reconcile loop:",
+        err.message || err
+      );
+    }
+  }
 
   return app;
 }
