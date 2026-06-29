@@ -11451,6 +11451,25 @@ function createApp() {
       }
     }
 
+    // Merge overlapping/adjacent { startMin, endMin } intervals into a
+    // minimal set of non-overlapping ranges. Used to union a barber's
+    // per-calendar working hours into "the column is open during X".
+    function mergeIntervals(intervals) {
+      if (!intervals || intervals.length === 0) return [];
+      const sorted = [...intervals].sort((a, b) => a.startMin - b.startMin);
+      const out = [{ ...sorted[0] }];
+      for (let i = 1; i < sorted.length; i++) {
+        const cur = sorted[i];
+        const last = out[out.length - 1];
+        if (cur.startMin <= last.endMin) {
+          last.endMin = Math.max(last.endMin, cur.endMin);
+        } else {
+          out.push({ ...cur });
+        }
+      }
+      return out;
+    }
+
     // Resolve a calendar's bookable wall-clock intervals on a given
     // YYYY-MM-DD (Central). Returns [{ startMin, endMin }] in minutes
     // since midnight. Empty array means "no schedule found / day off"
@@ -11579,6 +11598,106 @@ function createApp() {
       } catch (err) {
         const msg = err.response?.data?.message || err.message || String(err);
         console.error("❌ GET /api/frontdesk/services error:", msg);
+        res.status(500).json({ success: false, error: msg });
+      }
+    });
+
+    /**
+     * GET /api/frontdesk/hours-overlay?location=&date=YYYY-MM-DD
+     *
+     * Per-staff working-hours map for ONE day so the dashboard can
+     * shade each column's off-hours. The dashboard uses this as a
+     * visual hint only — booking is NOT gated by this overlay (the
+     * desk can still book into off-hours; that pattern is encoded in
+     * the FE design — the overlay is informational, not a guard).
+     *
+     * Each staff member's open intervals are the UNION of all their
+     * calendars' intervals on the requested day. We union across
+     * calendars because the column shows the barber's whole day,
+     * not one service. Empty array = "no schedule data / day off /
+     * no rule covers any of their calendars today" — the FE leaves
+     * those columns clear so we don't false-imply they're off all day.
+     *
+     * Resolution is per-staff minutes-since-midnight. Schedules cache
+     * is the same 10-min process cache the booking widget uses, so
+     * dashboard loads stay fast.
+     */
+    app.get("/api/frontdesk/hours-overlay", async (req, res) => {
+      try {
+        const resolved = fdResolveLocation(req.query.location);
+        const dateStr = (req.query.date || "").toString();
+        if (!resolved) {
+          return res
+            .status(400)
+            .json({ success: false, error: "Invalid location" });
+        }
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) {
+          return res
+            .status(400)
+            .json({ success: false, error: "date must be YYYY-MM-DD" });
+        }
+
+        const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
+        const sdk =
+          isBarber && ghlBarber
+            ? ghlBarber
+            : require("../clients/ghlSdk").ghl;
+
+        // Per-staff parallel schedule fetch + union across their
+        // calendars. fdGetSchedulesForStaff is cached; fanning out
+        // is cheap (only the first request for the day actually hits
+        // GHL — subsequent loads come from process cache).
+        const perStaff = await Promise.all(
+          resolved.roster.map(async (member) => {
+            try {
+              const schedules = await fdGetSchedulesForStaff(
+                sdk,
+                resolved.locationId,
+                member.ghlUserId
+              );
+              // Collect this barber's calendar IDs (round-robin map
+              // for barbers, single calendarId for tattoo artists).
+              const calIds = [];
+              if (member.calendars) {
+                for (const cid of Object.values(member.calendars)) {
+                  if (cid) calIds.push(cid);
+                }
+              } else if (member.calendarId) {
+                calIds.push(member.calendarId);
+              }
+              // Union of per-calendar intervals. We merge overlapping
+              // ranges so the FE just paints "closed = everything
+              // outside this set" without worrying about overlaps.
+              const all = [];
+              for (const cid of calIds) {
+                const ivs = fdOpenIntervalsForDay(schedules, cid, dateStr);
+                for (const iv of ivs) all.push(iv);
+              }
+              const merged = mergeIntervals(all);
+              return [member.ghlUserId, merged];
+            } catch (err) {
+              console.warn(
+                `[hours-overlay] ${member.ghlUserId} failed:`,
+                err.message
+              );
+              // Treat as "no schedule" — column stays clear.
+              return [member.ghlUserId, []];
+            }
+          })
+        );
+        const staffMap = {};
+        for (const [id, intervals] of perStaff) {
+          if (id) staffMap[id] = intervals;
+        }
+        res.json({
+          success: true,
+          location: resolved.label,
+          date: dateStr,
+          staff: staffMap,
+        });
+      } catch (err) {
+        const msg = err.response?.data?.message || err.message || String(err);
+        console.error("❌ GET /api/frontdesk/hours-overlay error:", msg);
         res.status(500).json({ success: false, error: msg });
       }
     });
