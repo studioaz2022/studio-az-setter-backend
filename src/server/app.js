@@ -1546,7 +1546,7 @@ function createApp() {
             const USER_ID_TO_ARTIST_NAME = {
               '1wuLf50VMODExBSJ9xPI': 'Joan',
               'O8ChoMYj1BmMWJJsDlvC': 'Andrew',
-              'BaSmQL1fkhdjmCYuDRWK': 'Megan',
+              'BaSmQL1fkhdjmCYuDRWK': 'Meg',
               'C94R2IHBHHf0yuPzBpuS': 'Kaelani',
               'uAWhIMemqUPJC1SqCyDR': 'Maria',
               '1kFG5FWdUDhXLUX46snG': 'Lionel',
@@ -6492,7 +6492,7 @@ function createApp() {
       // Surface the artist's first name for the welcome screen — the page
       // already knows the slug from `payload.artistSlug` but a humanized name
       // belongs server-side so we can ever rename / remap without a redeploy.
-      const ARTIST_DISPLAY_NAMES = { joan: "Joan", andrew: "Andrew", megan: "Megan", kaelani: "Kaelani" };
+      const ARTIST_DISPLAY_NAMES = { joan: "Joan", andrew: "Andrew", megan: "Meg", kaelani: "Kaelani" };
       const artistFirstName = ARTIST_DISPLAY_NAMES[payload.artistSlug] ||
         payload.artistSlug.charAt(0).toUpperCase() + payload.artistSlug.slice(1);
 

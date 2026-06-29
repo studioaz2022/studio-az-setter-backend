@@ -54,7 +54,7 @@ const ARTIST_USER_IDS = {
 const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
-  megan: "Megan",
+  megan: "Meg",
   kaelani: "Kaelani",
 };
 
