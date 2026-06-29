@@ -158,6 +158,48 @@ async function reconcileOneStaff({
     return stats;
   }
 
+  // ── Blocked slots (Phase 3.15e/16e) ─────────────────────────────
+  // /calendars/blocked-slots is a SEPARATE endpoint from /events.
+  // The "Add Block" UI on the GHL calendar page writes here; these
+  // rows do NOT come back from getEvents (verified 2026-06-29 for
+  // David's 11:20/1:20 blocks). We fetch them per staff member and
+  // merge into the same `events` list so the existing eventToRow +
+  // upsert path persists them with calendar_id=null, contact_id=null,
+  // which the schedule endpoint's isBlockRow third-signal recognizes.
+  // Failure here is non-fatal — block fetch errors shouldn't stop the
+  // appointment reconcile (count as one error but keep going).
+  try {
+    const blockedRes = await sdkInstance.calendars.getBlockedSlots({
+      locationId,
+      userId: staffGhlUserId,
+      startTime: String(new Date(startTime).getTime()),
+      endTime: String(new Date(endTime).getTime()),
+    });
+    const blocks = blockedRes?.events || [];
+    for (const b of blocks) {
+      // Normalize so eventToRow → mapGHLAppointmentToSupabase produces
+      // a clean cache row. The cache's `calendar_id` AND `contact_id`
+      // columns are both NOT NULL, so we write a sentinel "__block__"
+      // for both. The schedule endpoint's isBlockRow recognizes the
+      // calendar_id sentinel; that's enough — contact_id sentinel is
+      // just to satisfy the schema constraint.
+      events.push({
+        ...b,
+        title: b.title || "Block",
+        appointmentStatus: "new",
+        calendarId: "__block__",
+        contactId: "__block__",
+      });
+    }
+  } catch (err) {
+    console.error(
+      `[reconcile] blocks fetch failed for ${staffGhlUserId}:`,
+      err.message
+    );
+    stats.errors++;
+    // Keep processing appointments — blocks are additive.
+  }
+
   stats.scanned = events.length;
 
   for (const event of events) {

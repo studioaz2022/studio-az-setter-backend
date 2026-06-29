@@ -10142,9 +10142,24 @@ function createApp() {
         // the grid renders a hatched band, not a client card, and they're
         // excluded from the booking count.
         const BLOCK_CALENDAR_ID = "lijQ2ubF4UcrHxDwfzyK";
+        const BLOCK_SENTINEL = "__block__";
         const BLOCK_ID_RE = /^[A-Za-z0-9]{15,}_\d{10,}_\d+$/;
+        // Four signals that mean "this row is a block, not a real
+        // booking" (any one is sufficient):
+        //   1. Lives on the dedicated break calendar.
+        //   2. Composite id `<base>_<epoch>_<duration>` — GHL's
+        //      recurring-block format.
+        //   3. calendar_id = "__block__" sentinel — the reconciler's
+        //      mark for blocks fetched from /calendars/blocked-slots
+        //      (the "Add Block" UI on the calendar page). Sentinel
+        //      because the cache's calendar_id is NOT NULL.
+        //      Surfaced by the reconciler 2026-06-29.
+        //   4. Defensive: no calendar_id AND no contact_id.
         const isBlockRow = (r) =>
-          r.calendar_id === BLOCK_CALENDAR_ID || BLOCK_ID_RE.test(r.id || "");
+          r.calendar_id === BLOCK_CALENDAR_ID ||
+          r.calendar_id === BLOCK_SENTINEL ||
+          BLOCK_ID_RE.test(r.id || "") ||
+          (!r.calendar_id && !r.contact_id);
 
         // Drop GHL tombstone rows BEFORE rendering. When an appt is
         // rescheduled or replaced via the GHL widget the original row
