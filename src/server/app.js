@@ -120,6 +120,7 @@ const {
 const analyticsRoutes = require("../analytics/analyticsRoutes");
 const seoRoutes = require("../seo/seoRoutes");
 const leadsRoutes = require("../leads/leadsRoutes");
+const { registerReviewsRoutes } = require("../reviews/reviewsRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
@@ -509,6 +510,9 @@ function createApp() {
         'https://checkout-chi-nine.vercel.app', // Checkout page (Vercel dev)
         'https://rent-tracker-tawny.vercel.app', // Rent tracker production alias
         'https://rent-tracker-studioaz2022s-projects.vercel.app', // Rent tracker fallback alias
+        'https://minneapolisbarbershop.com', // Barbershop website (prod)
+        'https://www.minneapolisbarbershop.com', // Barbershop website (www)
+        'https://barbershop-website-bay.vercel.app', // Barbershop website Vercel alias
         'http://localhost:3000',
         'http://localhost:3001',
         'http://localhost:3002', // Front-desk dashboard (dev)
@@ -533,6 +537,10 @@ function createApp() {
         callback(null, true);
       } else if (/^https:\/\/check-[a-z0-9]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
         // Check-in kiosk preview/branch deploys (Vercel) — project "check-in"
+        callback(null, true);
+      } else if (/^https:\/\/barbershop-website-[a-z0-9-]+\.vercel\.app$/.test(origin) ||
+                 /^https:\/\/barbershop-website-[a-z0-9-]+-studioaz2022s-projects\.vercel\.app$/.test(origin)) {
+        // Barbershop website production + preview/branch deploys (Vercel)
         callback(null, true);
       } else if (/^http:\/\/(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|localhost)(:\d+)?$/.test(origin)) {
         // Allow any private/local network IP (kiosk, local dev)
@@ -13948,6 +13956,11 @@ function createApp() {
 
   // ═══ LEADS COMMAND CENTER ROUTES ═══
   app.use("/api/leads", leadsRoutes);
+
+  // ═══ GOOGLE REVIEWS (Places API) ═══
+  // Public endpoint — barbershop-website pulls live Google reviews here.
+  // No auth required (it's just rendering already-public reviews).
+  registerReviewsRoutes(app);
 
   // ═══ CONSENT FORM ROUTES ═══
   const {
