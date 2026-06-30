@@ -83,6 +83,12 @@ function getAssignedUserIdForArtist(artistName) {
     return raw;
   }
 
+  // Fall back to the normalized key (e.g. "Meg Schultz" -> "Megan" -> id)
+  const normalized = normalizeArtistName(raw);
+  if (normalized && ARTIST_NAME_TO_ID[normalized.toLowerCase()]) {
+    return ARTIST_NAME_TO_ID[normalized.toLowerCase()];
+  }
+
   return null;
 }
 
@@ -153,7 +159,10 @@ function normalizeArtistName(name) {
   const lower = trimmed.toLowerCase();
   if (lower.includes("joan")) return "Joan";
   if (lower.includes("andrew")) return "Andrew";
-  if (lower.includes("megan")) return "Megan";
+  // Megan goes by "Meg" client-facing (website sends "Meg Schultz"); the internal
+  // routing key stays "Megan". Match her first name OR surname so the public name
+  // resolves correctly.
+  if (lower.includes("megan") || lower.startsWith("meg") || lower.includes("schultz")) return "Megan";
   if (lower.includes("kaelani")) return "Kaelani";
   return trimmed;
 }
@@ -188,8 +197,13 @@ function resolveArtistIdentifier(artistIdentifier) {
   const idFromName = ARTIST_NAME_TO_ID[lower];
   const nameFromId = ARTIST_ID_TO_NAME[raw];
 
-  const artistId = idFromName || (nameFromId ? raw : null) || raw;
   const artistName = nameFromId || normalizeArtistName(raw);
+  // Resolve the real GHL user id via the normalized name. Never fall back to the
+  // raw string as an id — an unrecognized name is not a valid user id.
+  const artistId =
+    idFromName ||
+    (nameFromId ? raw : null) ||
+    getAssignedUserIdForArtist(artistName);
 
   return { artistId, artistName };
 }
@@ -482,7 +496,8 @@ function updateArtistWorkload(artistName, delta) {
  * @returns {string|null} Calendar ID or null if not found
  */
 function getCalendarIdForArtist(artistName, consultMode = "online") {
-  const normalizedArtist = String(artistName).trim();
+  // Normalize first so public names (e.g. "Meg Schultz") resolve to the routing key.
+  const normalizedArtist = normalizeArtistName(artistName) || String(artistName).trim();
   const normalizedMode = String(consultMode).toLowerCase().trim();
 
   if (normalizedArtist.toLowerCase() === "joan") {
