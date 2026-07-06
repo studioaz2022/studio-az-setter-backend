@@ -14,6 +14,7 @@ const {
   TATTOO_CALENDARS,
   TRANSLATOR_CALENDARS,
   GHL_USER_EMAILS,
+  GHL_USER_IDS,
 } = require('../config/constants');
 const { updateContact, getContact } = require('./ghlClient');
 const { getOpportunitiesByContact, updateOpportunityStage } = require('./ghlOpportunityClient');
@@ -38,6 +39,14 @@ const ALL_CONSULT_CALENDAR_IDS = new Set([
 const TATTOO_CALENDAR_IDS = new Set([
   ...Object.values(TATTOO_CALENDARS).filter(Boolean),
 ]);
+
+// Apprentice TATTOO calendar → mentor GHL user id + apprentice display name.
+// When a new tattoo appointment lands on an apprentice's tattoo calendar, ping their
+// mentor so they know to be present. Consultations are excluded by construction
+// (only the tattoo calendar id is a key here).
+const APPRENTICE_TATTOO_MENTOR = {
+  [TATTOO_CALENDARS.MEGAN_TATTOO]: { mentorGhlId: GHL_USER_IDS.ANDREW, apprenticeName: 'Meg' },
+};
 
 /**
  * Handle appointment created event
@@ -66,6 +75,9 @@ async function handleAppointmentCreated(payload) {
 
   // Send push notification to assigned artist
   await sendAppointmentPushNotification(payload.appointment || payload, 'created');
+
+  // If this is an apprentice's TATTOO appointment, ping their mentor to be present
+  await notifyMentorOfApprenticeTattoo(payload.appointment || payload);
 
   // Auto-create Google Calendar event + Fireflies for consultation appointments
   // that don't already have a Google Meet link (i.e., manually booked via iOS or GHL UI)
@@ -422,6 +434,83 @@ async function sendAppointmentPushNotification(appointment, eventType, options =
 
   } catch (error) {
     console.error('❌ Error sending push notification:', error);
+  }
+}
+
+/**
+ * When a new TATTOO appointment is created on an apprentice's tattoo calendar, send a
+ * custom push to their mentor (e.g. Meg → Andrew). Fires only for tattoo appointments —
+ * consultations never trigger this because only the tattoo calendar id is mapped.
+ */
+async function notifyMentorOfApprenticeTattoo(rawAppt) {
+  try {
+    const calendarId = rawAppt.calendarId;
+    const mapping = APPRENTICE_TATTOO_MENTOR[calendarId];
+    if (!mapping) return; // not an apprentice tattoo calendar
+
+    if (!apnsService.isConfigured()) {
+      console.log('⚠️ [mentor-notify] APNs not configured, skipping');
+      return;
+    }
+
+    const { mentorGhlId, apprenticeName } = mapping;
+
+    // Look up the mentor's profile → active device tokens
+    const { data: profile, error: profileError } = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('ghl_user_id', mentorGhlId)
+      .single();
+
+    if (profileError || !profile) {
+      console.log(`⚠️ [mentor-notify] No profile for mentor ${mentorGhlId}`);
+      return;
+    }
+
+    const { data: tokens, error: tokenError } = await supabase
+      .from('push_tokens')
+      .select('token, language')
+      .eq('user_id', profile.id)
+      .eq('is_active', true);
+
+    if (tokenError) {
+      console.error('❌ [mentor-notify] Error fetching tokens:', tokenError);
+      return;
+    }
+    if (!tokens || tokens.length === 0) {
+      console.log(`⚠️ [mentor-notify] No push tokens for mentor ${profile.id}`);
+      return;
+    }
+
+    const contactName = rawAppt.title || rawAppt.contactName || 'a client';
+    const startTime = rawAppt.startTime || rawAppt.start_time;
+
+    console.log(`📱 [mentor-notify] Notifying mentor ${mentorGhlId} of ${apprenticeName}'s tattoo → ${tokens.length} device(s)`);
+
+    for (const tokenRecord of tokens) {
+      const isSpanish = tokenRecord.language === 'es';
+      const locale = isSpanish ? 'es-US' : 'en-US';
+      const tz = 'America/Chicago';
+      const date = new Date(startTime);
+      const formattedDate = date.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
+      const formattedTime = date.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz });
+
+      const notification = {
+        type: 'apprentice_tattoo_booked',
+        title: isSpanish ? `Tatuaje de ${apprenticeName}` : `${apprenticeName} — new tattoo`,
+        body: isSpanish
+          ? `${apprenticeName} tiene un tatuaje con ${contactName} el ${formattedDate} a las ${formattedTime}.`
+          : `${apprenticeName} booked a tattoo with ${contactName} on ${formattedDate} at ${formattedTime}.`,
+        appointmentId: rawAppt.id || rawAppt.appointmentId,
+        contactId: rawAppt.contactId,
+        contactName,
+      };
+      await apnsService.send(tokenRecord.token, notification);
+    }
+
+    console.log('✅ [mentor-notify] Mentor notification sent');
+  } catch (err) {
+    console.error('❌ [mentor-notify] Error:', err.message || err);
   }
 }
 
