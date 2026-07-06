@@ -35,7 +35,7 @@ const { ARTIST_USER_IDS } = require("./tattooInquiryService");
 const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
-  megan: "Meg",
+  meg: "Meg",
   kaelani: "Kaelani",
 };
 

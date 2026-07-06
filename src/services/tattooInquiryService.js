@@ -46,7 +46,7 @@ const LANGUAGE_PREFERENCE_FIELD_ID = "ETxasC6QlyxRaKU18kbz";
 const ARTIST_USER_IDS = {
   joan: "1wuLf50VMODExBSJ9xPI",
   andrew: "O8ChoMYj1BmMWJJsDlvC",
-  megan: "BaSmQL1fkhdjmCYuDRWK",
+  meg: "BaSmQL1fkhdjmCYuDRWK",
   kaelani: "C94R2IHBHHf0yuPzBpuS",
 };
 
@@ -54,7 +54,7 @@ const ARTIST_USER_IDS = {
 const ARTIST_FIRST_NAMES = {
   joan: "Joan",
   andrew: "Andrew",
-  megan: "Meg",
+  meg: "Meg",
   kaelani: "Kaelani",
 };
 

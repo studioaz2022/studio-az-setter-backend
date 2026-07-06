@@ -6500,7 +6500,7 @@ function createApp() {
       // Surface the artist's first name for the welcome screen — the page
       // already knows the slug from `payload.artistSlug` but a humanized name
       // belongs server-side so we can ever rename / remap without a redeploy.
-      const ARTIST_DISPLAY_NAMES = { joan: "Joan", andrew: "Andrew", megan: "Meg", kaelani: "Kaelani" };
+      const ARTIST_DISPLAY_NAMES = { joan: "Joan", andrew: "Andrew", meg: "Meg", kaelani: "Kaelani" };
       const artistFirstName = ARTIST_DISPLAY_NAMES[payload.artistSlug] ||
         payload.artistSlug.charAt(0).toUpperCase() + payload.artistSlug.slice(1);
 
