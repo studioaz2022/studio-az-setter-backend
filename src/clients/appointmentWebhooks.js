@@ -317,6 +317,10 @@ async function handleAppointmentUpdated(payload) {
   const pushOptions = isRescheduled ? { previousStartTime: existing?.start_time } : {};
   await sendAppointmentPushNotification(rawAppointment, eventType, pushOptions);
 
+  // Notify the mentor when an apprentice's tattoo is rescheduled or cancelled
+  // (plain 'updated' events early-return inside the helper).
+  await notifyMentorOfApprenticeTattoo(rawAppointment, eventType, pushOptions);
+
   // Re-create Google Meet + Fireflies for rescheduled online consultations
   if (isRescheduled) {
     await ensureGoogleMeetForConsultation(rawAppointment, { forceNew: true });
@@ -353,6 +357,9 @@ async function handleAppointmentDeleted(payload) {
   console.log('✅ Appointment deleted from Supabase:', appointmentId);
 
   await sendAppointmentPushNotification(rawAppointment, 'cancelled');
+
+  // Notify the mentor when an apprentice's tattoo is deleted (treated as cancelled)
+  await notifyMentorOfApprenticeTattoo(rawAppointment, 'cancelled');
 }
 
 /**
@@ -442,11 +449,14 @@ async function sendAppointmentPushNotification(appointment, eventType, options =
  * custom push to their mentor (e.g. Meg → Andrew). Fires only for tattoo appointments —
  * consultations never trigger this because only the tattoo calendar id is mapped.
  */
-async function notifyMentorOfApprenticeTattoo(rawAppt) {
+async function notifyMentorOfApprenticeTattoo(rawAppt, eventType = 'created', options = {}) {
   try {
     const calendarId = rawAppt.calendarId;
     const mapping = APPRENTICE_TATTOO_MENTOR[calendarId];
     if (!mapping) return; // not an apprentice tattoo calendar
+
+    // Only ping the mentor for meaningful lifecycle events
+    if (!['created', 'rescheduled', 'cancelled'].includes(eventType)) return;
 
     if (!apnsService.isConfigured()) {
       console.log('⚠️ [mentor-notify] APNs not configured, skipping');
@@ -485,7 +495,7 @@ async function notifyMentorOfApprenticeTattoo(rawAppt) {
     const contactName = rawAppt.title || rawAppt.contactName || 'a client';
     const startTime = rawAppt.startTime || rawAppt.start_time;
 
-    console.log(`📱 [mentor-notify] Notifying mentor ${mentorGhlId} of ${apprenticeName}'s tattoo → ${tokens.length} device(s)`);
+    console.log(`📱 [mentor-notify] Notifying mentor ${mentorGhlId} of ${apprenticeName}'s tattoo (${eventType}) → ${tokens.length} device(s)`);
 
     for (const tokenRecord of tokens) {
       const isSpanish = tokenRecord.language === 'es';
@@ -495,12 +505,28 @@ async function notifyMentorOfApprenticeTattoo(rawAppt) {
       const formattedDate = date.toLocaleDateString(locale, { weekday: 'short', month: 'short', day: 'numeric', timeZone: tz });
       const formattedTime = date.toLocaleTimeString(locale, { hour: 'numeric', minute: '2-digit', hour12: true, timeZone: tz });
 
-      const notification = {
-        type: 'apprentice_tattoo_booked',
-        title: isSpanish ? `Tatuaje de ${apprenticeName}` : `${apprenticeName} — new tattoo`,
-        body: isSpanish
+      let title, body;
+      if (eventType === 'cancelled') {
+        title = isSpanish ? `Tatuaje de ${apprenticeName} — cancelado` : `${apprenticeName} — tattoo cancelled`;
+        body = isSpanish
+          ? `El tatuaje de ${apprenticeName} con ${contactName} el ${formattedDate} a las ${formattedTime} fue cancelado.`
+          : `${apprenticeName}'s tattoo with ${contactName} on ${formattedDate} at ${formattedTime} was cancelled.`;
+      } else if (eventType === 'rescheduled') {
+        title = isSpanish ? `Tatuaje de ${apprenticeName} — cambio` : `${apprenticeName} — tattoo moved`;
+        body = isSpanish
+          ? `El tatuaje de ${apprenticeName} con ${contactName} se movió al ${formattedDate} a las ${formattedTime}.`
+          : `${apprenticeName}'s tattoo with ${contactName} moved to ${formattedDate} at ${formattedTime}.`;
+      } else {
+        title = isSpanish ? `Tatuaje de ${apprenticeName}` : `${apprenticeName} — new tattoo`;
+        body = isSpanish
           ? `${apprenticeName} tiene un tatuaje con ${contactName} el ${formattedDate} a las ${formattedTime}.`
-          : `${apprenticeName} booked a tattoo with ${contactName} on ${formattedDate} at ${formattedTime}.`,
+          : `${apprenticeName} booked a tattoo with ${contactName} on ${formattedDate} at ${formattedTime}.`;
+      }
+
+      const notification = {
+        type: `apprentice_tattoo_${eventType}`,
+        title,
+        body,
         appointmentId: rawAppt.id || rawAppt.appointmentId,
         contactId: rawAppt.contactId,
         contactName,
