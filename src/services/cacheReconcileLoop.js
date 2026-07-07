@@ -18,9 +18,18 @@
  *
  *   2. Webhook freshness watchdog. Each landing of either appointment-
  *      webhook handler bumps `lastAppointmentWebhookAt`. On every sweep
- *      we compute gap = now - lastAppointmentWebhookAt. If gap > 2h we
+ *      we compute gap = now - lastAppointmentWebhookAt. If gap > 2h AND
+ *      that same sweep caught events the webhook missed (ins/upd > 0) we
  *      SMS the owner once (Lionel = H3NamSlW7XAiF7WVUUo8 on barbershop).
  *      Re-arms when a fresh webhook lands.
+ *
+ *      The ins/upd gate was added 2026-07-07 after the 2h-timer version
+ *      false-alarmed at 2:27am / 5:41am Central — the shop was closed, so
+ *      no bookings meant no webhooks, which the raw timer misread as an
+ *      outage. Silence alone is not an outage; silence WHILE the sweep is
+ *      importing changes the webhook should have delivered is. That also
+ *      makes a real outage fire faster: within one sweep of the first
+ *      missed booking, not on a blind 2h clock.
  *
  * No persistence — the timestamps reset on deploy. Practically fine
  * because a deploy is also "proof of life" and either the webhook fires
@@ -120,8 +129,19 @@ async function runSweep() {
 
     // Webhook staleness check — only AFTER a successful sweep so we
     // don't false-alarm during deploy/restart noise.
+    //
+    // Gate on evidence, not just silence. A quiet stretch (overnight,
+    // shop closed) legitimately produces zero webhooks for hours — that
+    // used to trip a 2:27am false alarm. The reconciler already holds
+    // GHL truth, so we only alarm when THIS sweep actually caught events
+    // the webhook should have delivered but didn't (ins/upd > 0). That
+    // combination — webhook silent past threshold AND the sweep is
+    // pulling in changes the webhook missed — is the real outage
+    // signature, and it fires within one sweep of the day's first missed
+    // booking instead of on a fixed 2h timer regardless of activity.
     const gapMs = Date.now() - lastAppointmentWebhookAt;
-    if (gapMs > WEBHOOK_STALE_THRESHOLD_MS) {
+    const sweepCaughtMissedEvents = totalIns + totalUpd > 0;
+    if (gapMs > WEBHOOK_STALE_THRESHOLD_MS && sweepCaughtMissedEvents) {
       // Don't spam: only one SMS per outage. Cleared the moment a
       // real webhook lands again (markAppointmentWebhookReceived).
       if (lastStaleAlertSentAt === 0) {
