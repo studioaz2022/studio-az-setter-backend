@@ -426,6 +426,9 @@ async function assignArtistToContact(contactId, artistName) {
     artistWorkloads[normalizedArtist] = (artistWorkloads[normalizedArtist] || 0) + 1;
 
     console.log(`✅ Assigned artist ${normalizedArtist} to contact ${contactId}`);
+    // Return the resolved identity so callers can notify the artist
+    // (e.g. fire a lead_assigned push) without re-resolving.
+    return { artistId: assignedUserId || null, artistName: normalizedArtist };
   } catch (err) {
     console.error(`❌ Error assigning artist to contact ${contactId}:`, err.message || err);
     throw err;

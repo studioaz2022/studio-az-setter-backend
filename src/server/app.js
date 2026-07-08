@@ -691,23 +691,53 @@ function createApp() {
         });
       }
 
-      // Auto-assign artist if no technician preference was specified.
-      // Treat legacy sentinel strings (calendar names, "Soonest Available") as no-preference —
-      // they're display labels, not real artist selections.
+      // Assign an owning artist to EVERY completed lead so it surfaces in
+      // that artist's iOS Contacts list, then push them so they see it right
+      // away. Two paths:
+      //   • Real inquired-artist preference  → make the requested artist the owner.
+      //   • No/sentinel preference           → style + workload balancing picks one.
+      // Treat legacy sentinel strings (calendar names, "Soonest Available") as
+      // no-preference — they're display labels, not real artist selections.
       const inquiredTech = (payload.customFields?.inquired_technician || "").trim();
       const SENTINEL_NO_PREF = new Set(["soonest available", "soonest possible", "soonest_available"]);
       const hasRealPreference = inquiredTech && !SENTINEL_NO_PREF.has(inquiredTech.toLowerCase());
-      if (!hasRealPreference) {
-        try {
+      try {
+        let assigned = null; // { artistId, artistName }
+        if (hasRealPreference) {
+          // Client asked for a specific artist — honor it and set them as owner.
+          assigned = await assignArtistToContact(contactId, inquiredTech);
+          console.log(`🎯 Assigned inquired artist as owner: ${assigned?.artistName || inquiredTech}`);
+        } else {
           const freshContact = await getContact(contactId);
           const artist = await determineArtist(freshContact);
           if (artist) {
-            await assignArtistToContact(contactId, artist);
-            console.log(`🎯 Auto-assigned artist via workload balancing: ${artist}`);
+            assigned = await assignArtistToContact(contactId, artist);
+            console.log(`🎯 Auto-assigned artist via workload balancing: ${assigned?.artistName || artist}`);
           }
-        } catch (routeErr) {
-          console.error("⚠️ Artist auto-assign failed (non-fatal):", routeErr.message || routeErr);
         }
+
+        // Ping the assigned artist so the lead lands on their phone immediately.
+        // (iOS already handles the "lead_assigned" type — role-aware deep-link
+        // to the contact profile for artists.)
+        if (assigned?.artistId) {
+          const { sendPushToGhlUser } = require("../services/taskNotifications");
+          const contactName =
+            [payload.firstName, payload.lastName].filter(Boolean).join(" ") || "New lead";
+          const summary = (
+            payload.customFields?.tattoo_summary ||
+            payload.customFields?.tattoo_style ||
+            ""
+          ).toString().trim();
+          const pushBody = summary ? `${contactName} — ${summary}` : contactName;
+          sendPushToGhlUser(assigned.artistId, (language) => ({
+            type: "lead_assigned",
+            title: language === "es" ? "Nuevo lead asignado" : "New Lead Assigned",
+            body: pushBody,
+            contactId,
+          })).catch((err) => console.error("❌ [LEAD APN] Error:", err.message || err));
+        }
+      } catch (routeErr) {
+        console.error("⚠️ Artist auto-assign failed (non-fatal):", routeErr.message || routeErr);
       }
 
       console.log(`✅ Final lead created/updated: ${contactId}`);
