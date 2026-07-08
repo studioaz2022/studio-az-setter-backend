@@ -28,11 +28,11 @@ function formatArtistKey(key) {
  * Maps tattoo styles to preferred artists
  */
 const ARTIST_STYLE_MAP = {
-  realism: ["Joan", "Andrew"],
-  "fine line": ["Joan", "Andrew"],
-  traditional: ["Joan", "Andrew"],
-  "black and grey": ["Joan", "Andrew"],
-  color: ["Joan", "Andrew"],
+  realism: ["Joan", "Andrew", "Kaelani"],
+  "fine line": ["Joan", "Andrew", "Kaelani"],
+  traditional: ["Joan", "Andrew", "Kaelani"],
+  "black and grey": ["Joan", "Andrew", "Kaelani"],
+  color: ["Joan", "Andrew", "Kaelani"],
 };
 
 const TRACKED_ARTISTS = new Set([
