@@ -669,6 +669,9 @@ async function sendMessagePushNotification(contactId, contactName, messageText, 
         title: contactName || (isSpanish ? 'Nuevo Mensaje' : 'New Message'),
         body: preview || (isSpanish ? 'Tienes un nuevo mensaje' : 'You have a new message'),
         contactId,
+        // Which GHL location this message belongs to, so dual-brand users
+        // (only Lionel) can deep-link to the correct brand's thread on tap.
+        locationId,
       };
       await apnsService.sendWithRefresh(tokenRecord.token, notification);
     }

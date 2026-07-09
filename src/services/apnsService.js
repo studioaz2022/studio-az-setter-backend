@@ -284,6 +284,9 @@ class APNsService {
     if (notification.contactName) {
       payload.contactName = notification.contactName;
     }
+    if (notification.locationId) {
+      payload.locationId = notification.locationId;
+    }
 
     return payload;
   }
