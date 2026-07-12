@@ -479,7 +479,10 @@ async function updateContactAssignedUser(contactId, assignedUserId) {
   }
 
   try {
-    const res = await updateContact(contactId, { assignedUserId });
+    // GHL v2 Contacts API expects the owner field as `assignedTo`, NOT
+    // `assignedUserId` — sending `assignedUserId` returns 422 "property
+    // assignedUserId should not exist" and the owner never gets written.
+    const res = await updateContact(contactId, { assignedTo: assignedUserId });
     console.log(
       "✅ Updated contact owner",
       cleanLogObject({ contactId, assignedUserId })
