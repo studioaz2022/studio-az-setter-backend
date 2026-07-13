@@ -58,6 +58,17 @@ const ARTIST_FIRST_NAMES = {
   kaelani: "Kaelani",
 };
 
+// Gender lookup for correct pronouns in the auto-SMS copy. Joan + Andrew are
+// male; Meg + Kaelani are female. Keep in sync with ARTIST_FIRST_NAMES when
+// adding an artist — an unmapped slug falls back to neutral "they" phrasing
+// rather than mis-gendering.
+const ARTIST_GENDERS = {
+  joan: "male",
+  andrew: "male",
+  meg: "female",
+  kaelani: "female",
+};
+
 // Kill switch — set LANDING_PAGE_AUTO_SMS_ENABLED=false on Render to disable
 // auto-SMS without a redeploy (e.g., if the SMS is misbehaving in prod and we
 // need to stop it instantly). Default ON.
@@ -74,18 +85,25 @@ function autoSmsEnabled() {
  *
  * Copy matches FILL_FLOW_PLAN.md Phase 1 "SMS copy update" section.
  */
-function buildAutoSmsBody({ firstName, artistFirstName, language, fillUrl }) {
+function buildAutoSmsBody({ firstName, artistFirstName, artistSlug, language, fillUrl }) {
   const isEs = language === "es" || language === "spanish";
+  const gender = ARTIST_GENDERS[artistSlug]; // "male" | "female" | undefined
+
+  // Pronouns per language, with a neutral fallback for any unmapped artist.
+  const enProgressive = gender === "female" ? "she's" : gender === "male" ? "he's" : "they're";
+  const enFuture = gender === "female" ? "She'll" : gender === "male" ? "He'll" : "They'll";
+  const esWhile = gender === "female" ? "Mientras ella responde" : gender === "male" ? "Mientras él responde" : "Mientras responde";
+
   if (fillUrl) {
     if (isEs) {
-      return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! Mientras él responde a otros mensajes, llena unos detalles rápidos para agilizar el proceso: ${fillUrl} — Studio AZ`;
+      return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! ${esWhile} a otros mensajes, llena unos detalles rápidos para agilizar el proceso: ${fillUrl} — Studio AZ`;
     }
-    return `Hey ${firstName} — got your message for ${artistFirstName}! While he's responding to other leads, fill in a few quick details to speed things up: ${fillUrl} — Studio AZ`;
+    return `Hey ${firstName} — got your message for ${artistFirstName}! While ${enProgressive} responding to other leads, fill in a few quick details to speed things up: ${fillUrl} — Studio AZ`;
   }
   if (isEs) {
     return `Hola ${firstName} — recibí tu mensaje para ${artistFirstName}! Te responderá personalmente en menos de 24 horas. — Studio AZ`;
   }
-  return `Hey ${firstName} — got your message for ${artistFirstName}! He'll text you back personally within 24 hours. — Studio AZ`;
+  return `Hey ${firstName} — got your message for ${artistFirstName}! ${enFuture} text you back personally within 24 hours. — Studio AZ`;
 }
 
 /**
@@ -342,6 +360,7 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
       const smsBody = buildAutoSmsBody({
         firstName,
         artistFirstName,
+        artistSlug,
         language: detectedLanguage,
         fillUrl: fillUrl || undefined,
       });
