@@ -8741,7 +8741,7 @@ function createApp() {
 
   app.post("/api/notifications/task-assigned", async (req, res) => {
     try {
-      const { assigneeGhlUserId, creatorGhlUserId, creatorName, contactName, taskNote, taskId } = req.body;
+      const { assigneeGhlUserId, creatorGhlUserId, creatorName, contactName, contactId, taskNote, taskId } = req.body;
 
       if (!assigneeGhlUserId || !creatorGhlUserId) {
         return res.status(400).json({ success: false, error: "assigneeGhlUserId and creatorGhlUserId are required" });
@@ -8752,6 +8752,7 @@ function createApp() {
         creatorGhlUserId,
         creatorName: creatorName || "Someone",
         contactName: contactName || "a contact",
+        contactId,
         taskNote,
         taskId,
       });
@@ -8765,7 +8766,7 @@ function createApp() {
 
   app.post("/api/notifications/task-completed", async (req, res) => {
     try {
-      const { creatorGhlUserId, completerGhlUserId, completerName, contactName, taskId } = req.body;
+      const { creatorGhlUserId, completerGhlUserId, completerName, contactName, contactId, taskId } = req.body;
 
       if (!creatorGhlUserId || !completerGhlUserId) {
         return res.status(400).json({ success: false, error: "creatorGhlUserId and completerGhlUserId are required" });
@@ -8776,6 +8777,7 @@ function createApp() {
         completerGhlUserId,
         completerName: completerName || "Someone",
         contactName: contactName || "a contact",
+        contactId,
         taskId,
       });
 
@@ -8788,7 +8790,7 @@ function createApp() {
 
   app.post("/api/notifications/task-overdue", async (req, res) => {
     try {
-      const { assigneeGhlUserId, contactName, taskId } = req.body;
+      const { assigneeGhlUserId, contactName, contactId, taskId } = req.body;
 
       if (!assigneeGhlUserId) {
         return res.status(400).json({ success: false, error: "assigneeGhlUserId is required" });
@@ -8797,6 +8799,7 @@ function createApp() {
       const result = await sendTaskOverdueNotification({
         assigneeGhlUserId,
         contactName: contactName || "a contact",
+        contactId,
         taskId,
       });
 
@@ -8809,7 +8812,7 @@ function createApp() {
 
   app.post("/api/notifications/task-urgent", async (req, res) => {
     try {
-      const { assigneeGhlUserId, contactName, taskId } = req.body;
+      const { assigneeGhlUserId, contactName, contactId, taskId } = req.body;
 
       if (!assigneeGhlUserId) {
         return res.status(400).json({ success: false, error: "assigneeGhlUserId is required" });
@@ -8818,6 +8821,7 @@ function createApp() {
       const result = await sendTaskUrgentNotification({
         assigneeGhlUserId,
         contactName: contactName || "a contact",
+        contactId,
         taskId,
       });
 

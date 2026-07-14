@@ -54,6 +54,7 @@ async function sendPushToGhlUser(ghlUserId, notification) {
 
     let sent = 0;
     let failed = 0;
+    let notifType; // captured for logging (notification may be a localizer function)
 
     for (const tokenRecord of tokens) {
       try {
@@ -61,6 +62,7 @@ async function sendPushToGhlUser(ghlUserId, notification) {
         const localizedNotification = typeof notification === 'function'
           ? notification(tokenRecord.language)
           : notification;
+        notifType = localizedNotification.type;
         await apnsService.send(tokenRecord.token, localizedNotification);
         sent++;
       } catch (err) {
@@ -69,7 +71,9 @@ async function sendPushToGhlUser(ghlUserId, notification) {
       }
     }
 
-    console.log(`📱 [TASK APN] ${notification.type}: sent to ${sent} device(s) for GHL user ${ghlUserId}`);
+    // Log the resolved type, not `notification.type` — when notification is a
+    // localizer function that read `undefined` and hid the real type.
+    console.log(`📱 [TASK APN] ${notifType || 'unknown'}: sent to ${sent} device(s) for GHL user ${ghlUserId}`);
     return { sent, failed };
   } catch (error) {
     console.error('❌ [TASK APN] Error:', error.message || error);
@@ -81,7 +85,7 @@ async function sendPushToGhlUser(ghlUserId, notification) {
  * Notify assignee that a task has been assigned to them.
  * Only sends if the assignee is different from the creator (don't notify yourself).
  */
-async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserId, creatorName, contactName, taskNote, taskId }) {
+async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserId, creatorName, contactName, contactId, taskNote, taskId }) {
   // Don't notify if you assigned the task to yourself
   if (assigneeGhlUserId === creatorGhlUserId) {
     console.log(`📱 [TASK APN] Skipping self-assignment notification`);
@@ -98,7 +102,10 @@ async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserI
       type: 'task_assigned',
       title: isSpanish ? `Nueva Tarea de ${creatorName}` : `New Task from ${creatorName}`,
       body: notePreview || (isSpanish ? `Seguimiento con ${contactName}` : `Follow up with ${contactName}`),
-      contactId: null,
+      // contactId lets the app deep-link the tap straight to the client (previously
+      // hardcoded null, so tapping dumped the user on a generic screen — the "I got
+      // a notification but the app showed nothing" bug).
+      contactId: contactId || null,
       taskId: taskId || null,
     };
   };
@@ -110,7 +117,7 @@ async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserI
  * Notify the task creator that the assignee completed the task.
  * Only sends if the completer is different from the creator.
  */
-async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUserId, completerName, contactName, taskId }) {
+async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUserId, completerName, contactName, contactId, taskId }) {
   // Don't notify if you completed your own task
   if (creatorGhlUserId === completerGhlUserId) {
     console.log(`📱 [TASK APN] Skipping self-completion notification`);
@@ -125,7 +132,7 @@ async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUse
       body: isSpanish
         ? `${completerName} completó el seguimiento con ${contactName}`
         : `${completerName} completed the follow-up with ${contactName}`,
-      contactId: null,
+      contactId: contactId || null,
       taskId: taskId || null,
     };
   };
@@ -136,7 +143,7 @@ async function sendTaskCompletedNotification({ creatorGhlUserId, completerGhlUse
 /**
  * Notify assignee that their task is now overdue.
  */
-async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, taskId }) {
+async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, contactId, taskId }) {
   const notification = (language) => {
     const isSpanish = language === 'es';
     return {
@@ -145,7 +152,7 @@ async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, tas
       body: isSpanish
         ? `Tu seguimiento con ${contactName} está vencido`
         : `Your follow-up with ${contactName} is overdue`,
-      contactId: null,
+      contactId: contactId || null,
       taskId: taskId || null,
     };
   };
@@ -156,7 +163,7 @@ async function sendTaskOverdueNotification({ assigneeGhlUserId, contactName, tas
 /**
  * Notify assignee that their task has escalated to urgent.
  */
-async function sendTaskUrgentNotification({ assigneeGhlUserId, contactName, taskId }) {
+async function sendTaskUrgentNotification({ assigneeGhlUserId, contactName, contactId, taskId }) {
   const notification = (language) => {
     const isSpanish = language === 'es';
     return {
@@ -165,7 +172,7 @@ async function sendTaskUrgentNotification({ assigneeGhlUserId, contactName, task
       body: isSpanish
         ? `El seguimiento con ${contactName} necesita atención inmediata`
         : `Follow-up with ${contactName} needs immediate attention`,
-      contactId: null,
+      contactId: contactId || null,
       taskId: taskId || null,
     };
   };
