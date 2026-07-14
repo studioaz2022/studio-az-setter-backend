@@ -37,20 +37,40 @@ const WEBP_QUALITY = 80;
 // still produce sane text without a backend deploy.
 const TAG_LABELS = {
   fade: "fade", "classic-cut": "classic cut", "long-hair": "long hair", afro: "afro",
-  taper: "taper", beard: "beard",
-  "textured-fringe": "textured fringe", pompadour: "pompadour", "slick-back": "slick back",
+  taper: "taper", "burst-fade": "burst fade", beard: "beard",
+  texture: "textured top", "textured-fringe": "textured fringe", pompadour: "pompadour", "slick-back": "slick back",
   "middle-part": "middle part", "comb-over": "comb over", "wolf-cut": "wolf cut",
   "warrior-cut": "warrior cut", "blowout-taper": "blowout taper", "crop-top": "crop top",
   "two-block": "two block", quiff: "quiff", undercut: "undercut", "crew-cut": "crew cut",
-  caesar: "caesar", "faux-hawk": "faux hawk", mullet: "mullet", "burst-fade": "burst fade",
+  caesar: "caesar", "faux-hawk": "faux hawk", mullet: "mullet",
   straight: "straight hair", wavy: "wavy hair", curly: "curly hair", asian: "asian hair",
 };
+// Style slugs for alt-text/filename. NOTE: burst-fade is now a Fade cut sub-tag
+// (handled in the pillar phrase), not a style.
 const STYLE_SLUGS = new Set([
-  "textured-fringe", "pompadour", "slick-back", "middle-part", "comb-over", "wolf-cut",
+  "texture", "textured-fringe", "pompadour", "slick-back", "middle-part", "comb-over", "wolf-cut",
   "warrior-cut", "blowout-taper", "crop-top", "two-block", "quiff", "undercut",
-  "crew-cut", "caesar", "faux-hawk", "mullet", "burst-fade",
+  "crew-cut", "caesar", "faux-hawk", "mullet",
 ]);
 const PILLARS = new Set(["fade", "classic-cut", "long-hair", "afro"]);
+
+// The Fade shape shown in copy: burst fade > taper > plain fade.
+function fadePhrase(tags) {
+  if (tags.includes("burst-fade")) return "Burst fade";
+  if (tags.includes("taper")) return "Taper fade";
+  return "Fade haircut";
+}
+function fadeSlug(tags) {
+  if (tags.includes("burst-fade")) return "burst-fade";
+  if (tags.includes("taper")) return "taper-fade";
+  return "fade";
+}
+// If a photo carries both "texture" and the specific "textured-fringe", show
+// only the specific one so the copy doesn't say "textured and textured fringe".
+function displayStyles(tags) {
+  const styles = tags.filter((t) => STYLE_SLUGS.has(t));
+  return styles.includes("textured-fringe") ? styles.filter((t) => t !== "texture") : styles;
+}
 
 const label = (slug) =>
   TAG_LABELS[slug] || String(slug).replace(/-/g, " ").toLowerCase();
@@ -58,17 +78,16 @@ const label = (slug) =>
 // "Taper fade with textured fringe and undercut by Lionel, barber at Studio AZ
 // Barbershop in Minneapolis." — English-only (barbershop side).
 function buildAltText({ first, cutPillar, tags }) {
-  const isTaper = tags.includes("taper");
   const pillarPhrase =
     cutPillar === "fade"
-      ? isTaper ? "Taper fade" : "Fade haircut"
+      ? fadePhrase(tags)
       : cutPillar === "classic-cut"
         ? "Classic haircut"
         : cutPillar === "long-hair"
           ? "Long hair cut"
           : "Afro haircut";
 
-  const styles = tags.filter((t) => STYLE_SLUGS.has(t)).map(label);
+  const styles = displayStyles(tags).map(label);
   const stylePhrase =
     styles.length === 0
       ? ""
@@ -81,9 +100,8 @@ function buildAltText({ first, cutPillar, tags }) {
 
 // "lionel-taper-fade-textured-fringe-minneapolis-a1b2c3.webp"
 function buildSeoFilename({ first, cutPillar, tags }) {
-  const isTaper = tags.includes("taper");
-  const cutPart = cutPillar === "fade" ? (isTaper ? "taper-fade" : "fade") : cutPillar;
-  const firstStyle = tags.find((t) => STYLE_SLUGS.has(t));
+  const cutPart = cutPillar === "fade" ? fadeSlug(tags) : cutPillar;
+  const firstStyle = displayStyles(tags)[0];
   const shortId = crypto.randomBytes(3).toString("hex");
   const parts = [first.toLowerCase(), cutPart, firstStyle, "minneapolis", shortId].filter(Boolean);
   return (
