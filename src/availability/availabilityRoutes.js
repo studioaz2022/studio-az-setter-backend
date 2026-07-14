@@ -4,13 +4,14 @@
 // Returns per-barber "next available slot" for the barbershop website.
 // Powers the "Next:" line rendered on each barber tile / card / page.
 //
-// Strategy: query all 9 barber calendars in parallel via GHL's getSlots,
-// pick the earliest FUTURE slot from each, cache 15 minutes.
-//
-// Past-slot filtering (added 2026-07-13):
-//   - fetchNextSlotForBarber() drops any slot <= now (nowMs comparison, TZ-safe)
-//   - cache re-filter on serve: even if we cached "Liam at 6:45pm" 3 hours ago
-//     and it's now 8pm, drop that stale slot before returning
+// Strategy:
+//   - Query 9 barber calendars, but STAGGERED (batches of 3 with a 250ms gap)
+//     to avoid GHL rate-limit 429s
+//   - Retry each barber up to 3 times with backoff on 429
+//   - Per-barber last-known-good cache: if a request ultimately fails,
+//     serve the barber's previous good value instead of null (silent recovery)
+//   - Aggregate 15-min in-memory cache with past-slot re-filter on serve
+//   - CDN Cache-Control: s-maxage=300 (5 min)
 //
 // Auth: uses ghlBarber SDK instance (barbershop location, PIT token).
 
@@ -34,57 +35,134 @@ const BARBER_CALENDARS = [
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 const LOOKAHEAD_DAYS = 30;
 
+// Rate-limit tuning. GHL's per-second cap makes 9 concurrent calls unreliable.
+const BATCH_SIZE = 3;         // 3 requests per burst
+const BATCH_GAP_MS = 300;      // 300ms between bursts
+const MAX_RETRIES = 3;
+const RETRY_BASE_MS = 700;    // 700ms, 1400ms, 2800ms
+
 let cache = null; // { fetchedAt, data }
+
+// Per-barber last-known-good slot. Survives rate-limit blips so a barber
+// doesn't blink to null on transient errors. Only overwritten by successful
+// FETCHES (not by cache hits).
+const lastKnownGood = new Map(); // slug → { nextSlot, fetchedAt }
 
 function isFresh(entry) {
   return entry && Date.now() - entry.fetchedAt < CACHE_TTL_MS;
 }
 
-/**
- * Fetch the next FUTURE slot for a single barber's calendar. Any slot at
- * or before nowMs is filtered out — using ms-since-epoch comparison, which
- * is timezone-agnostic. Returns null if the barber has no future slots
- * inside the lookahead window.
- */
-async function fetchNextSlotForBarber(barber, startMs, endMs, nowMs) {
-  try {
-    const data = await ghlBarber.calendars.getSlots({
-      calendarId: barber.calendarId,
-      startDate: startMs,
-      endDate: endMs,
-    });
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-    // Response format: { "2026-07-14": { slots: ["2026-07-14T10:00:00-05:00", ...] }, ... }
-    let earliest = null;
-    let earliestMs = Infinity;
-    for (const [dateKey, dateData] of Object.entries(data || {})) {
-      if (dateKey === "traceId") continue;
-      const slots = dateData?.slots || [];
-      for (const slotIso of slots) {
-        const slotMs = Date.parse(slotIso);
-        if (Number.isNaN(slotMs)) continue;
-        if (slotMs <= nowMs) continue; // past — skip
-        if (slotMs < earliestMs) {
-          earliestMs = slotMs;
-          earliest = slotIso;
+function isRateLimitError(err) {
+  if (!err) return false;
+  const status = err.status || err.response?.status;
+  if (status === 429) return true;
+  const msg = String(err.message || "");
+  return /too many requests|rate limit|429/i.test(msg);
+}
+
+/**
+ * Fetch the next FUTURE slot for a single barber, with retry on 429.
+ */
+async function fetchNextSlotForBarberWithRetry(barber, startMs, endMs, nowMs) {
+  let lastErr = null;
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const data = await ghlBarber.calendars.getSlots({
+        calendarId: barber.calendarId,
+        startDate: startMs,
+        endDate: endMs,
+      });
+
+      let earliest = null;
+      let earliestMs = Infinity;
+      for (const [dateKey, dateData] of Object.entries(data || {})) {
+        if (dateKey === "traceId") continue;
+        const slots = dateData?.slots || [];
+        for (const slotIso of slots) {
+          const slotMs = Date.parse(slotIso);
+          if (Number.isNaN(slotMs)) continue;
+          if (slotMs <= nowMs) continue; // past — skip
+          if (slotMs < earliestMs) {
+            earliestMs = slotMs;
+            earliest = slotIso;
+          }
         }
       }
-    }
 
-    return { slug: barber.slug, name: barber.name, nextSlot: earliest };
-  } catch (err) {
-    console.warn(
-      `[availability] getSlots failed for ${barber.name} (${barber.calendarId}):`,
-      err.message
-    );
-    return { slug: barber.slug, name: barber.name, nextSlot: null, error: err.message };
+      // Success — update last-known-good.
+      lastKnownGood.set(barber.slug, {
+        nextSlot: earliest,
+        fetchedAt: Date.now(),
+      });
+      return { slug: barber.slug, name: barber.name, nextSlot: earliest };
+    } catch (err) {
+      lastErr = err;
+      if (isRateLimitError(err) && attempt < MAX_RETRIES - 1) {
+        const wait = RETRY_BASE_MS * Math.pow(2, attempt);
+        console.warn(
+          `[availability] 429 for ${barber.name}, retry ${attempt + 1} in ${wait}ms`
+        );
+        await sleep(wait);
+        continue;
+      }
+      break;
+    }
   }
+
+  // All retries failed — fall back to last-known-good if we have one.
+  const fallback = lastKnownGood.get(barber.slug);
+  if (fallback && fallback.nextSlot) {
+    // But only if that slot is still in the future.
+    const slotMs = Date.parse(fallback.nextSlot);
+    if (Number.isFinite(slotMs) && slotMs > nowMs) {
+      console.warn(
+        `[availability] using last-known-good for ${barber.name} (${lastErr?.message})`
+      );
+      return {
+        slug: barber.slug,
+        name: barber.name,
+        nextSlot: fallback.nextSlot,
+        stale: true,
+      };
+    }
+  }
+
+  console.warn(
+    `[availability] getSlots failed for ${barber.name} (${barber.calendarId}):`,
+    lastErr?.message
+  );
+  return {
+    slug: barber.slug,
+    name: barber.name,
+    nextSlot: null,
+    error: lastErr?.message,
+  };
+}
+
+/**
+ * Query all 9 barbers in staggered batches to stay under GHL's per-second
+ * rate limit while still finishing in ~1s total.
+ */
+async function fetchAllBarbersStaggered(startMs, endMs, nowMs) {
+  const results = [];
+  for (let i = 0; i < BARBER_CALENDARS.length; i += BATCH_SIZE) {
+    const batch = BARBER_CALENDARS.slice(i, i + BATCH_SIZE);
+    const batchResults = await Promise.all(
+      batch.map((b) => fetchNextSlotForBarberWithRetry(b, startMs, endMs, nowMs))
+    );
+    results.push(...batchResults);
+    if (i + BATCH_SIZE < BARBER_CALENDARS.length) {
+      await sleep(BATCH_GAP_MS);
+    }
+  }
+  return results;
 }
 
 /**
  * Serve the cached payload but strip any slots that have gone stale since
- * we cached. If ANY cached slot is now in the past, invalidate the cache
- * entirely and re-query — the cached data is unreliable.
+ * we cached. If ANY cached slot is now in the past, invalidate cache entirely.
  */
 function filterCachedForPastSlots(cached, nowMs) {
   const filtered = {};
@@ -102,7 +180,7 @@ function filterCachedForPastSlots(cached, nowMs) {
       break;
     }
   }
-  if (sawPast) return null; // signal: force refresh
+  if (sawPast) return null;
   return { ...cached.data, barbers: filtered, fromCache: true };
 }
 
@@ -112,15 +190,11 @@ async function fetchAllBarberAvailability() {
   if (isFresh(cache)) {
     const cachedResponse = filterCachedForPastSlots(cache, nowMs);
     if (cachedResponse) return cachedResponse;
-    // Cache had past slots — invalidate and fall through to refresh.
     cache = null;
   }
 
   const endMs = nowMs + LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000;
-
-  const results = await Promise.all(
-    BARBER_CALENDARS.map((b) => fetchNextSlotForBarber(b, nowMs, endMs, nowMs))
-  );
+  const results = await fetchAllBarbersStaggered(nowMs, endMs, nowMs);
 
   const byBarber = {};
   for (const r of results) {
@@ -128,6 +202,7 @@ async function fetchAllBarberAvailability() {
       name: r.name,
       nextSlot: r.nextSlot,
       ...(r.error ? { error: r.error } : {}),
+      ...(r.stale ? { stale: true } : {}),
     };
   }
 
@@ -153,9 +228,6 @@ function registerAvailabilityRoutes(app) {
     try {
       const data = await fetchAllBarberAvailability();
 
-      // Shorter CDN cache (5 min instead of 15) — availability moves faster
-      // than reviews, and stale-while-revalidate lets us serve fresh values
-      // without forcing users to wait.
       res.set(
         "Cache-Control",
         "public, max-age=120, s-maxage=300, stale-while-revalidate=300"
