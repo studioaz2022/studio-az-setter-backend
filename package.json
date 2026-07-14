@@ -26,6 +26,7 @@
     "jsonwebtoken": "^9.0.3",
     "multer": "^2.0.2",
     "openai": "^6.9.1",
+    "sharp": "^0.35.3",
     "square": "^43.2.1",
     "stripe": "^22.0.0"
   },
