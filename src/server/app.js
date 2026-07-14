@@ -14121,6 +14121,9 @@ function createApp() {
   // ═══ ANALYTICS ROUTES ═══
   app.use("/api/barbers", analyticsRoutes);
 
+  // ═══ BARBER GALLERY UPLOADER (BARBER_GALLERY_UPLOADER_PLAN.md) ═══
+  app.use("/api/barber-gallery", require("../barberGallery/barberGalleryRoutes"));
+
   // ═══ SEO TOOLKIT ROUTES ═══
   app.use("/api/seo", seoRoutes);
 
