@@ -56,7 +56,7 @@ const DESCRIPTIONS = {
       "PLUS:\n" +
       "\ud83e\uddd1\u200d\ud83c\udfa8 Art Director (Concierge) to guide your process\n" +
       "\ud83c\udf10 Live Translator for seamless communication (Optional)\n" +
-      "\u23f1\ufe0f Priority Scheduling\n" +
+      "\u23f1\ufe0f Priority Scheduling for Your Consultation\n" +
       "\ud83e\udd1d Ongoing Healing Support: direct access to your Concierge and Artist for aftercare guidance so your tattoo looks its best",
     consult:
       "\ud83c\udfa8 Design Consult + Concept Sketch\n" +
@@ -74,7 +74,7 @@ const DESCRIPTIONS = {
       "ADEM\u00c1S:\n" +
       "\ud83e\uddd1\u200d\ud83c\udfa8 Director Art\u00edstico (Concierge) para guiar tu proceso\n" +
       "\ud83c\udf10 Traductor en Vivo para comunicaci\u00f3n sin barreras (Opcional)\n" +
-      "\u23f1\ufe0f Programaci\u00f3n Prioritaria\n" +
+      "\u23f1\ufe0f Programaci\u00f3n Prioritaria para Tu Consulta\n" +
       "\ud83e\udd1d Apoyo Continuo de Sanaci\u00f3n: acceso directo a tu Concierge y Artista para gu\u00eda de cuidado posterior",
     consult:
       "\ud83c\udfa8 Consulta de Dise\u00f1o + Boceto del Concepto\n" +

@@ -9,6 +9,7 @@ const {
   findConversationForContact,
   updateSystemFields,
   uploadFilesToTattooCustomField,
+  addTagsToContact,
 } = require("../clients/ghlClient");
 const { ghl: ghlSdk } = require("../clients/ghlSdk");
 const { createToken: createFillToken } = require("./fillTokenService");
@@ -41,6 +42,11 @@ const LAST_AUTO_SMS_AT_FIELD_ID = "EjpTbHO59al8yiS2QP7E";
 
 // "Language Preference" — drives EN vs ES copy.
 const LANGUAGE_PREFERENCE_FIELD_ID = "ETxasC6QlyxRaKU18kbz";
+
+// "Design Readiness" — "Reference Ready" | "Semi-Custom" | "Fully Custom".
+// Drives turnaround expectations + AI-setter pacing. Created 2026-07-14.
+const DESIGN_READINESS_FIELD_ID = "Oahqu85KqgDePSImXOlN";
+const VALID_DESIGN_READINESS = ["Reference Ready", "Semi-Custom", "Fully Custom"];
 
 // Map artist slug → GHL user ID
 const ARTIST_USER_IDS = {
@@ -177,7 +183,7 @@ function resolveInquiryLanguage(language, pageLang) {
   }
 }
 
-async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source, language, pageLang, files = [] }) {
+async function processArtistInquiry({ firstName, lastName, phone, message, artistSlug, source, language, pageLang, designReadiness, files = [] }) {
   const artistUserId = ARTIST_USER_IDS[artistSlug];
   if (!artistUserId) {
     throw new Error(`Unknown artist slug: ${artistSlug}`);
@@ -321,6 +327,25 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
   } catch (cfErr) {
     console.error(`❌ Failed to store inquiry in custom field:`, cfErr.message);
     throw cfErr;
+  }
+
+  // 3b. Persist design readiness (reference-ready / semi-custom / fully custom) +
+  // a matching "Design: …" tag so the team + AI setter can set turnaround
+  // expectations and prioritize. Non-fatal: skip silently if absent/invalid.
+  if (designReadiness && VALID_DESIGN_READINESS.includes(designReadiness)) {
+    try {
+      await ghlSdk.contacts.updateContact(
+        { contactId },
+        { customFields: [{ id: DESIGN_READINESS_FIELD_ID, field_value: designReadiness }] }
+      );
+      await addTagsToContact(contactId, [`Design: ${designReadiness}`]);
+      console.log(`🎨 [DESIGN] Set design_readiness="${designReadiness}" + tag for ${contactId}`);
+    } catch (drErr) {
+      console.error(`❌ Failed to write design_readiness for ${contactId}:`, drErr.message);
+      // Non-fatal — the inquiry still completes.
+    }
+  } else if (designReadiness) {
+    console.warn(`⚠️ [DESIGN] Ignoring unrecognized design_readiness="${designReadiness}" for ${contactId}`);
   }
 
   // 4. Find existing SMS conversation or create one

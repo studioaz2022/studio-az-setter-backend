@@ -157,6 +157,9 @@ const CUSTOM_FIELD_MAP = {
   // Raw consult-method choice from the widget (Video Call w/ Coordinator | Translator,
   // or Message-Based Consultation). Stored so the v2 bot doesn't re-ask. Created 2026-06-03.
   consultation_preference: "Rr8j1rOdJHN7FrRFvxvi",
+  // Design readiness: "Reference Ready" | "Semi-Custom" | "Fully Custom". Drives
+  // turnaround expectations + AI-setter pacing. Created 2026-07-14.
+  design_readiness: "Oahqu85KqgDePSImXOlN",
 };
 
 // 🔹 Reverse mapping: GHL field ID -> friendly name

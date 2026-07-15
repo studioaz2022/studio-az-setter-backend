@@ -6233,7 +6233,7 @@ function createApp() {
         payload = req.body || {};
       }
 
-      const { firstName, lastName, phone, message, artistSlug, source, language, pageLang } = payload;
+      const { firstName, lastName, phone, message, artistSlug, source, language, pageLang, designReadiness } = payload;
 
       if (!firstName || !lastName || !phone || !message || !artistSlug) {
         return res.status(400).json({
@@ -6261,6 +6261,7 @@ function createApp() {
         source,
         language,
         pageLang,
+        designReadiness,
         files: req.files || [],
       });
 
