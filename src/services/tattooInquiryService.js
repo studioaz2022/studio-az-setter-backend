@@ -54,6 +54,8 @@ const ARTIST_USER_IDS = {
   andrew: "O8ChoMYj1BmMWJJsDlvC",
   meg: "BaSmQL1fkhdjmCYuDRWK",
   kaelani: "C94R2IHBHHf0yuPzBpuS",
+  // Test tattoo artist — not a public landing page; used for end-to-end inquiry tests.
+  claudia: "Wl24x1ZrucHuHatM0ODD",
 };
 
 // Display name lookup for auto-SMS personalization.
@@ -62,6 +64,7 @@ const ARTIST_FIRST_NAMES = {
   andrew: "Andrew",
   meg: "Meg",
   kaelani: "Kaelani",
+  claudia: "Claudia",
 };
 
 // Gender lookup for correct pronouns in the auto-SMS copy. Joan + Andrew are
@@ -73,6 +76,7 @@ const ARTIST_GENDERS = {
   andrew: "male",
   meg: "female",
   kaelani: "female",
+  claudia: "female",
 };
 
 // Kill switch — set LANDING_PAGE_AUTO_SMS_ENABLED=false on Render to disable
