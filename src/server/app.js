@@ -122,6 +122,7 @@ const seoRoutes = require("../seo/seoRoutes");
 const leadsRoutes = require("../leads/leadsRoutes");
 const { registerReviewsRoutes } = require("../reviews/reviewsRoutes");
 const { registerAvailabilityRoutes } = require("../availability/availabilityRoutes");
+const { registerBookingRoutes } = require("../booking/bookingRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
@@ -14139,6 +14140,11 @@ function createApp() {
   // Public endpoint — barbershop-website pulls per-barber next-available
   // slot for the "Next: ..." line rendered on each barber tile / card / page.
   registerAvailabilityRoutes(app);
+
+  // ═══ BOOKING WIDGET (barbershop website /book) ═══
+  // Public endpoints — services catalog + per-barber slot picker + create.
+  // See BOOKING_WIDGET_PLAN.md. Auth = Turnstile + IP rate limit (create only).
+  registerBookingRoutes(app);
 
   // ═══ CONSENT FORM ROUTES ═══
   const {
