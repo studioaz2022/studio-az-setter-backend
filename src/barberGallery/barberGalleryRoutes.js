@@ -73,6 +73,15 @@ function displayStyles(tags) {
   return styles.includes("textured-fringe") ? styles.filter((t) => t !== "texture") : styles;
 }
 
+// High-search styles we want the site to rank for lead the alt text + filename,
+// so they never lose to tap order (or get truncated out of the filename).
+const HERO_STYLES = ["textured-fringe"];
+function orderedStyles(tags) {
+  const styles = displayStyles(tags);
+  const heroes = HERO_STYLES.filter((h) => styles.includes(h));
+  return [...heroes, ...styles.filter((s) => !heroes.includes(s))];
+}
+
 const label = (slug) =>
   TAG_LABELS[slug] || String(slug).replace(/-/g, " ").toLowerCase();
 
@@ -88,7 +97,7 @@ function buildAltText({ first, cutPillar, tags }) {
           ? "Long hair cut"
           : "Afro haircut";
 
-  const styles = displayStyles(tags).map(label);
+  const styles = orderedStyles(tags).map(label);
   const stylePhrase =
     styles.length === 0
       ? ""
@@ -99,12 +108,13 @@ function buildAltText({ first, cutPillar, tags }) {
   return `${pillarPhrase}${stylePhrase}${beardPhrase} by ${first}, barber at Studio AZ Barbershop in Minneapolis.`;
 }
 
-// "lionel-taper-fade-textured-fringe-minneapolis-a1b2c3.webp"
+// "lionel-taper-fade-textured-fringe-blowout-taper-minneapolis-a1b2c3.webp"
 function buildSeoFilename({ first, cutPillar, tags }) {
   const cutPart = cutPillar === "fade" ? fadeSlug(tags) : cutPillar;
-  const firstStyle = displayStyles(tags)[0];
+  // up to 3 style keywords (hero styles first) — richer keywords, never drops textured-fringe
+  const styleParts = orderedStyles(tags).slice(0, 3);
   const shortId = crypto.randomBytes(3).toString("hex");
-  const parts = [first.toLowerCase(), cutPart, firstStyle, "minneapolis", shortId].filter(Boolean);
+  const parts = [first.toLowerCase(), cutPart, ...styleParts, "minneapolis", shortId].filter(Boolean);
   return (
     parts
       .join("-")
