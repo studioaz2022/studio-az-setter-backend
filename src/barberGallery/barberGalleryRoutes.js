@@ -43,6 +43,7 @@ const TAG_LABELS = {
   "warrior-cut": "warrior cut", "blowout-taper": "blowout taper", "crop-top": "crop top",
   "two-block": "two block", quiff: "quiff", undercut: "undercut", "crew-cut": "crew cut",
   caesar: "caesar", "faux-hawk": "faux hawk", mullet: "mullet",
+  "mod-cut": "mod cut", "brush-back": "brush back", "modern-mullet": "modern mullet", messy: "messy",
   straight: "straight hair", wavy: "wavy hair", "wavy-curly": "wavy-to-curly hair",
   curly: "curly hair", asian: "asian hair",
 };
@@ -51,8 +52,11 @@ const TAG_LABELS = {
 const STYLE_SLUGS = new Set([
   "texture", "textured-fringe", "pompadour", "slick-back", "middle-part", "comb-over", "wolf-cut",
   "warrior-cut", "blowout-taper", "crop-top", "two-block", "quiff", "undercut",
-  "crew-cut", "caesar", "faux-hawk", "mullet",
+  "crew-cut", "caesar", "faux-hawk", "mullet", "mod-cut", "brush-back", "modern-mullet", "messy",
 ]);
+// Specific sub-tag → its generic parent. When the specific one is present we drop
+// the parent from copy (avoids "mullet and modern mullet" / "textured and textured fringe").
+const STYLE_PARENT = { "textured-fringe": "texture", "modern-mullet": "mullet" };
 const PILLARS = new Set(["fade", "classic-cut", "long-hair", "afro"]);
 
 // The Fade shape shown in copy: burst fade > taper > plain fade.
@@ -66,16 +70,22 @@ function fadeSlug(tags) {
   if (tags.includes("taper")) return "taper-fade";
   return "fade";
 }
-// If a photo carries both "texture" and the specific "textured-fringe", show
-// only the specific one so the copy doesn't say "textured and textured fringe".
+// Styles to show, with generic parents dropped when their specific child is
+// present, and the "messy" modifier removed (it's folded in as a prefix later).
 function displayStyles(tags) {
-  const styles = tags.filter((t) => STYLE_SLUGS.has(t));
-  return styles.includes("textured-fringe") ? styles.filter((t) => t !== "texture") : styles;
+  const styles = tags.filter((t) => STYLE_SLUGS.has(t) && t !== "messy");
+  const drop = new Set();
+  for (const [child, parent] of Object.entries(STYLE_PARENT)) {
+    if (styles.includes(child)) drop.add(parent);
+  }
+  return styles.filter((t) => !drop.has(t));
 }
 
 // High-search styles we want the site to rank for lead the alt text + filename,
 // so they never lose to tap order (or get truncated out of the filename).
-const HERO_STYLES = ["textured-fringe"];
+const HERO_STYLES = [
+  "textured-fringe", "warrior-cut", "mod-cut", "modern-mullet", "mullet", "middle-part", "brush-back",
+];
 function orderedStyles(tags) {
   const styles = displayStyles(tags);
   const heroes = HERO_STYLES.filter((h) => styles.includes(h));
@@ -84,6 +94,21 @@ function orderedStyles(tags) {
 
 const label = (slug) =>
   TAG_LABELS[slug] || String(slug).replace(/-/g, " ").toLowerCase();
+
+// Ordered style tokens for copy, with "messy" folded in as a ONE-TIME prefix on
+// the lead style (never repeated → not keyword-stuffing). kind: "label" | "slug".
+function copyStyleTokens(tags, kind) {
+  const toToken = kind === "label" ? label : (s) => s;
+  const tokens = orderedStyles(tags).map(toToken);
+  if (tags.includes("messy")) {
+    if (tokens.length) {
+      tokens[0] = (kind === "label" ? "messy " : "messy-") + tokens[0];
+    } else {
+      tokens.push(kind === "label" ? "messy styling" : "messy");
+    }
+  }
+  return tokens;
+}
 
 // "Taper fade with textured fringe and undercut by Lionel, barber at Studio AZ
 // Barbershop in Minneapolis." — English-only (barbershop side).
@@ -97,7 +122,7 @@ function buildAltText({ first, cutPillar, tags }) {
           ? "Long hair cut"
           : "Afro haircut";
 
-  const styles = orderedStyles(tags).map(label);
+  const styles = copyStyleTokens(tags, "label");
   const stylePhrase =
     styles.length === 0
       ? ""
@@ -111,8 +136,8 @@ function buildAltText({ first, cutPillar, tags }) {
 // "lionel-taper-fade-textured-fringe-blowout-taper-minneapolis-a1b2c3.webp"
 function buildSeoFilename({ first, cutPillar, tags }) {
   const cutPart = cutPillar === "fade" ? fadeSlug(tags) : cutPillar;
-  // up to 3 style keywords (hero styles first) — richer keywords, never drops textured-fringe
-  const styleParts = orderedStyles(tags).slice(0, 3);
+  // up to 3 style keywords (hero styles first, messy folded into the lead one)
+  const styleParts = copyStyleTokens(tags, "slug").slice(0, 3);
   const shortId = crypto.randomBytes(3).toString("hex");
   const parts = [first.toLowerCase(), cutPart, ...styleParts, "minneapolis", shortId].filter(Boolean);
   return (
