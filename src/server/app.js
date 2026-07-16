@@ -8701,9 +8701,14 @@ function createApp() {
   function ghlWebhookAuthorized(req) {
     const expected = process.env.GHL_WEBHOOK_SECRET;
     if (!expected) {
-      console.warn(
-        "⚠️ [GHL webhook] GHL_WEBHOOK_SECRET not set — accepting unauthenticated (fail-open). Configure to enforce."
-      );
+      // Fail-open is intentional (secret unset by design). Warn once per process
+      // instead of on every webhook so the log isn't spammed.
+      if (!ghlWebhookAuthorized._warnedFailOpen) {
+        ghlWebhookAuthorized._warnedFailOpen = true;
+        console.warn(
+          "⚠️ [GHL webhook] GHL_WEBHOOK_SECRET not set — accepting unauthenticated (fail-open). Configure to enforce."
+        );
+      }
       return true;
     }
     const provided =
