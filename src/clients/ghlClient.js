@@ -683,7 +683,8 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
 
     const isSmsConversation = (conv) => {
       const type = (conv.type || conv.lastMessageType || "").toUpperCase();
-      return type.includes("SMS");
+      // GHL types SMS conversations as TYPE_PHONE (not literally "SMS"), so match both.
+      return type.includes("SMS") || type.includes("PHONE");
     };
 
     if (typeFilter === "DM") {
@@ -701,6 +702,14 @@ async function findConversationForContact(contactId, { preferDm = false, typeFil
       if (smsConv) {
         if (!COMPACT_MODE) console.log(`🔍 Found SMS conversation: ${smsConv.id}`);
         return smsConv;
+      }
+      // No SMS/phone-typed match, but the contact DOES have conversations — return the
+      // most recent non-DM one instead of null, so callers don't try to create a
+      // duplicate (GHL rejects that with "Conversation already exists").
+      const nonDm = convs.find((c) => !isDmConversation(c));
+      if (nonDm) {
+        if (!COMPACT_MODE) console.log(`🔍 No SMS-typed match; using existing conversation: ${nonDm.id} (type: ${nonDm.type || nonDm.lastMessageType})`);
+        return nonDm;
       }
       if (!COMPACT_MODE) console.log("🔍 No SMS conversation found for contact");
       return null;

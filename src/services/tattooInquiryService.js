@@ -358,11 +358,24 @@ async function processArtistInquiry({ firstName, lastName, phone, message, artis
 
   if (!conversationId) {
     console.log(`💬 No SMS conversation found for contact ${contactId} — creating one`);
-    const result = await ghlSdk.conversations.createConversation({
-      locationId: GHL_LOCATION_ID,
-      contactId,
-    });
-    conversationId = result?.conversation?.id || result?.id;
+    try {
+      const result = await ghlSdk.conversations.createConversation({
+        locationId: GHL_LOCATION_ID,
+        contactId,
+      });
+      conversationId = result?.conversation?.id || result?.id;
+    } catch (createErr) {
+      // GHL rejects a duplicate create with "Conversation already exists" when the
+      // contact already has a conversation the finder didn't surface. Recover by
+      // re-searching (no type filter → most recent) and using that one instead of aborting.
+      const msg = createErr?.response?.data?.message || createErr?.message || "";
+      if (/already exists/i.test(msg)) {
+        console.warn(`💬 createConversation rejected ("${msg}") — re-searching for the existing conversation`);
+        const existing = await findConversationForContact(contactId);
+        conversationId = existing?.id;
+      }
+      if (!conversationId) throw createErr;
+    }
 
     if (!conversationId) {
       throw new Error("Failed to create GHL conversation — no ID returned");
