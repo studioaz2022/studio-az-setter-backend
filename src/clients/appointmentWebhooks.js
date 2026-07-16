@@ -530,6 +530,8 @@ async function notifyMentorOfApprenticeTattoo(rawAppt, eventType = 'created', op
         appointmentId: rawAppt.id || rawAppt.appointmentId,
         contactId: rawAppt.contactId,
         contactName,
+        appointmentStart: startTime || undefined, // ISO start — lets the app deep-link to that calendar day
+        locationId: rawAppt.locationId || undefined,
       };
       await apnsService.send(tokenRecord.token, notification);
     }

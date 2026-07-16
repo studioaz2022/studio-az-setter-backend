@@ -287,6 +287,9 @@ class APNsService {
     if (notification.locationId) {
       payload.locationId = notification.locationId;
     }
+    if (notification.appointmentStart) {
+      payload.appointmentStart = notification.appointmentStart;
+    }
 
     return payload;
   }
