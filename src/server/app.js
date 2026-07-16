@@ -46,6 +46,8 @@ const {
   recordWalkIn,
   SquareReauthRequiredError,
 } = require("../payments/squareTransactionSync");
+// Namespaced: exports buildOAuthUrl/exchangeCodeForToken like squareOAuth above.
+const googleCalOAuth = require("../clients/googleCalendarOAuth");
 const { getServicePriceMap } = require("../config/barberServicePrices");
 const { processArtistInquiry, ARTIST_USER_IDS } = require("../services/tattooInquiryService");
 const {
@@ -7266,6 +7268,122 @@ function createApp() {
         : error.message?.includes("already") || error.message?.includes("is paid") ? 409
         : 500;
       res.status(status).json({ success: false, error: error.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // LEGAL PAGES — privacy policy + terms of service
+  // Required for Google OAuth branding verification (consent-screen links).
+  // Static HTML in src/legal/; ultimately linked from a studioaz.us URL.
+  // ═══════════════════════════════════════════════════════════════════════════
+  app.get("/legal/privacy", (_req, res) => {
+    res.sendFile(require("path").join(__dirname, "../legal/privacy.html"));
+  });
+  app.get("/legal/terms", (_req, res) => {
+    res.sendFile(require("path").join(__dirname, "../legal/terms.html"));
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // GOOGLE CALENDAR OAUTH — PER-STAFF ACCOUNT CONNECTION (two-way sync Phase 1)
+  // Mirrors the Square OAuth flow below. Plan: GOOGLE_CALENDAR_SYNC_PLAN.md.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  // GET /google/oauth/start?staffGhlId=xxx&locationId=yyy
+  // iOS opens this in an ASWebAuthenticationSession → redirect to Google consent.
+  // locationId optional (defaults to tattoo); packed into OAuth state.
+  app.get("/google/oauth/start", (req, res) => {
+    try {
+      const { staffGhlId, locationId } = req.query;
+      if (!staffGhlId) {
+        return res.status(400).send("Missing staffGhlId query parameter");
+      }
+      res.redirect(googleCalOAuth.buildOAuthUrl(staffGhlId, locationId));
+    } catch (error) {
+      console.error("[GoogleCalOAuth] Error building OAuth URL:", error.message);
+      res.status(500).send("Failed to initiate Google OAuth");
+    }
+  });
+
+  // GET /google/oauth/callback?code&state — Google redirects here after consent.
+  // Exchanges code, stores tokens, deep-links back to the iOS app.
+  app.get("/google/oauth/callback", async (req, res) => {
+    const { code, state, error } = req.query;
+
+    if (error) {
+      console.error("[GoogleCalOAuth] OAuth denied by user:", error);
+      return res.redirect(
+        `studioaz://google-oauth?success=false&error=${encodeURIComponent(error)}`
+      );
+    }
+    if (!code || !state) {
+      return res.status(400).send("Missing code or state in OAuth callback");
+    }
+
+    try {
+      const result = await googleCalOAuth.exchangeCodeForToken(code, state);
+      res.redirect(
+        `studioaz://google-oauth?success=true&email=${encodeURIComponent(result.googleEmail || "")}`
+      );
+    } catch (err) {
+      console.error("[GoogleCalOAuth] Token exchange failed:", err.message);
+      res.redirect(
+        `studioaz://google-oauth?success=false&error=${encodeURIComponent(err.message)}`
+      );
+    }
+  });
+
+  // GET /api/staff/:staffGhlId/google/status
+  // Connection status for the iOS settings screen. No tokens leave the server.
+  app.get("/api/staff/:staffGhlId/google/status", async (req, res) => {
+    try {
+      const row = await googleCalOAuth.getStaffToken(req.params.staffGhlId);
+      if (!row) {
+        return res.json({ success: true, connected: false });
+      }
+      res.json({
+        success: true,
+        connected: true,
+        googleEmail: row.google_email,
+        connectedAt: row.connected_at,
+        lastSyncedAt: row.last_synced_at,
+        syncStatus: row.sync_status,
+      });
+    } catch (error) {
+      console.error("[API] Error checking Google Calendar status:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // DELETE /api/staff/:staffGhlId/google/disconnect
+  // Revokes at Google (best-effort) and deletes the connection row.
+  app.delete("/api/staff/:staffGhlId/google/disconnect", async (req, res) => {
+    try {
+      await googleCalOAuth.disconnectStaff(req.params.staffGhlId);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[API] Error disconnecting Google Calendar:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/staff/:staffGhlId/google/verify — Phase 0/1 STOP & VERIFY probe.
+  // Lists the next few events (titles included) to prove token + refresh +
+  // calendar read work end-to-end. Internal-only: returns personal event titles.
+  app.get("/api/staff/:staffGhlId/google/verify", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const events = await googleCalOAuth.listUpcomingEvents(req.params.staffGhlId);
+      res.json({ success: true, count: events.length, events });
+    } catch (error) {
+      if (error instanceof googleCalOAuth.GoogleReauthRequiredError) {
+        return res.status(401).json({
+          success: false,
+          errorCode: "google_reauth_required",
+          error: "Google Calendar connection expired — please reconnect.",
+        });
+      }
+      console.error("[API] Google verify failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
     }
   });
 

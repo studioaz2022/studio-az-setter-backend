@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Privacy Policy — Studio AZ</title>
+  <style>
+    :root { color-scheme: light dark; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 760px; margin: 0 auto; padding: 48px 24px 96px;
+      line-height: 1.65; color: #1c1c1e; background: #fff;
+    }
+    @media (prefers-color-scheme: dark) {
+      body { color: #e5e5ea; background: #111; }
+      a { color: #d4af61; }
+    }
+    h1 { font-size: 1.9rem; margin-bottom: 0.25rem; }
+    h2 { font-size: 1.25rem; margin-top: 2.2rem; border-bottom: 1px solid rgba(128,128,128,.35); padding-bottom: .3rem; }
+    .updated { color: #8e8e93; font-size: .95rem; margin-bottom: 2rem; }
+    li { margin: .35rem 0; }
+    .box { border: 1px solid rgba(128,128,128,.35); border-radius: 10px; padding: 14px 18px; margin: 1rem 0; }
+  </style>
+</head>
+<body>
+  <h1>Privacy Policy</h1>
+  <p class="updated">Studio AZ &middot; Last updated: July 15, 2026</p>
+
+  <p>Studio AZ ("we," "us") operates a private scheduling and business-management
+  application (the "App") used by the staff of our tattoo studio and barbershop in
+  Minneapolis, Minnesota, and by clients who book appointments with us. This policy
+  explains what information the App handles and how we protect it.</p>
+
+  <h2>Information we collect</h2>
+  <ul>
+    <li><strong>Client booking information</strong> — name, contact details, and
+      appointment details submitted when booking or inquiring with our studio.</li>
+    <li><strong>Staff account information</strong> — name, email, and role, used to
+      operate staff accounts inside the App.</li>
+    <li><strong>Google Calendar data</strong> — only for staff members who choose to
+      connect a Google account, as described below.</li>
+  </ul>
+
+  <h2>Google Calendar integration (Google user data)</h2>
+  <p>Staff members may optionally connect a personal Google Calendar to the App.
+  When a staff member grants access, the App uses Google's Calendar API with the
+  <code>calendar.events</code> scope and the connected account's email address to:</p>
+  <ul>
+    <li><strong>Read events</strong> on the connected calendar so personal commitments
+      appear as unavailable ("busy") time in our internal scheduling system and cannot
+      be double-booked;</li>
+    <li><strong>Create and update events</strong> on the connected calendar so work
+      appointments booked at our studio appear on the staff member's own calendar;</li>
+    <li><strong>Update events at the staff member's request</strong> when they edit one
+      of their own calendar events from inside the App.</li>
+  </ul>
+  <div class="box">
+    <p><strong>Limited Use disclosure.</strong> Studio AZ's use and transfer of
+    information received from Google APIs adheres to the
+    <a href="https://developers.google.com/terms/api-services-user-data-policy">Google
+    API Services User Data Policy</a>, including the Limited Use requirements.</p>
+  </div>
+  <ul>
+    <li>We <strong>never sell</strong> Google user data, use it for advertising, or
+      share it with third parties.</li>
+    <li>Event details (titles and descriptions) are visible only to the staff member
+      who connected the calendar and to studio management. Other staff see only that
+      the time is unavailable.</li>
+    <li>Human access to Google user data is limited to the connecting staff member and
+      studio management within the App; no other human review occurs except with the
+      user's consent, for security purposes, or as required by law.</li>
+    <li>Google user data is <strong>not used to train</strong> any machine-learning or
+      AI models.</li>
+  </ul>
+
+  <h2>How we store and protect data</h2>
+  <p>Data is stored in access-controlled databases (hosted by Supabase) and processed
+  on our own backend servers. OAuth tokens and calendar data are readable only by our
+  backend service — never directly by client apps or other staff. Data is encrypted in
+  transit (TLS) and at rest by our hosting providers.</p>
+
+  <h2>Data retention and deletion</h2>
+  <ul>
+    <li>A staff member may disconnect their Google Calendar at any time inside the App.
+      Disconnecting revokes our access with Google and deletes the stored tokens and
+      synced calendar data from our systems.</li>
+    <li>Access can also be revoked from your
+      <a href="https://myaccount.google.com/permissions">Google Account security
+      settings</a>, which immediately invalidates our access.</li>
+    <li>You may request deletion of any personal data we hold by contacting us at the
+      address below.</li>
+  </ul>
+
+  <h2>Sharing</h2>
+  <p>We do not sell personal information. We share data only with the service
+  providers that operate the App's infrastructure (hosting, database, messaging, and
+  payment processing), only as needed to run the App, and as required by law.</p>
+
+  <h2>Changes</h2>
+  <p>We may update this policy from time to time. Material changes will be reflected
+  by the "Last updated" date above.</p>
+
+  <h2>Contact</h2>
+  <p>Studio AZ &middot; Minneapolis, MN<br>
+  Email: <a href="mailto:support@studioaz.us">support@studioaz.us</a></p>
+</body>
+</html>
