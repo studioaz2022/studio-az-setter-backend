@@ -72,6 +72,22 @@ const DEPOSIT_AMOUNT_FIELD_ID = "PLN5t5T47SC5PnLrhmgB"; // key: last_deposit_amo
 // in the same update payload (ghl_invalid_url_gotcha).
 const PHOTO_REFERENCE_FIELD_ID = "ptrJy8TBBjlnRWQepdnP";
 
+// System/context field IDs (verified against the live location 2026-07-16).
+// NOTE: contact.customField from getContact() is keyed by FIELD ID, not by
+// friendly key — reads like cf.tattoo_summary or cf.previous_conversation_summary
+// silently return undefined. Always read/write through these IDs.
+// (opportunity_id / opportunity_stage custom fields do NOT exist in GHL — the
+// old pointer read/write in ensureOpportunity was a silent no-op; opportunity
+// identity is resolved by searching OPEN opportunities instead.)
+const SYSTEM_CONTEXT_FIELD_IDS = {
+  previous_conversation_summary: "O2MAjgwh7LCoBdtZzJ4E", // LARGE_TEXT
+  returning_client: "e7v781pYKEMSxkjmZDIl",
+  last_tattoo_completed_at: "2BEORqF0mtkrZwU5nuQD",
+  total_tattoos_completed: "5ADxxWMhOBMO5mbvEvMU",
+  assigned_technician: "zoqWKnANjd1ZfDAlCxsF",
+  language_preference: TATTOO_FIELD_IDS.language_preference,
+};
+
 module.exports = {
   TATTOO_FIELD_IDS,
   IDEA_FIELD_KEYS,
@@ -81,4 +97,5 @@ module.exports = {
   DEPOSIT_PAID_FIELD_ID,
   DEPOSIT_AMOUNT_FIELD_ID,
   PHOTO_REFERENCE_FIELD_ID,
+  SYSTEM_CONTEXT_FIELD_IDS,
 };

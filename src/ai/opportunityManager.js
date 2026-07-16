@@ -1,5 +1,6 @@
 const { getContact, updateSystemFields, getConversationHistory } = require("../clients/ghlClient");
 const {
+  createOpportunity,
   upsertOpportunity,
   updateOpportunityStage,
   updateOpportunityValue,
@@ -84,7 +85,13 @@ function boolField(value) {
 
 async function findExistingOpportunity(contactId) {
   try {
-    const opportunities = await getOpportunitiesByContact({ contactId });
+    // OPEN opportunities only — closed ones (won at completion, abandoned on a
+    // new-idea reset) must not be reused, so a returning client's next project
+    // mints a fresh opportunity at INTAKE (TATTOO_PROJECT_HISTORY_PLAN.md §14a).
+    const { searchOpportunities } = require("../clients/ghlOpportunityClient");
+    const opportunities = await searchOpportunities({
+      query: { contactId, status: "open" },
+    });
     return opportunities?.[0] || null;
   } catch (err) {
     console.warn(
@@ -145,20 +152,44 @@ async function ensureOpportunity({ contactId, stageKey = OPPORTUNITY_STAGES.INTA
 
   if (!opportunityId) {
     const stageId = getStageId(stageKey) || getStageId("INTAKE");
-    // Opportunity name is just first + last name
-    const firstName = contactRecord.firstName || contactRecord.first_name || "";
-    const lastName = contactRecord.lastName || contactRecord.last_name || "";
-    const name = `${firstName} ${lastName}`.trim() || "Tattoo Opportunity";
 
-    const upserted = await upsertOpportunity({
-      contactId,
-      pipelineStageId: stageId,
-      name,
-    });
+    // No OPEN opportunity. GHL allows only ONE opportunity per contact per
+    // pipeline (verified live 2026-07-16: create returns "Can not create
+    // duplicate opportunity for the contact"), so a client with a closed
+    // (won/abandoned) opportunity from a past project gets it REOPENED at the
+    // entry stage — a fresh funnel journey on the same opportunity object.
+    // Per-project history lives in Supabase tattoo_projects, not here
+    // (TATTOO_PROJECT_HISTORY_PLAN.md §3/§14a: the opportunity is plumbing).
+    const anyExisting = await getOpportunitiesByContact({ contactId });
+    const closedExisting = anyExisting?.[0] || null;
 
-    const createdOpp = upserted?.opportunity || upserted;
-    opportunityId = createdOpp?.id || createdOpp?._id;
-    opportunityStage = getStageKeyFromId(createdOpp?.pipelineStageId) || stageKey;
+    if (closedExisting) {
+      opportunityId = closedExisting.id || closedExisting._id;
+      await updateOpportunityStage({
+        opportunityId,
+        pipelineStageId: stageId,
+        status: "open",
+      });
+      opportunityStage = stageKey;
+      console.log(
+        `🔄 [PIPELINE] Reopened closed opportunity ${opportunityId} at ${stageKey} for returning contact ${contactId}`
+      );
+    } else {
+      // Opportunity name is just first + last name
+      const firstName = contactRecord.firstName || contactRecord.first_name || "";
+      const lastName = contactRecord.lastName || contactRecord.last_name || "";
+      const name = `${firstName} ${lastName}`.trim() || "Tattoo Opportunity";
+
+      const created = await createOpportunity({
+        contactId,
+        pipelineStageId: stageId,
+        name,
+      });
+
+      const createdOpp = created?.opportunity || created;
+      opportunityId = createdOpp?.id || createdOpp?._id;
+      opportunityStage = getStageKeyFromId(createdOpp?.pipelineStageId) || stageKey;
+    }
   }
 
   // Update opportunity name if it's still the fallback and we now have a name
@@ -236,49 +267,74 @@ async function transitionToStage(contactId, stageKey, options = {}) {
     });
   }
 
-  // Handle tattoo completion - archive conversation when moving to COMPLETED
+  // Handle tattoo completion — archive conversation, then snapshot the project
+  // to Supabase tattoo_projects, clear the idea fields, and close the
+  // opportunity as won (TATTOO_PROJECT_HISTORY_PLAN.md §10 Phase 1).
   if (stageKey === OPPORTUNITY_STAGES.COMPLETED && currentStage !== OPPORTUNITY_STAGES.COMPLETED && !skipCompletionArchive) {
     console.log(`🎉 [PIPELINE] Tattoo marked as complete - archiving conversation...`);
     try {
-      // Note: handleTattooCompletion is called after the transition completes
-      // We defer this to avoid circular dependency issues
+      // Deferred to avoid circular dependency issues
       setTimeout(async () => {
         try {
           const { generateComprehensiveConversationSummary: genSummary, appendToConversationHistory: appendSummary } = require("./contextBuilder");
-          const { getConversationHistory: getHistory } = require("../clients/ghlClient");
-          
-          const cf = contact?.customField || contact?.customFields || {};
-          
+          const { getConversationHistory: getHistory, getContact: getFreshContact, updateContact: updateContactRaw } = require("../clients/ghlClient");
+          const projectHistory = require("../services/tattooProjectHistory");
+          const {
+            TATTOO_FIELD_IDS,
+            SYSTEM_CONTEXT_FIELD_IDS,
+          } = require("../config/tattooIdeaFields");
+
+          // Fetch a FRESH contact — customField is keyed by FIELD ID, so all
+          // reads below go through IDs (the old friendly-key reads were
+          // silently undefined and archived empty CRM fields).
+          const freshContact = (await getFreshContact(contactId)) || contact;
+          const idea = projectHistory.readIdeaFields(freshContact);
+          const readById = (id) => {
+            const v = (freshContact?.customField || {})[id];
+            return v == null || String(v).trim() === "" ? null : String(v);
+          };
+
           // Fetch full conversation history
           const allMessages = await getHistory(contactId, { limit: 500, sortOrder: "desc" });
-          
+
           const crmFields = {
-            tattoo_summary: cf.tattoo_summary || null,
-            tattoo_placement: cf.tattoo_placement || null,
-            tattoo_style: cf.tattoo_style || null,
-            tattoo_size: cf.tattoo_size || null,
-            tattoo_color_preference: cf.tattoo_color_preference || null,
-            assigned_artist: cf.assigned_artist || null,
-            inquired_technician: cf.inquired_technician || null,
-            consultation_type: cf.consultation_type || null,
-            language_preference: cf.language_preference || null,
+            tattoo_summary: idea.tattoo_summary,
+            tattoo_placement: idea.tattoo_placement,
+            tattoo_style: idea.tattoo_style,
+            tattoo_size: idea.tattoo_size,
+            tattoo_color_preference: idea.tattoo_color_preference,
+            assigned_artist: readById(SYSTEM_CONTEXT_FIELD_IDS.assigned_technician),
+            inquired_technician: readById(TATTOO_FIELD_IDS.inquired_technician),
+            consultation_type: readById(TATTOO_FIELD_IDS.consultation_type),
+            language_preference: readById(TATTOO_FIELD_IDS.language_preference),
           };
-          
+
           const completedAt = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
           const newSummary = genSummary(allMessages, crmFields, { completedAt });
-          const existingSummary = cf[SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY] || "";
+          const existingSummary = readById(SYSTEM_CONTEXT_FIELD_IDS.previous_conversation_summary) || "";
           const combinedSummary = appendSummary(existingSummary, newSummary);
-          
-          const currentCount = parseInt(cf.total_tattoos_completed || "0", 10) || 0;
-          
-          await updateSystemFields(contactId, {
-            [SYSTEM_FIELDS.PREVIOUS_CONVERSATION_SUMMARY]: combinedSummary,
-            [SYSTEM_FIELDS.LAST_TATTOO_COMPLETED_AT]: new Date().toISOString(),
-            [SYSTEM_FIELDS.RETURNING_CLIENT]: true,
-            total_tattoos_completed: String(currentCount + 1),
+
+          // Write archive fields by REAL field ID (the old key-based write
+          // never landed). total_tattoos_completed is intentionally NOT
+          // incremented here — the Square-fed financial path owns that count
+          // (plan §9.1: single source of truth).
+          await updateContactRaw(contactId, {
+            customField: {
+              [SYSTEM_CONTEXT_FIELD_IDS.previous_conversation_summary]: combinedSummary,
+              [SYSTEM_CONTEXT_FIELD_IDS.last_tattoo_completed_at]: new Date().toISOString(),
+              [SYSTEM_CONTEXT_FIELD_IDS.returning_client]: "Yes",
+            },
           });
-          
+
           console.log(`✅ [COMPLETION] Archived ${allMessages.length} messages for contact ${contactId}`);
+
+          // Snapshot → clear → close-as-won (invariant: clear only after the
+          // snapshot lands; see service).
+          await projectHistory.handleCompletionSnapshotAndReset(contactId, {
+            contact: freshContact,
+            conversationSummary: newSummary,
+            opportunityId: updatedOpportunityId || opportunityId || null,
+          });
         } catch (archiveErr) {
           console.error(`❌ [COMPLETION] Failed to archive conversation:`, archiveErr.message);
         }
@@ -292,38 +348,11 @@ async function transitionToStage(contactId, stageKey, options = {}) {
   let updatedOpportunityId = opportunityId;
 
   try {
-    // Opportunity name is just first + last name
-    const firstName = contact?.firstName || contact?.first_name || "";
-    const lastName = contact?.lastName || contact?.last_name || "";
-    const name = `${firstName} ${lastName}`.trim() || "Tattoo Opportunity";
-
-    const upserted = await upsertOpportunity({
-      contactId,
-      pipelineStageId: stageId,
-      status,
-      monetaryValue: typeof monetaryValue === "number" ? monetaryValue : undefined,
-      name,
-    });
-
-    const opp = upserted?.opportunity || upserted;
-    updatedOpportunityId = opp?.id || opp?._id || updatedOpportunityId;
-    const returnedStageKey = getStageKeyFromId(opp?.pipelineStageId);
-    if (returnedStageKey) {
-      updatedStageKey = returnedStageKey;
-    }
-  } catch (err) {
-    console.error(
-      `❌ [PIPELINE] upsertOpportunity failed for contact ${contactId}:`,
-      err.message || err
-    );
-    if (err.response?.data) {
-      console.error("❌ [PIPELINE] GHL response:", err.response.status, err.response.data);
-    }
-
-    if (!opportunityId) {
-      throw err;
-    }
-
+    // Update the resolved opportunity DIRECTLY by id. The previous
+    // contact-matched upsert is unsafe here: GHL's upsert matches by
+    // contact+pipeline regardless of status, so once a client has a closed
+    // (won/abandoned) opportunity from a past project it could grab and
+    // mutate that one instead of the current open opportunity.
     await updateOpportunityStage({
       opportunityId,
       pipelineStageId: stageId,
@@ -333,6 +362,15 @@ async function transitionToStage(contactId, stageKey, options = {}) {
     if (typeof monetaryValue === "number") {
       await updateOpportunityValue({ opportunityId, monetaryValue });
     }
+  } catch (err) {
+    console.error(
+      `❌ [PIPELINE] updateOpportunityStage failed for contact ${contactId}:`,
+      err.message || err
+    );
+    if (err.response?.data) {
+      console.error("❌ [PIPELINE] GHL response:", err.response.status, err.response.data);
+    }
+    throw err;
   }
 
   // Update opportunity name if it's still the fallback and we now have a name

@@ -81,14 +81,10 @@ async function upsertOpportunity({
 async function updateOpportunity(opportunityId, body = {}) {
   if (!opportunityId) throw new Error("updateOpportunity requires opportunityId");
 
-  // SDK returns response.data directly (same shape as before)
-  return ghl.opportunities.updateOpportunity(
-    { id: opportunityId },
-    {
-      ...body,
-      locationId: GHL_LOCATION_ID,
-    }
-  );
+  // NOTE: GHL v2 PUT /opportunities/{id} rejects locationId in the body with
+  // 422 "property locationId should not exist" — every call that included it
+  // was silently failing. Do not add it back.
+  return ghl.opportunities.updateOpportunity({ id: opportunityId }, body);
 }
 
 async function updateOpportunityStage({ opportunityId, pipelineStageId, status }) {
