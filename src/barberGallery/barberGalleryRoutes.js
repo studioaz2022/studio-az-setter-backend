@@ -96,24 +96,27 @@ const label = (slug) =>
   TAG_LABELS[slug] || String(slug).replace(/-/g, " ").toLowerCase();
 
 // Ordered style tokens for copy, with "messy" folded in as a ONE-TIME prefix on
-// the lead style (never repeated → not keyword-stuffing). kind: "label" | "slug".
+// the lead STYLE (never repeated → not keyword-stuffing). kind: "label" | "slug".
+// When there's no style, messy attaches to the CUT instead (see messyOnCut).
 function copyStyleTokens(tags, kind) {
   const toToken = kind === "label" ? label : (s) => s;
   const tokens = orderedStyles(tags).map(toToken);
-  if (tags.includes("messy")) {
-    if (tokens.length) {
-      tokens[0] = (kind === "label" ? "messy " : "messy-") + tokens[0];
-    } else {
-      tokens.push(kind === "label" ? "messy styling" : "messy");
-    }
+  if (tags.includes("messy") && tokens.length) {
+    tokens[0] = (kind === "label" ? "messy " : "messy-") + tokens[0];
   }
   return tokens;
+}
+
+// True when "messy" should prefix the cut phrase — i.e. no style to attach to,
+// so "messy taper fade" rather than a dangling "messy".
+function messyOnCut(tags) {
+  return tags.includes("messy") && displayStyles(tags).length === 0;
 }
 
 // "Taper fade with textured fringe and undercut by Lionel, barber at Studio AZ
 // Barbershop in Minneapolis." — English-only (barbershop side).
 function buildAltText({ first, cutPillar, tags }) {
-  const pillarPhrase =
+  let pillarPhrase =
     cutPillar === "fade"
       ? fadePhrase(tags)
       : cutPillar === "classic-cut"
@@ -121,6 +124,7 @@ function buildAltText({ first, cutPillar, tags }) {
         : cutPillar === "long-hair"
           ? "Long hair cut"
           : "Afro haircut";
+  if (messyOnCut(tags)) pillarPhrase = "Messy " + pillarPhrase.toLowerCase();
 
   const styles = copyStyleTokens(tags, "label");
   const stylePhrase =
@@ -135,7 +139,8 @@ function buildAltText({ first, cutPillar, tags }) {
 
 // "lionel-taper-fade-textured-fringe-blowout-taper-minneapolis-a1b2c3.webp"
 function buildSeoFilename({ first, cutPillar, tags }) {
-  const cutPart = cutPillar === "fade" ? fadeSlug(tags) : cutPillar;
+  let cutPart = cutPillar === "fade" ? fadeSlug(tags) : cutPillar;
+  if (messyOnCut(tags)) cutPart = "messy-" + cutPart;
   // up to 3 style keywords (hero styles first, messy folded into the lead one)
   const styleParts = copyStyleTokens(tags, "slug").slice(0, 3);
   const shortId = crypto.randomBytes(3).toString("hex");
