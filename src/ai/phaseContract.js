@@ -60,6 +60,7 @@ function buildCanonicalState(contact = {}) {
     tattooStyle: cf[TATTOO_FIELDS.TATTOO_STYLE] || null,
     tattooColorPreference: cf[TATTOO_FIELDS.TATTOO_COLOR_PREFERENCE] || null,
     timeline: cf[TATTOO_FIELDS.HOW_SOON_IS_CLIENT_DECIDING] || null,
+    designReadiness: cf.design_readiness || null,
     firstTattoo: boolVal(cf[TATTOO_FIELDS.FIRST_TATTOO]),
     tattooConcerns: cf[TATTOO_FIELDS.TATTOO_CONCERNS] || null,
     tattooPhotoDescription: cf[TATTOO_FIELDS.TATTOO_PHOTO_DESCRIPTION] || null,

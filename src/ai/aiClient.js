@@ -31,6 +31,7 @@ function extractIntakeFromCanonicalState(canonicalState = {}, contact = {}) {
     sizeOfTattoo: canonicalState.tattooSize || null,
     tattooColorPreference: canonicalState.tattooColorPreference || null,
     howSoonIsClientDeciding: canonicalState.timeline || null,
+    designReadiness: canonicalState.designReadiness || null,
     firstTattoo: canonicalState.firstTattoo,
     tattooConcerns: canonicalState.tattooConcerns || null,
     tattooPhotoDescription: canonicalState.tattooPhotoDescription || null,

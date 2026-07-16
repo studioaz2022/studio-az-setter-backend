@@ -99,6 +99,7 @@ function buildContextBlock(contact = {}, extra = {}) {
     ["color", cf.tattoo_color_preference],
     ["their idea", cf.tattoo_summary],
     ["timeline", cf.how_soon_is_client_deciding],
+    ["design readiness", cf.design_readiness],
     ["first tattoo?", cf.first_tattoo],
   ];
   for (const [label, val] of brief) {

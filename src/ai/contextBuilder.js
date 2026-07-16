@@ -23,6 +23,9 @@ function getGhlFieldIdMapping() {
         "kxtfzydeskuys5lltksr": "tattoo_size",
         "szyropmdmcitudhhb8dd": "tattoo_color_preference",
         "ra4nk80wma8eqklcfxst": "how_soon_is_client_deciding",
+        // Design readiness ("Reference Ready" | "Semi-Custom" | "Fully Custom") — set at
+        // intake (widget/landing). Read-only signal that paces the bot's promises. 2026-07-14.
+        "oahqu85kqgdepsimxoln": "design_readiness",
         "qqdydmy1fnldidlcmnbc": "first_tattoo",
         "ptrjy8tbbjlnrwqepdnp": "tattoo_photo_description",
         // Consult method already chosen on the web form (created 2026-06-03). Lets the v2 bot
@@ -171,6 +174,7 @@ function buildAllowedFieldSet() {
     "tattoo_style",
     "tattoo_color_preference",
     "how_soon_is_client_deciding",
+    "design_readiness",
     "lead_temperature",
     "consultation_type",
     "consultation_type_locked",
