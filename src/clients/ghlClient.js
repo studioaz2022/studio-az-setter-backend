@@ -138,29 +138,8 @@ function isUSPhoneNumber(phone) {
 }
 
 // 🔹 Map widget custom field keys -> actual GHL custom field IDs
-const CUSTOM_FIELD_MAP = {
-  language_preference: "ETxasC6QlyxRaKU18kbz",
-  inquired_technician: "H3PSN8tZSw1kYckHJN9D",
-  whatsapp_user: "QqDydmY1fnldidlcMnBC",
-  tattoo_title: "8JqgdVJraABsqgUeqJ3a",
-  tattoo_summary: "xAGtMfmbxtfCHdo2oyf7",
-  tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
-  tattoo_style: "12b2O4ydlfO99FA4yCuk",
-  tattoo_size: "KXtfZYdeSKUyS5llTKsr",
-  tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
-  how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
-  first_tattoo: "FnYDobmYqnXDxlLJY5oe",
-  tattoo_concerns: "6pvXL4oJVkD1yL4uw8KB",
-  budget_range: "8onn1kDyobzZUP1dR7Q9",
-  tattoo_photo_description: "vmE7glOhOfrSu5rDrjAA",
-  consultation_type: "gM2PVo90yNBDHekV5G64",
-  // Raw consult-method choice from the widget (Video Call w/ Coordinator | Translator,
-  // or Message-Based Consultation). Stored so the v2 bot doesn't re-ask. Created 2026-06-03.
-  consultation_preference: "Rr8j1rOdJHN7FrRFvxvi",
-  // Design readiness: "Reference Ready" | "Semi-Custom" | "Fully Custom". Drives
-  // turnaround expectations + AI-setter pacing. Created 2026-07-14.
-  design_readiness: "Oahqu85KqgDePSImXOlN",
-};
+// Canonical source: src/config/tattooIdeaFields.js — do not add IDs here.
+const { TATTOO_FIELD_IDS: CUSTOM_FIELD_MAP } = require("../config/tattooIdeaFields");
 
 // 🔹 Reverse mapping: GHL field ID -> friendly name
 const GHL_FIELD_ID_TO_NAME = Object.fromEntries(

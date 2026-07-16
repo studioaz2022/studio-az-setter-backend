@@ -6291,21 +6291,26 @@ function createApp() {
   // FillTokenError.code into the matching HTTP status.
 
   // Custom field IDs the fill submission writes back to GHL.
-  // Mirrored from src/clients/ghlClient.js CUSTOM_FIELD_MAP.
+  // Derived from the canonical map (src/config/tattooIdeaFields.js) — the old
+  // private copy here drifted: first_tattoo pointed at the whatsapp_user field
+  // and tattoo_photo_description at the Photo Reference FILE_UPLOAD field
+  // (writing text there makes GHL drop every field in the payload), and
+  // budget_range + tattoo_concerns were silently dropped.
+  const {
+    TATTOO_FIELD_IDS: FILL_FIELD_SOURCE,
+  } = require("../config/tattooIdeaFields");
   const FILL_GHL_FIELD_IDS = {
-    tattoo_title: "8JqgdVJraABsqgUeqJ3a",
-    tattoo_summary: "xAGtMfmbxtfCHdo2oyf7",
-    tattoo_placement: "jd8YhvKsBi4aGqjqOEOv",
-    tattoo_style: "12b2O4ydlfO99FA4yCuk",
-    tattoo_size: "KXtfZYdeSKUyS5llTKsr",
-    tattoo_color_preference: "SzyropMDMcitUDhhb8dd",
-    how_soon_is_client_deciding: "ra4Nk80WMA8EQkLCfXST",
-    first_tattoo: "QqDydmY1fnldidlcMnBC",
-    tattoo_photo_description: "ptrJy8TBBjlnRWQepdnP",
-    // Note: budget_range + tattoo_concerns are not yet wired to known GHL
-    // field IDs. They get added when those fields are provisioned in GHL;
-    // until then we accept-and-drop silently (logged) so the fill page can
-    // still POST without 400ing.
+    tattoo_title: FILL_FIELD_SOURCE.tattoo_title,
+    tattoo_summary: FILL_FIELD_SOURCE.tattoo_summary,
+    tattoo_placement: FILL_FIELD_SOURCE.tattoo_placement,
+    tattoo_style: FILL_FIELD_SOURCE.tattoo_style,
+    tattoo_size: FILL_FIELD_SOURCE.tattoo_size,
+    tattoo_color_preference: FILL_FIELD_SOURCE.tattoo_color_preference,
+    how_soon_is_client_deciding: FILL_FIELD_SOURCE.how_soon_is_client_deciding,
+    first_tattoo: FILL_FIELD_SOURCE.first_tattoo,
+    tattoo_photo_description: FILL_FIELD_SOURCE.tattoo_photo_description,
+    budget_range: FILL_FIELD_SOURCE.budget_range,
+    tattoo_concerns: FILL_FIELD_SOURCE.tattoo_concerns,
   };
 
   // Stamped on every successful submit — the iOS app reads this to surface
