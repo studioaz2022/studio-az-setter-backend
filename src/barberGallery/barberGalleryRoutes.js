@@ -43,7 +43,8 @@ const TAG_LABELS = {
   "warrior-cut": "warrior cut", "blowout-taper": "blowout taper", "crop-top": "crop top",
   "two-block": "two block", quiff: "quiff", undercut: "undercut", "crew-cut": "crew cut",
   caesar: "caesar", "faux-hawk": "faux hawk", mullet: "mullet",
-  straight: "straight hair", wavy: "wavy hair", curly: "curly hair", asian: "asian hair",
+  straight: "straight hair", wavy: "wavy hair", "wavy-curly": "wavy-to-curly hair",
+  curly: "curly hair", asian: "asian hair",
 };
 // Style slugs for alt-text/filename. NOTE: burst-fade is now a Fade cut sub-tag
 // (handled in the pillar phrase), not a style.
