@@ -7391,6 +7391,10 @@ function createApp() {
   // Required for Google OAuth branding verification (consent-screen links).
   // Static HTML in src/legal/; ultimately linked from a studioaz.us URL.
   // ═══════════════════════════════════════════════════════════════════════════
+  // Landing page — the OAuth consent screen's "home page" link (gcal.studioaz.us).
+  app.get("/", (_req, res) => {
+    res.sendFile(require("path").join(__dirname, "../legal/index.html"));
+  });
   app.get("/legal/privacy", (_req, res) => {
     res.sendFile(require("path").join(__dirname, "../legal/privacy.html"));
   });
