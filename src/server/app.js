@@ -2557,6 +2557,47 @@ function createApp() {
 
   // GET /api/contacts/:contactId/payment-history - Full ledger for contact profile
   // Returns quote amount + all transactions + tips + computed totals
+  // ═══════════════════════════════════════════════════════════════════════════
+  // TATTOO PROJECT HISTORY — per-project ledger for the iOS contact profile
+  // (TATTOO_PROJECT_HISTORY_PLAN.md §13). Supabase tattoo_projects is the
+  // canonical source; two buckets: executed tattoos vs past (lapsed) ideas.
+  // ═══════════════════════════════════════════════════════════════════════════
+  app.get("/api/contacts/:contactId/tattoo-projects", async (req, res) => {
+    try {
+      if (!supabase) {
+        return res.status(503).json({ success: false, error: "Project history not available" });
+      }
+      const { contactId } = req.params;
+      if (!contactId) {
+        return res.status(400).json({ success: false, error: "Missing contactId" });
+      }
+
+      const { data, error } = await supabase
+        .from("tattoo_projects")
+        .select(
+          "id, project_number, status, executed, executed_at, tattoo_title, tattoo_summary, tattoo_placement, tattoo_style, tattoo_size, tattoo_color_preference, budget_range, tattoo_concerns, tattoo_photo_description, design_readiness, reference_photo_urls, assigned_technician, inquired_technician, final_price, deposit_paid, deposit_amount_usd, conversation_summary, source, created_at, closed_at"
+        )
+        .eq("contact_id", contactId)
+        .order("created_at", { ascending: false });
+
+      if (error) {
+        console.error(`[TattooProjects] fetch failed for ${contactId}:`, error.message);
+        return res.status(500).json({ success: false, error: error.message });
+      }
+
+      const projects = data || [];
+      return res.json({
+        success: true,
+        projects,
+        completedCount: projects.filter((p) => p.executed).length,
+        pastIdeaCount: projects.filter((p) => !p.executed && ["abandoned", "superseded"].includes(p.status)).length,
+      });
+    } catch (err) {
+      console.error("[TattooProjects] error:", err.message || err);
+      return res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.get("/api/contacts/:contactId/payment-history", async (req, res) => {
     try {
       if (!supabase) {
