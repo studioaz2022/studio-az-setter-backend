@@ -26,9 +26,9 @@ CREATE TABLE IF NOT EXISTS apprentice_hours (
     description TEXT NOT NULL,         -- subject/style of the tattoo
     placement TEXT NOT NULL,          -- free text, e.g. "left forearm"
 
-    -- Client attribution (courtesy / audit only — not required for the state column)
-    client_name TEXT,                 -- auto-filled from the client picker, editable, may be blank
-    contact_id TEXT,                  -- GHL contact id from the picker, when tied to a real booking
+    -- Client attribution
+    client_name TEXT NOT NULL,        -- REQUIRED; auto-filled from the picker or typed by hand
+    contact_id TEXT,                  -- optional GHL contact id from the picker, when tied to a real booking
 
     -- Mentor sign-off — reserved for future in-app sign-off; the .xlsx export ships a blank
     -- initials column for Lionel to sign by hand after printing.
