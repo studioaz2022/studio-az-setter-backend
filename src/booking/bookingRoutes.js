@@ -1,10 +1,10 @@
 // ─── Booking widget routes (barbershop website) ───
 //
-// READ side (this file, Phase 1):
+// READ side (this file):
 //   GET /api/booking/barbershop/services
-//   GET /api/availability/barbershop/:barberSlug/slots?service=<slug>&days=7
+//   GET /api/availability/barbershop/:barberSlug/slots?service=<slug>
 //
-// WRITE side (Phase 2, registered from bookingCreate.js):
+// WRITE side (registered from bookingCreate.js):
 //   POST /api/booking/barbershop/create
 //
 // See BOOKING_WIDGET_PLAN.md. GHL is the source of truth; these endpoints are
@@ -12,6 +12,13 @@
 // calendars are round_robin — availability ONLY via getSlots, never openHours.
 //
 // Public endpoints (the website calls them from the browser) — no INTERNAL_API_KEY.
+//
+// 60-DAY HORIZON (2026-07-16): getSlots hard-rejects any single query range
+// > 31 days ("Date range cannot be more than 31 days"), so we paginate into two
+// 30-day windows and merge. Each calendar self-limits by its own allowBookingFor
+// (Lionel = 31 days → his 2nd window comes back empty; everyone else = 61 days →
+// fills through ~60). No per-barber code needed. The month-calendar frontend
+// fetches this 60-day map ONCE and slices it into months client-side.
 
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const {
@@ -25,12 +32,11 @@ const {
 
 const SHOP_TZ = "America/Chicago";
 const SLOTS_CACHE_TTL_MS = 60 * 1000; // time-picker needs fresher data than the 15-min "Next:" tiles
-const MAX_DAYS = 14;
-const DEFAULT_DAYS = 7;
+const HORIZON_DAYS = 60; // how far out the widget shows
+const CHUNK_DAYS = 30; // per getSlots call — MUST stay ≤ 31 (GHL hard cap)
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 700; // 700 / 1400 / 2800
-const BATCH_SIZE = 3; // first-available fan-out, same stagger as availabilityRoutes
-const BATCH_GAP_MS = 300;
+const WINDOW_GAP_MS = 250; // small stagger between the paginated windows
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -64,21 +70,46 @@ async function getSlotsWithRetry(calendarId, startMs, endMs) {
   throw lastErr;
 }
 
+/**
+ * Fetch the full HORIZON_DAYS window for one calendar, paginated into
+ * CHUNK_DAYS-sized getSlots calls (GHL caps a single query at 31 days).
+ * Windows are sequential + slightly staggered to stay under the rate limit.
+ * Returns the list of raw getSlots responses.
+ */
+async function getSlotsHorizon(calendarId, nowMs) {
+  const raws = [];
+  for (let offset = 0; offset < HORIZON_DAYS; offset += CHUNK_DAYS) {
+    const startMs = nowMs + offset * 24 * 60 * 60 * 1000;
+    const span = Math.min(CHUNK_DAYS, HORIZON_DAYS - offset);
+    const endMs = startMs + span * 24 * 60 * 60 * 1000;
+    raws.push(await getSlotsWithRetry(calendarId, startMs, endMs));
+    if (offset + CHUNK_DAYS < HORIZON_DAYS) await sleep(WINDOW_GAP_MS);
+  }
+  return raws;
+}
+
 // ── slot post-processing ─────────────────────────────────────────────
 
 /**
- * Flatten a getSlots response into { [dateKey]: [iso, ...] }, dropping traceId
- * and any slots already in the past.
+ * Merge the paginated getSlots responses into { [dateKey]: [iso, ...] },
+ * dropping traceId, past slots, and boundary-day duplicates (the two windows
+ * share their boundary day).
  */
-function normalizeSlotsResponse(raw, nowMs) {
+function mergeSlotWindows(raws, nowMs) {
+  const byDay = {}; // dateKey → Set<iso>
+  for (const raw of raws) {
+    for (const [dateKey, dateData] of Object.entries(raw || {})) {
+      if (dateKey === "traceId") continue;
+      for (const iso of dateData?.slots || []) {
+        const ms = Date.parse(iso);
+        if (!Number.isFinite(ms) || ms <= nowMs) continue;
+        (byDay[dateKey] ||= new Set()).add(iso);
+      }
+    }
+  }
   const days = {};
-  for (const [dateKey, dateData] of Object.entries(raw || {})) {
-    if (dateKey === "traceId") continue;
-    const slots = (dateData?.slots || []).filter((iso) => {
-      const ms = Date.parse(iso);
-      return Number.isFinite(ms) && ms > nowMs;
-    });
-    if (slots.length) days[dateKey] = slots;
+  for (const [dateKey, set] of Object.entries(byDay)) {
+    days[dateKey] = [...set].sort((a, b) => Date.parse(a) - Date.parse(b));
   }
   return days;
 }
@@ -112,13 +143,28 @@ function filterForDuration(days, barber, serviceMins) {
   return filtered;
 }
 
-// ── per-(barber × service × days) cache with last-known-good ─────────
+/** Earliest future slot ISO across the day map, or null. */
+function earliestSlot(days) {
+  let earliest = null;
+  let earliestMs = Infinity;
+  for (const slots of Object.values(days)) {
+    for (const iso of slots) {
+      const ms = Date.parse(iso);
+      if (ms < earliestMs) {
+        earliestMs = ms;
+        earliest = iso;
+      }
+    }
+  }
+  return earliest;
+}
+
+// ── per-(barber × service) cache with last-known-good ────────────────
 
 const slotsCache = new Map(); // key → { fetchedAt, days }
 const slotsLKG = new Map(); // key → { fetchedAt, days }
 const inFlight = new Map(); // key → Promise — stampede guard: concurrent cache
-// misses for the same barber×service share ONE getSlots call instead of
-// hammering GHL with N parallel identical reads.
+// misses for the same barber×service share ONE fetch instead of hammering GHL.
 
 function stripPastFromDays(days, nowMs) {
   const out = {};
@@ -130,13 +176,13 @@ function stripPastFromDays(days, nowMs) {
 }
 
 /**
- * Fetch (or serve cached) slots for one barber × service.
+ * Fetch (or serve cached) the full 60-day slot map for one barber × service.
  * Returns { days, stale } — days values are arrays of ISO strings.
  */
-async function slotsForBarberService(barberSlug, serviceSlug, numDays) {
+async function slotsForBarberService(barberSlug, serviceSlug) {
   const barber = getBarber(barberSlug);
   const serviceMins = durationMinutes(barberSlug, serviceSlug);
-  const key = `${barberSlug}:${serviceSlug}:${numDays}`;
+  const key = `${barberSlug}:${serviceSlug}`;
   const nowMs = Date.now();
 
   const cached = slotsCache.get(key);
@@ -148,9 +194,8 @@ async function slotsForBarberService(barberSlug, serviceSlug, numDays) {
 
   const fetchPromise = (async () => {
     try {
-      const endMs = nowMs + numDays * 24 * 60 * 60 * 1000;
-      const raw = await getSlotsWithRetry(barber.calendarId, nowMs, endMs);
-      let days = normalizeSlotsResponse(raw, nowMs);
+      const raws = await getSlotsHorizon(barber.calendarId, nowMs);
+      let days = mergeSlotWindows(raws, nowMs);
       days = filterForDuration(days, barber, serviceMins);
       slotsCache.set(key, { fetchedAt: nowMs, days });
       slotsLKG.set(key, { fetchedAt: nowMs, days });
@@ -171,50 +216,6 @@ async function slotsForBarberService(barberSlug, serviceSlug, numDays) {
 
   inFlight.set(key, fetchPromise);
   return fetchPromise;
-}
-
-// ── first-available: merge across eligible barbers ───────────────────
-
-/**
- * Staggered slots fetch across every barber offering the service. Returns
- * merged days where each entry is { t, barber } sorted by time, so the widget
- * can show who the slot belongs to. Barbers whose fetch fails (post-LKG) are
- * skipped rather than failing the whole merge.
- */
-async function slotsFirstAvailable(serviceSlug, numDays) {
-  const eligible = eligibleBarbers(serviceSlug);
-  const results = [];
-  let anyStale = false;
-
-  for (let i = 0; i < eligible.length; i += BATCH_SIZE) {
-    const batch = eligible.slice(i, i + BATCH_SIZE);
-    const settled = await Promise.all(
-      batch.map(async (b) => {
-        try {
-          const r = await slotsForBarberService(b.slug, serviceSlug, numDays);
-          return { slug: b.slug, ...r };
-        } catch (err) {
-          console.warn(`[booking] first-available: skipping ${b.name} (${err?.message})`);
-          return null;
-        }
-      })
-    );
-    results.push(...settled.filter(Boolean));
-    if (i + BATCH_SIZE < eligible.length) await sleep(BATCH_GAP_MS);
-  }
-
-  const merged = {};
-  for (const r of results) {
-    if (r.stale) anyStale = true;
-    for (const [dateKey, slots] of Object.entries(r.days)) {
-      if (!merged[dateKey]) merged[dateKey] = [];
-      for (const iso of slots) merged[dateKey].push({ t: iso, barber: r.slug });
-    }
-  }
-  for (const dateKey of Object.keys(merged)) {
-    merged[dateKey].sort((a, b) => Date.parse(a.t) - Date.parse(b.t));
-  }
-  return { days: merged, stale: anyStale };
 }
 
 // ── services catalog ─────────────────────────────────────────────────
@@ -253,47 +254,22 @@ function registerBookingRoutes(app) {
 
     const { barberSlug } = req.params;
     const serviceSlug = String(req.query.service || "haircut");
-    const numDays = Math.min(
-      Math.max(parseInt(req.query.days, 10) || DEFAULT_DAYS, 1),
-      MAX_DAYS
-    );
 
     if (!SERVICES[serviceSlug]) {
       return res.status(400).json({ error: `Unknown service: ${serviceSlug}` });
     }
+    if (!getBarber(barberSlug)) {
+      return res.status(404).json({ error: `Unknown barber: ${barberSlug}` });
+    }
+    if (!serviceOffered(barberSlug, serviceSlug)) {
+      return res
+        .status(400)
+        .json({ error: `${barberSlug} does not offer ${serviceSlug}` });
+    }
 
     try {
-      if (barberSlug === "first-available") {
-        if (!eligibleBarbers(serviceSlug).length) {
-          return res.status(400).json({ error: `No barbers offer ${serviceSlug}` });
-        }
-        const { days, stale } = await slotsFirstAvailable(serviceSlug, numDays);
-        res.set("Cache-Control", "public, max-age=30, s-maxage=60");
-        return res.json({
-          barber: "first-available",
-          service: serviceSlug,
-          tz: SHOP_TZ,
-          days,
-          fetchedAt: new Date().toISOString(),
-          ...(stale ? { stale: true } : {}),
-        });
-      }
-
-      if (!getBarber(barberSlug)) {
-        return res.status(404).json({ error: `Unknown barber: ${barberSlug}` });
-      }
-      if (!serviceOffered(barberSlug, serviceSlug)) {
-        return res
-          .status(400)
-          .json({ error: `${barberSlug} does not offer ${serviceSlug}` });
-      }
-
-      const { days, stale } = await slotsForBarberService(
-        barberSlug,
-        serviceSlug,
-        numDays
-      );
-      // uniform shape with first-available: entries are { t, barber }
+      const { days, stale } = await slotsForBarberService(barberSlug, serviceSlug);
+      // entries are { t, barber } for a uniform shape the widget can render
       const shaped = {};
       for (const [dateKey, slots] of Object.entries(days)) {
         shaped[dateKey] = slots.map((iso) => ({ t: iso, barber: barberSlug }));
@@ -303,6 +279,8 @@ function registerBookingRoutes(app) {
         barber: barberSlug,
         service: serviceSlug,
         tz: SHOP_TZ,
+        horizonDays: HORIZON_DAYS,
+        nextAvailable: earliestSlot(days), // ISO or null — powers the gap callout
         days: shaped,
         fetchedAt: new Date().toISOString(),
         ...(stale ? { stale: true } : {}),
