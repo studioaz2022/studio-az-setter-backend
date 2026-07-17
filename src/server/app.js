@@ -620,9 +620,11 @@ function createApp() {
       const { lookupContactIdByEmailOrPhone } = require("../clients/ghlClient");
       const existingId = await lookupContactIdByEmailOrPhone(payload.email, payload.phone);
       let contactId = existingId;
+      let existingContact = null;
 
       if (existingId) {
-        const existing = await getContact(existingId);
+        existingContact = await getContact(existingId);
+        const existing = existingContact;
         const {
           SYSTEM_CONTEXT_FIELD_IDS,
         } = require("../config/tattooIdeaFields");
@@ -649,7 +651,13 @@ function createApp() {
           /^(yes|true)$/i.test(String(cfById[SYSTEM_CONTEXT_FIELD_IDS.returning_client] || ""));
       }
 
+      // For the branch's "continue" path the widget prefills the idea questions
+      // with the existing idea — values render only AFTER the client chooses
+      // Continue (plan §16c/§16d).
+      let currentIdea = null;
+
       if (existingId && returningFlags.isReturning && returningFlags.hasOpenIdea) {
+        currentIdea = projectHistory.readIdeaFields(existingContact);
         console.log(
           `🛡️ [PARTIAL] Returning lead ${existingId} has an open idea — deferring ALL field writes until intent is known (§15 Lever 2)`
         );
@@ -675,7 +683,12 @@ function createApp() {
       }
 
       console.log("📝 ════════════════════════════════════════════════════════\n");
-      return res.status(200).json({ ok: true, contactId, ...returningFlags });
+      return res.status(200).json({
+        ok: true,
+        contactId,
+        ...returningFlags,
+        ...(currentIdea ? { currentIdea } : {}),
+      });
     } catch (err) {
       console.error("❌ /lead/partial error:", err.message || err);
       return res.status(500).json({ ok: false, error: err.message });
