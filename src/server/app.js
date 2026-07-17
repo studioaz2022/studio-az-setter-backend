@@ -609,26 +609,73 @@ function createApp() {
       const payload = req.body || {};
       console.log("📦 Payload:", JSON.stringify(filterNonEmpty(payload), null, 2));
 
-      const result = await upsertContactFromWidget(payload, "partial");
-      
-      if (result?.contactId) {
-        // Sync pipeline on entry - Widget submissions start at INTAKE
-        const contact = await getContact(result.contactId);
-        const cf = contact?.customField || contact?.customFields || {};
-        const hasOpportunity = !!cf.opportunity_id;
-        if (!hasOpportunity) {
-          console.log(`📊 [PIPELINE] New lead from Widget - syncing entry stage to INTAKE...`);
-          await syncPipelineOnEntry(result.contactId, {
-            channelType: "widget",
-            isFirstMessage: true,
-            contact,
-          });
+      // Returning-lead detection (TATTOO_PROJECT_HISTORY_PLAN.md §5b/§15).
+      // The widget renders its new-vs-continue branch off these flags. Lever 2
+      // (§15d): for a returning contact with a populated, never-executed idea,
+      // a PARTIAL must not overwrite anything — intent isn't known yet — so we
+      // skip the custom-field merge entirely and only report the flags.
+      const projectHistory = require("../services/tattooProjectHistory");
+      const returningFlags = { isReturning: false, hasOpenIdea: false, completedCount: 0 };
+
+      const { lookupContactIdByEmailOrPhone } = require("../clients/ghlClient");
+      const existingId = await lookupContactIdByEmailOrPhone(payload.email, payload.phone);
+      let contactId = existingId;
+
+      if (existingId) {
+        const existing = await getContact(existingId);
+        const {
+          SYSTEM_CONTEXT_FIELD_IDS,
+        } = require("../config/tattooIdeaFields");
+        const cfById = existing?.customField || {};
+        returningFlags.hasOpenIdea = projectHistory.hasOpenIdea(existing);
+        try {
+          const { supabase } = require("../clients/supabaseClient");
+          if (supabase) {
+            const { count } = await supabase
+              .from("tattoo_projects")
+              .select("*", { count: "exact", head: true })
+              .eq("contact_id", existingId)
+              .eq("executed", true);
+            returningFlags.completedCount = count || 0;
+          }
+        } catch (_) { /* count stays 0 */ }
+        if (!returningFlags.completedCount) {
+          const ghlCount = parseInt(cfById[SYSTEM_CONTEXT_FIELD_IDS.total_tattoos_completed] || "0", 10);
+          if (ghlCount > 0) returningFlags.completedCount = ghlCount;
         }
-        console.log(`✅ Partial lead created/updated: ${result.contactId}`);
+        returningFlags.isReturning =
+          returningFlags.completedCount > 0 ||
+          returningFlags.hasOpenIdea ||
+          /^(yes|true)$/i.test(String(cfById[SYSTEM_CONTEXT_FIELD_IDS.returning_client] || ""));
+      }
+
+      if (existingId && returningFlags.isReturning && returningFlags.hasOpenIdea) {
+        console.log(
+          `🛡️ [PARTIAL] Returning lead ${existingId} has an open idea — deferring ALL field writes until intent is known (§15 Lever 2)`
+        );
+      } else {
+        const result = await upsertContactFromWidget(payload, "partial");
+        contactId = result?.contactId || contactId;
+
+        if (contactId) {
+          // Sync pipeline on entry - Widget submissions start at INTAKE
+          const contact = await getContact(contactId);
+          const cf = contact?.customField || contact?.customFields || {};
+          const hasOpportunity = !!cf.opportunity_id;
+          if (!hasOpportunity) {
+            console.log(`📊 [PIPELINE] New lead from Widget - syncing entry stage to INTAKE...`);
+            await syncPipelineOnEntry(contactId, {
+              channelType: "widget",
+              isFirstMessage: true,
+              contact,
+            });
+          }
+          console.log(`✅ Partial lead created/updated: ${contactId}`);
+        }
       }
 
       console.log("📝 ════════════════════════════════════════════════════════\n");
-      return res.status(200).json({ ok: true, contactId: result?.contactId });
+      return res.status(200).json({ ok: true, contactId, ...returningFlags });
     } catch (err) {
       console.error("❌ /lead/partial error:", err.message || err);
       return res.status(500).json({ ok: false, error: err.message });
@@ -660,9 +707,59 @@ function createApp() {
       console.log("📦 Payload:", JSON.stringify(filterNonEmpty(payload), null, 2));
       console.log("📎 Files:", req.files?.length || 0);
 
-      // Upsert contact with final mode (ensures consultation tag)
-      const result = await upsertContactFromWidget(payload, "final");
-      
+      // ── New-vs-continue intent routing (TATTOO_PROJECT_HISTORY_PLAN.md §5b/§15/§16) ──
+      // projectIntent comes from the widget branch: "new" | "continue" | absent.
+      //  • "new"      → snapshot old idea (superseded) → clear group + apply new in ONE
+      //                 write → close old opportunity → neutralize nurture.
+      //  • "continue" → normal merge (progressive fill of the same idea).
+      //  • absent + a populated idea on file → DEFENSIVE snapshot first (§6a
+      //    snapshot-before-overwrite invariant), then merge as before.
+      const projectIntent = String(payload.projectIntent || payload.project_intent || "").toLowerCase() || null;
+      const projectHistory = require("../services/tattooProjectHistory");
+      const { IDEA_FIELD_KEYS } = require("../config/tattooIdeaFields");
+      const { lookupContactIdByEmailOrPhone } = require("../clients/ghlClient");
+
+      let intentPath = "default";
+      const preExistingId = await lookupContactIdByEmailOrPhone(payload.email, payload.phone);
+      if (preExistingId) {
+        const existing = await getContact(preExistingId);
+        if (existing && projectHistory.hasOpenIdea(existing)) {
+          if (projectIntent === "new") intentPath = "new";
+          else if (projectIntent === "continue") intentPath = "continue";
+          else intentPath = "defensive";
+        }
+      }
+
+      let result;
+      if (intentPath === "new") {
+        console.log(`🆕 [FINAL] Returning lead ${preExistingId} confirmed NEW idea — snapshot + clean reset`);
+        // Split idea-group fields from metadata: metadata merges via the normal
+        // upsert; the idea group goes through the atomic clear+apply so no field
+        // of the old idea can survive into the new one.
+        const ideaSet = new Set(IDEA_FIELD_KEYS);
+        const ideaCf = {};
+        const metaCf = {};
+        for (const [k, v] of Object.entries(payload.customFields || {})) {
+          if (ideaSet.has(k)) ideaCf[k] = v;
+          else metaCf[k] = v;
+        }
+        result = await upsertContactFromWidget({ ...payload, customFields: metaCf }, "final");
+        await projectHistory.handleNewTattooIdea(preExistingId, {
+          newIdeaFields: ideaCf,
+          source: "funnel",
+        });
+      } else {
+        if (intentPath === "defensive") {
+          console.log(`🛡️ [FINAL] Populated idea on ${preExistingId}, no branch answer — defensive snapshot before merge (§6a)`);
+          await projectHistory.snapshotProject(preExistingId, {
+            status: "active",
+            source: "funnel-defensive",
+          });
+        }
+        // Upsert contact with final mode (ensures consultation tag)
+        result = await upsertContactFromWidget(payload, "final");
+      }
+
       if (!result?.contactId) {
         console.error("❌ Failed to create/update contact");
         return res.status(500).json({ ok: false, error: "Failed to create contact" });

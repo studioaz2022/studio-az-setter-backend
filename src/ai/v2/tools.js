@@ -194,6 +194,26 @@ const TOOL_DEFINITIONS = [
     },
   },
   {
+    name: "start_new_tattoo_idea",
+    description:
+      "Start a FRESH design brief for a RETURNING client who wants a NEW/different tattoo (not changes to the current one). This archives their previous idea safely and wipes the current brief so the two never mix. DESTRUCTIVE-ish — call ONLY after the client explicitly confirms, e.g. you asked \"Want me to start a fresh design brief for this new piece? I'll keep your previous one saved.\" and they said yes. NEVER call for revisions to the same idea (bigger / add color / move placement) — use update_lead_fields for those.",
+    input_schema: {
+      type: "object",
+      properties: {
+        fields: {
+          type: "object",
+          description:
+            "Anything already learned about the NEW piece, same keys as update_lead_fields (e.g. {summary:'skull on ribs', placement:'ribs', style:'blackwork'}). Optional — pass {} if nothing yet.",
+        },
+        confirmed: {
+          type: "boolean",
+          description: "Must be true — set only after the client answered YES to starting a fresh brief.",
+        },
+      },
+      required: ["confirmed"],
+    },
+  },
+  {
     name: "send_consult_form_link",
     description: "Send the lead a link to the consultation intake form (for richer details). Optional — offer it, don't force it.",
     input_schema: { type: "object", properties: {} },
@@ -445,6 +465,47 @@ const HANDLERS = {
     return { ok: true, saved: Object.keys(mapped).length, ignored: unknown };
   },
 
+  async start_new_tattoo_idea(input, ctx) {
+    // Confirmation gate (TATTOO_PROJECT_HISTORY_PLAN.md §5a): the reset is
+    // destructive to the live brief, so it never runs on inference alone.
+    if (input.confirmed !== true) {
+      return {
+        ok: false,
+        error: "not confirmed — ask the client first ('Want me to start a fresh design brief for this new piece? I'll keep your previous one saved.') and call again with confirmed=true after a clear yes",
+      };
+    }
+    const { handleNewTattooIdea } = require("../../services/tattooProjectHistory");
+    const NEW_IDEA_KEY_MAP = {
+      title: "tattoo_title",
+      summary: "tattoo_summary",
+      placement: "tattoo_placement",
+      style: "tattoo_style",
+      size: "tattoo_size",
+      color_preference: "tattoo_color_preference",
+      timeline: "how_soon_is_client_deciding",
+      first_tattoo: "first_tattoo",
+      concerns: "tattoo_concerns",
+      budget: "budget_range",
+    };
+    const newIdeaFields = {};
+    for (const [k, v] of Object.entries(input.fields || {})) {
+      if (NEW_IDEA_KEY_MAP[k] && v != null && String(v).trim() !== "") {
+        newIdeaFields[NEW_IDEA_KEY_MAP[k]] = v;
+      }
+    }
+    const snapshot = await handleNewTattooIdea(ctx.contactId, {
+      newIdeaFields,
+      source: "ai-setter",
+    });
+    return {
+      ok: true,
+      previous_idea_saved: !!snapshot,
+      previous_project_number: snapshot?.project_number ?? null,
+      started_fresh: true,
+      note: "previous idea archived; the design brief is now a clean slate for the new piece",
+    };
+  },
+
   async send_consult_form_link(input, ctx) {
     const url = process.env.CONSULT_FORM_URL || null;
     if (!url) return { ok: false, error: "consult form link not configured (CONSULT_FORM_URL unset)" };
@@ -485,6 +546,10 @@ const HANDLERS = {
 
 // Canned dry-run results — realistic so the LLM keeps the conversation flowing in tests.
 const DRY_RUN = {
+  start_new_tattoo_idea: (input) =>
+    input.confirmed === true
+      ? { ok: true, previous_idea_saved: true, previous_project_number: 1, started_fresh: true, dry_run: true }
+      : { ok: false, error: "not confirmed — ask the client first, then call again with confirmed=true", dry_run: true },
   fetch_available_slots: (input) => {
     const mode = input.consult_type === "in_person" ? "in_person" : "online";
     // Echo the requested artist so dry-run fidelity matches production routing (the real
