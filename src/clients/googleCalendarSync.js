@@ -416,6 +416,133 @@ async function bootstrapAfterConnect(staffGhlId) {
   await registerWatchChannel(staffGhlId);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 4 — outbound: shop appointments -> the artist's personal Google
+// Calendar. Events are tagged studioaz_origin=ghl so the inbound reconcile
+// never re-imports them (loop guard). Called from appointmentWebhooks.js;
+// every function is a no-op for staff without a Google connection.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Create or update the Google mirror event for a GHL appointment.
+ * appt: raw GHL webhook shape ({ id, assignedUserId, startTime, endTime,
+ * title, appointmentStatus|status, calendarId }).
+ */
+async function mirrorAppointmentToGoogle(appt) {
+  const staffGhlId = appt.assignedUserId;
+  const apptId = appt.id || appt.appointmentId;
+  if (!staffGhlId || !apptId || !appt.startTime || !appt.endTime) return null;
+
+  const tokenRow = await googleCalOAuth.getStaffToken(staffGhlId);
+  if (!tokenRow || tokenRow.sync_status === "disconnected") return null; // not connected — nothing to mirror
+
+  const status = appt.appointmentStatus || appt.status;
+  if (status === "cancelled" || status === "Cancelled") {
+    return removeAppointmentFromGoogle(apptId);
+  }
+
+  const staffCal = resolveStaffCalendar(staffGhlId);
+  const googleCalendarId = tokenRow.calendar_id || "primary";
+  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+
+  const body = {
+    summary: appt.title || "Studio AZ appointment",
+    description: "Booked via Studio AZ. Managed automatically — edits made here are not synced back to the shop.",
+    start: { dateTime: new Date(appt.startTime).toISOString() },
+    end: { dateTime: new Date(appt.endTime).toISOString() },
+    extendedProperties: {
+      private: { [ORIGIN_KEY]: ORIGIN_VALUE, ghl_appointment_id: apptId },
+    },
+  };
+
+  const { data: existing } = await supabase
+    .from("google_calendar_events")
+    .select("*")
+    .eq("ghl_appointment_id", apptId)
+    .eq("direction", "outbound")
+    .maybeSingle();
+
+  if (existing) {
+    try {
+      const resp = await axios.patch(
+        `${CALENDAR_API}/calendars/${encodeURIComponent(googleCalendarId)}/events/${existing.google_event_id}`,
+        body,
+        { headers: { Authorization: `Bearer ${accessToken}` } }
+      );
+      await supabase
+        .from("google_calendar_events")
+        .update({
+          start_time: body.start.dateTime,
+          end_time: body.end.dateTime,
+          real_title: body.summary,
+          etag: resp.data.etag || null,
+          status: "confirmed",
+        })
+        .eq("id", existing.id);
+      console.log(`[GCalSync] outbound updated: appt ${apptId} -> google ${existing.google_event_id}`);
+      return { action: "updated", googleEventId: existing.google_event_id };
+    } catch (e) {
+      if (e.response?.status !== 404 && e.response?.status !== 410) throw e;
+      // Mirror event was deleted in Google by hand — fall through and recreate.
+      await supabase.from("google_calendar_events").delete().eq("id", existing.id);
+    }
+  }
+
+  const resp = await axios.post(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(googleCalendarId)}/events`,
+    body,
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+  await supabase.from("google_calendar_events").insert({
+    staff_ghl_user_id: staffGhlId,
+    google_event_id: resp.data.id,
+    google_calendar_id: googleCalendarId,
+    ical_uid: resp.data.iCalUID || null,
+    etag: resp.data.etag || null,
+    direction: "outbound",
+    ghl_appointment_id: apptId,
+    real_title: body.summary,
+    start_time: body.start.dateTime,
+    end_time: body.end.dateTime,
+    is_all_day: false,
+    transparency: "opaque",
+    status: "confirmed",
+    location_id: staffCal?.locationId || tokenRow.location_id,
+  });
+  console.log(`[GCalSync] outbound created: appt ${apptId} -> google ${resp.data.id}`);
+  return { action: "created", googleEventId: resp.data.id };
+}
+
+/** Delete the Google mirror event for a cancelled/deleted GHL appointment. */
+async function removeAppointmentFromGoogle(apptId) {
+  if (!apptId) return null;
+  const { data: row } = await supabase
+    .from("google_calendar_events")
+    .select("*")
+    .eq("ghl_appointment_id", apptId)
+    .eq("direction", "outbound")
+    .maybeSingle();
+  if (!row) return null;
+
+  try {
+    const accessToken = await googleCalOAuth.getValidAccessToken(row.staff_ghl_user_id);
+    await axios.delete(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(row.google_calendar_id)}/events/${row.google_event_id}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+  } catch (e) {
+    const code = e.response?.status;
+    if (code !== 404 && code !== 410) {
+      console.error(`[GCalSync] outbound delete failed for appt ${apptId}: ${e.message}`);
+      // Keep the row so a later retry can clean up.
+      throw e;
+    }
+  }
+  await supabase.from("google_calendar_events").delete().eq("id", row.id);
+  console.log(`[GCalSync] outbound removed: appt ${apptId} (google ${row.google_event_id})`);
+  return { action: "deleted", googleEventId: row.google_event_id };
+}
+
 module.exports = {
   syncStaffCalendar,
   resolveStaffCalendar,
@@ -425,4 +552,6 @@ module.exports = {
   handleWatchNudge,
   startGoogleWatchRenewalLoop,
   bootstrapAfterConnect,
+  mirrorAppointmentToGoogle,
+  removeAppointmentFromGoogle,
 };

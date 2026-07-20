@@ -21,6 +21,16 @@ const { getOpportunitiesByContact, updateOpportunityStage } = require('./ghlOppo
 const { getStageId } = require('../config/pipelineConfig');
 const { ghlBarber, getCachedUsers } = require('./ghlMultiLocationSdk');
 const { BARBER_LOCATION_ID } = require('../config/kioskConfig');
+const googleCalSync = require('./googleCalendarSync');
+
+/** Mirror a shop appointment onto the assigned artist's personal Google
+ *  Calendar (Phase 4 of the GCal two-way sync). No-op unless the artist has
+ *  connected Google. Never fatal — mirroring must not break webhook handling. */
+function mirrorToGoogleSafe(rawAppt) {
+  googleCalSync
+    .mirrorAppointmentToGoogle(rawAppt)
+    .catch((e) => console.error('⚠️ Google mirror failed (non-fatal):', e.message));
+}
 
 // Online consultation calendar IDs — these get Google Meet + Fireflies
 const ONLINE_CONSULT_CALENDAR_IDS = new Set([
@@ -86,6 +96,9 @@ async function handleAppointmentCreated(payload) {
 
   // Update opportunity pipeline stage based on calendar type
   await updateOpportunityForAppointment(rawAppt);
+
+  // Mirror onto the artist's personal Google Calendar (if connected)
+  mirrorToGoogleSafe(rawAppt);
 }
 
 /**
@@ -333,6 +346,10 @@ async function handleAppointmentUpdated(payload) {
     sendRescheduleConfirmationSMS(apptWithLocation)
       .catch(err => console.error('⚠️ Reschedule confirmation SMS failed (non-fatal):', err.message));
   }
+
+  // Mirror change onto the artist's Google Calendar (handles cancel too —
+  // mirrorAppointmentToGoogle removes the event when status is cancelled)
+  mirrorToGoogleSafe(rawAppointment);
 }
 
 /**
@@ -360,6 +377,11 @@ async function handleAppointmentDeleted(payload) {
 
   // Notify the mentor when an apprentice's tattoo is deleted (treated as cancelled)
   await notifyMentorOfApprenticeTattoo(rawAppointment, 'cancelled');
+
+  // Remove the mirror event from the artist's Google Calendar (if any)
+  googleCalSync
+    .removeAppointmentFromGoogle(appointmentId)
+    .catch((e) => console.error('⚠️ Google mirror removal failed (non-fatal):', e.message));
 }
 
 /**
