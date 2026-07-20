@@ -7561,6 +7561,10 @@ function createApp() {
 
     try {
       const result = await googleCalOAuth.exchangeCodeForToken(code, state);
+      // Fire-and-forget: initial inbound sync + watch-channel registration.
+      googleCalSync
+        .bootstrapAfterConnect(result.staffGhlId)
+        .catch((e) => console.error("[GoogleCalOAuth] post-connect bootstrap failed:", e.message));
       res.redirect(
         `studioaz://google-oauth?success=true&email=${encodeURIComponent(result.googleEmail || "")}`
       );
@@ -7598,6 +7602,8 @@ function createApp() {
   // Revokes at Google (best-effort) and deletes the connection row.
   app.delete("/api/staff/:staffGhlId/google/disconnect", async (req, res) => {
     try {
+      // Stop the push channel while the token still works, then revoke+delete.
+      await googleCalSync.stopWatchChannel(req.params.staffGhlId).catch(() => {});
       await googleCalOAuth.disconnectStaff(req.params.staffGhlId);
       res.json({ success: true });
     } catch (error) {
@@ -7646,6 +7652,41 @@ function createApp() {
       }
       console.error("[API] Google sync-now failed:", error.message);
       res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/staff/:staffGhlId/google/watch — (re)register the push channel.
+  // Used for staff connected before Phase 2b shipped; new connects register
+  // automatically in the OAuth callback.
+  app.post("/api/staff/:staffGhlId/google/watch", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const result = await googleCalSync.registerWatchChannel(req.params.staffGhlId);
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Google watch registration failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /webhooks/google/calendar — Google push-channel nudges land here.
+  // No payload; identity comes from headers. We validate the per-channel
+  // secret (X-Goog-Channel-Token) and ACK fast — the reconcile runs async.
+  app.post("/webhooks/google/calendar", async (req, res) => {
+    try {
+      const result = await googleCalSync.handleWatchNudge({
+        channelId: req.get("X-Goog-Channel-ID"),
+        channelToken: req.get("X-Goog-Channel-Token"),
+        resourceState: req.get("X-Goog-Resource-State"),
+      });
+      if (!result.ok) {
+        console.warn(`[GCalSync] rejected nudge: ${result.reason}`);
+        return res.status(404).end(); // 404 tells Google to stop retrying bad channels
+      }
+      res.status(200).end();
+    } catch (error) {
+      console.error("[GCalSync] webhook error:", error.message);
+      res.status(200).end(); // never let Google mark us unhealthy over a transient
     }
   });
 
@@ -14886,6 +14927,16 @@ function createApp() {
         "[app] failed to start cache reconcile loop:",
         err.message || err
       );
+    }
+  }
+
+  // Google Calendar watch-channel renewal (re-registers channels expiring
+  // within 24h; also a sync safety net). Same opt-out as the loop above.
+  if (process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+    try {
+      googleCalSync.startGoogleWatchRenewalLoop();
+    } catch (err) {
+      console.error("[app] failed to start GCal watch renewal loop:", err.message || err);
     }
   }
 

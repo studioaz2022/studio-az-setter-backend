@@ -245,4 +245,184 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
   return summary;
 }
 
-module.exports = { syncStaffCalendar, resolveStaffCalendar };
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 2b — near-real-time via events.watch push channels
+// Google POSTs a nudge (no payload) to our webhook on any calendar change;
+// we respond by re-running the windowed reconcile above. Channels expire
+// (~7 days), so a renewal loop re-registers anything expiring within 24h.
+// ═══════════════════════════════════════════════════════════════════════════
+
+const crypto = require("crypto");
+
+const WEBHOOK_ADDRESS =
+  process.env.GOOGLE_CALENDAR_WEBHOOK_URL ||
+  "https://studio-az-setter-backend.onrender.com/webhooks/google/calendar";
+const WATCH_TTL_SECONDS = 7 * 24 * 3600; // request the max default (7 days)
+
+// Coalesce bursts: one reconcile in flight per staff member, at most one queued.
+const inFlight = new Map(); // staffGhlId -> { running: Promise, pending: bool }
+
+async function runCoalescedSync(staffGhlId) {
+  const entry = inFlight.get(staffGhlId);
+  if (entry) {
+    entry.pending = true; // a run is active — remember to go once more
+    return entry.running;
+  }
+  const state = { pending: false, running: null };
+  state.running = (async () => {
+    try {
+      do {
+        state.pending = false;
+        await syncStaffCalendar(staffGhlId);
+      } while (state.pending);
+    } finally {
+      inFlight.delete(staffGhlId);
+    }
+  })();
+  inFlight.set(staffGhlId, state);
+  return state.running;
+}
+
+/** Best-effort stop of an existing push channel. */
+async function stopWatchChannel(staffGhlId) {
+  const row = await googleCalOAuth.getStaffToken(staffGhlId);
+  if (!row?.watch_channel_id || !row?.watch_resource_id) return false;
+  try {
+    const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+    await axios.post(
+      `${CALENDAR_API}/channels/stop`,
+      { id: row.watch_channel_id, resourceId: row.watch_resource_id },
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+  } catch (e) {
+    // Channel already expired/stopped — nothing to do.
+    console.warn(`[GCalSync] channels.stop for ${staffGhlId}: ${e.response?.data?.error?.message || e.message}`);
+  }
+  await supabase
+    .from("staff_google_tokens")
+    .update({ watch_channel_id: null, watch_resource_id: null, watch_expiration: null, watch_channel_token: null })
+    .eq("staff_ghl_user_id", staffGhlId);
+  return true;
+}
+
+/** Register (or re-register) the events.watch push channel for a staff member. */
+async function registerWatchChannel(staffGhlId) {
+  const row = await googleCalOAuth.getStaffToken(staffGhlId);
+  if (!row) throw new Error(`No Google Calendar connected for staff ${staffGhlId}`);
+
+  // Replace any existing channel so we never double-nudge.
+  if (row.watch_channel_id) await stopWatchChannel(staffGhlId);
+
+  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+  const channelId = crypto.randomUUID();
+  const channelToken = crypto.randomBytes(24).toString("hex");
+  const googleCalendarId = row.calendar_id || "primary";
+
+  const resp = await axios.post(
+    `${CALENDAR_API}/calendars/${encodeURIComponent(googleCalendarId)}/events/watch`,
+    {
+      id: channelId,
+      type: "web_hook",
+      address: WEBHOOK_ADDRESS,
+      token: channelToken,
+      params: { ttl: String(WATCH_TTL_SECONDS) },
+    },
+    { headers: { Authorization: `Bearer ${accessToken}` } }
+  );
+
+  const expiration = resp.data.expiration
+    ? new Date(Number(resp.data.expiration)).toISOString()
+    : new Date(Date.now() + WATCH_TTL_SECONDS * 1000).toISOString();
+
+  await supabase
+    .from("staff_google_tokens")
+    .update({
+      watch_channel_id: channelId,
+      watch_resource_id: resp.data.resourceId,
+      watch_expiration: expiration,
+      watch_channel_token: channelToken,
+    })
+    .eq("staff_ghl_user_id", staffGhlId);
+
+  console.log(`[GCalSync] watch channel registered for ${staffGhlId}, expires ${expiration}`);
+  return { channelId, expiration };
+}
+
+/**
+ * Handle a webhook nudge. Returns 200-worthy truthiness fast; the reconcile
+ * runs after we've already ACKed (caller responds immediately).
+ * Validates the per-channel secret so random POSTs can't trigger syncs.
+ */
+async function handleWatchNudge({ channelId, channelToken, resourceState }) {
+  if (!channelId) return { ok: false, reason: "missing channel id" };
+
+  const { data: row, error } = await supabase
+    .from("staff_google_tokens")
+    .select("staff_ghl_user_id, watch_channel_token")
+    .eq("watch_channel_id", channelId)
+    .single();
+  if (error || !row) return { ok: false, reason: "unknown channel" };
+  if (row.watch_channel_token && row.watch_channel_token !== channelToken) {
+    return { ok: false, reason: "bad channel token" };
+  }
+
+  // "sync" = registration handshake ping; nothing changed yet.
+  if (resourceState === "sync") return { ok: true, action: "handshake" };
+
+  // Fire the reconcile without blocking the ACK.
+  runCoalescedSync(row.staff_ghl_user_id).catch((e) =>
+    console.error(`[GCalSync] nudge sync failed for ${row.staff_ghl_user_id}:`, e.message)
+  );
+  return { ok: true, action: "sync_started", staffGhlId: row.staff_ghl_user_id };
+}
+
+/**
+ * In-process renewal loop (same pattern as cacheReconcileLoop): every 6h,
+ * re-register channels expiring within 24h and self-heal connected rows that
+ * lost their channel. Also reconciles those calendars as a safety net.
+ */
+function startGoogleWatchRenewalLoop() {
+  const SIX_HOURS = 6 * 3600 * 1000;
+  const tick = async () => {
+    try {
+      const cutoff = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+      const { data: rows, error } = await supabase
+        .from("staff_google_tokens")
+        .select("staff_ghl_user_id, watch_channel_id, watch_expiration")
+        .neq("sync_status", "disconnected");
+      if (error) throw new Error(error.message);
+      for (const row of rows || []) {
+        const needsChannel = !row.watch_channel_id || (row.watch_expiration && row.watch_expiration < cutoff);
+        if (!needsChannel) continue;
+        try {
+          await registerWatchChannel(row.staff_ghl_user_id);
+          await runCoalescedSync(row.staff_ghl_user_id);
+        } catch (e) {
+          console.error(`[GCalSync] renewal failed for ${row.staff_ghl_user_id}:`, e.message);
+        }
+      }
+    } catch (e) {
+      console.error("[GCalSync] renewal loop tick failed:", e.message);
+    }
+  };
+  setTimeout(tick, 90_000); // startup grace, then every 6h
+  setInterval(tick, SIX_HOURS);
+  console.log("[GCalSync] watch renewal loop started (6h interval)");
+}
+
+/** Post-connect bootstrap: initial sync + watch registration, fire-and-forget. */
+async function bootstrapAfterConnect(staffGhlId) {
+  await runCoalescedSync(staffGhlId);
+  await registerWatchChannel(staffGhlId);
+}
+
+module.exports = {
+  syncStaffCalendar,
+  resolveStaffCalendar,
+  runCoalescedSync,
+  registerWatchChannel,
+  stopWatchChannel,
+  handleWatchNudge,
+  startGoogleWatchRenewalLoop,
+  bootstrapAfterConnect,
+};
