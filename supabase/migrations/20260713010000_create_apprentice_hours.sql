@@ -17,8 +17,9 @@ CREATE TABLE IF NOT EXISTS apprentice_hours (
 
     -- The state-required fields
     session_date DATE NOT NULL,
-    -- Whole-session duration (setup + procedure + teardown), self-reported.
-    -- Always a positive multiple of 15 minutes — entered via a quarter-hour stepper, never free-typed.
+    -- Tattooing time only, self-reported. Per MDH, setup, cleanup, drawing, mapping,
+    -- consulting, and synthetic-skin work do NOT count toward the 200 supervised hours.
+    -- Always a positive multiple of 15 minutes — entered via a quarter-hour picker, never free-typed.
     duration_minutes INTEGER NOT NULL CHECK (duration_minutes > 0 AND duration_minutes % 15 = 0),
 
     -- Description + placement combine into the single "placement/description" column on export,
@@ -30,8 +31,8 @@ CREATE TABLE IF NOT EXISTS apprentice_hours (
     client_name TEXT NOT NULL,        -- REQUIRED; auto-filled from the picker or typed by hand
     contact_id TEXT,                  -- optional GHL contact id from the picker, when tied to a real booking
 
-    -- Mentor sign-off — reserved for future in-app sign-off; the .xlsx export ships a blank
-    -- initials column for Lionel to sign by hand after printing.
+    -- Mentor sign-off — reserved for a future in-app sign-off step. The .xlsx export
+    -- follows MDH's form, which names the Supervisor per row rather than taking initials.
     mentor_signed_off_at TIMESTAMPTZ,
     mentor_initials TEXT,
 
@@ -122,7 +123,7 @@ USING (
 
 -- Documentation
 COMMENT ON TABLE apprentice_hours IS 'Minnesota body-art apprentice licensure hour log. Self-logged by the apprentice; visible to apprentice + owner/admin only (not peer artists). Exported to .xlsx for state submission.';
-COMMENT ON COLUMN apprentice_hours.duration_minutes IS 'Whole-session minutes (setup+procedure+teardown), positive multiple of 15.';
-COMMENT ON COLUMN apprentice_hours.description IS 'Subject/style of the tattoo — half of the state "placement/description" column.';
+COMMENT ON COLUMN apprentice_hours.duration_minutes IS 'Tattooing minutes only (MDH excludes setup/cleanup/drawing/mapping/consulting), positive multiple of 15.';
+COMMENT ON COLUMN apprentice_hours.description IS 'What was done — combines with placement into MDH''s "Description of Work" column (placement: description).';
 COMMENT ON COLUMN apprentice_hours.placement IS 'Body placement free text (e.g. "left forearm") — other half of the state column.';
-COMMENT ON COLUMN apprentice_hours.mentor_initials IS 'Reserved for future in-app mentor sign-off; the .xlsx export ships this column blank for hand-signing.';
+COMMENT ON COLUMN apprentice_hours.mentor_initials IS 'Reserved for a future in-app mentor sign-off. Not used by the export — MDH''s form names the Supervisor per row.';

@@ -6505,9 +6505,14 @@ function createApp() {
 
   // ═══ Apprentice licensure hours — .xlsx export (Pillar 4) ═══
   // GET /api/apprentice/hours/export?apprentice=<ghlUserId>
-  // Streams a Minnesota-licensure hour log as an Excel file. Columns:
-  //   Date | Client | Placement & Description | Duration (hrs) | Mentor Initials (blank, hand-signed)
-  // plus a running total and the 200-hour requirement line. Internal-only (x-internal-key).
+  // Mirrors MDH's official "Body Art Temporary Technician Hours/Piercing Log"
+  // (rev. 11/10/25), minus the Total Piercings column (Megan is tattoo-only):
+  //   Date (MM/DD/YY) | Client Name | Description of Work | Total Tattooing Hours | Supervisor
+  // MDH requires the log be typed and use HOURS AND MINUTES ("2 hours 15 minutes",
+  // NOT 2.25) — see formatHoursMinutes below. Setup/cleanup/drawing/mapping/
+  // consulting do NOT count toward supervised hours, per MDH.
+  // https://www.health.state.mn.us/facilities/providers/bodyart/temptechhrs.pdf
+  // Internal-only (x-internal-key).
   app.get("/api/apprentice/hours/export", async (req, res) => {
     if (!requireInternalKey(req, res)) return;
 
@@ -6539,13 +6544,38 @@ function createApp() {
         BaSmQL1fkhdjmCYuDRWK: "Megan Schultz",
         O8ChoMYj1BmMWJJsDlvC: "Andrew Fernandez",
       };
+      // MDH header fields that aren't in the hours table.
+      const PROFILES = {
+        BaSmQL1fkhdjmCYuDRWK: { license: "3110968", establishment: "Studio AZ", practiceArea: "Tattooist" },
+      };
       const apprenticeName = NAMES[apprenticeGhlId] || "Apprentice";
-      const mentorGhlId = rows && rows.length ? rows[0].mentor_ghl_id : null;
-      const mentorName = (mentorGhlId && NAMES[mentorGhlId]) || "";
+      const profile = PROFILES[apprenticeGhlId] || {};
+
+      // MDH wants every supervising technician listed, not just one.
+      const supervisorNames = [
+        ...new Set((rows || []).map((r) => NAMES[r.mentor_ghl_id]).filter(Boolean)),
+      ];
 
       const REQUIRED_HOURS = 200;
       const totalMinutes = (rows || []).reduce((sum, r) => sum + (r.duration_minutes || 0), 0);
-      const totalHours = totalMinutes / 60;
+
+      // MDH: "The log must be typed and use hours and minutes
+      // (example: 2 hours and 30 minutes, not 2.5 hours)"
+      const formatHoursMinutes = (mins) => {
+        const h = Math.floor(mins / 60);
+        const m = mins % 60;
+        const parts = [];
+        if (h > 0) parts.push(`${h} ${h === 1 ? "hour" : "hours"}`);
+        if (m > 0) parts.push(`${m} ${m === 1 ? "minute" : "minutes"}`);
+        return parts.length ? parts.join(" ") : "0 minutes";
+      };
+
+      // yyyy-MM-dd -> MM/DD/YY (MDH's stated date format)
+      const formatMdhDate = (iso) => {
+        if (!iso || typeof iso !== "string") return "";
+        const [y, m, d] = iso.split("-");
+        return y && m && d ? `${m}/${d}/${y.slice(2)}` : iso;
+      };
 
       const ExcelJS = require("exceljs");
       const workbook = new ExcelJS.Workbook();
@@ -6555,13 +6585,14 @@ function createApp() {
         pageSetup: { fitToPage: true, fitToWidth: 1, orientation: "portrait" },
       });
 
-      // Columns: Date | Client | Placement & Description | Duration (hrs) | Mentor Initials
+      // MDH columns, minus Total Piercings (tattoo-only apprentice):
+      // Date | Client Name | Description of Work | Total Tattooing Hours | Supervisor
       ws.columns = [
         { key: "date", width: 14 },
-        { key: "client", width: 22 },
-        { key: "desc", width: 50 },
-        { key: "duration", width: 14 },
-        { key: "initials", width: 16 },
+        { key: "client", width: 24 },
+        { key: "desc", width: 46 },
+        { key: "duration", width: 22 },
+        { key: "supervisor", width: 22 },
       ];
       const LAST_COL = 5;
 
@@ -6570,68 +6601,100 @@ function createApp() {
       const DARK = "FF1F1F1F";
 
       // Title block
-      const titleRow = ws.addRow(["Studio AZ Tattoo — Apprentice Supervised Hours"]);
+      const titleRow = ws.addRow(["Body Art Temporary Technician Hours Log"]);
       ws.mergeCells(titleRow.number, 1, titleRow.number, LAST_COL);
       titleRow.font = { bold: true, size: 15, color: { argb: DARK } };
       titleRow.height = 22;
 
-      const subRow = ws.addRow([`Minnesota body-art licensure — ${REQUIRED_HOURS} supervised hours required`]);
+      const subRow = ws.addRow([
+        `Minnesota Department of Health — ${REQUIRED_HOURS} hours of supervised tattooing required (Minn. Stat. 146B.03, subd. 12)`,
+      ]);
       ws.mergeCells(subRow.number, 1, subRow.number, LAST_COL);
       subRow.font = { italic: true, size: 10, color: { argb: "FF666666" } };
 
-      ws.addRow([`Apprentice: ${apprenticeName}`]);
-      if (mentorName) ws.addRow([`Supervising mentor: ${mentorName}`]);
-      ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`]);
+      ws.addRow([]);
+
+      // MDH header fields
+      const headerFields = [
+        ["Name:", apprenticeName],
+        ["License Number:", profile.license || ""],
+        ["Supervisor Name(s):", supervisorNames.join(", ")],
+        ["Establishment Name:", profile.establishment || ""],
+        ["Practice Area:", profile.practiceArea || ""],
+      ];
+      headerFields.forEach(([label, value]) => {
+        const r = ws.addRow([label, value]);
+        r.getCell(1).font = { bold: true };
+        ws.mergeCells(r.number, 2, r.number, LAST_COL);
+      });
+
+      // MDH exclusion note — what may NOT be counted toward supervised hours.
+      const noteRow = ws.addRow([
+        "Hours reflect tattooing time only. Per MDH, setup, cleanup, drawing, mapping, consulting, and tattooing on synthetic skin do not count toward supervised hours.",
+      ]);
+      ws.mergeCells(noteRow.number, 1, noteRow.number, LAST_COL);
+      noteRow.font = { italic: true, size: 9, color: { argb: "FF8A6D1B" } };
+      noteRow.alignment = { wrapText: true, vertical: "top" };
+      noteRow.height = 26;
+
+      ws.addRow([`Generated: ${new Date().toLocaleDateString("en-US", { year: "numeric", month: "long", day: "numeric" })}`])
+        .font = { size: 9, color: { argb: "FF666666" } };
       ws.addRow([]);
 
       // Header row
-      const header = ws.addRow(["Date", "Client", "Placement & Description", "Duration (hrs)", "Mentor Initials"]);
+      const header = ws.addRow([
+        "Date (MM/DD/YY)",
+        "Client Name",
+        "Description of Work",
+        "Total Tattooing Hours",
+        "Supervisor",
+      ]);
       header.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
         cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb: DARK } };
-        cell.alignment = { vertical: "middle", horizontal: "left" };
+        cell.alignment = { vertical: "middle", horizontal: "left", wrapText: true };
         cell.border = { bottom: { style: "thin", color: { argb: GOLD } } };
       });
 
-      // Data rows
+      // Data rows — MDH's example reads "Back of arm: spider-line work color",
+      // i.e. placement first, then what was done.
       (rows || []).forEach((r) => {
-        const combined = [r.description, r.placement].filter(Boolean).join(" — ");
-        const hrs = (r.duration_minutes || 0) / 60;
+        const work = [r.placement, r.description].filter(Boolean).join(": ");
         const row = ws.addRow([
-          r.session_date, // yyyy-MM-dd
+          formatMdhDate(r.session_date),
           r.client_name || "",
-          combined,
-          Number(hrs.toFixed(2)),
-          "", // mentor initials — signed by hand after printing
+          work,
+          formatHoursMinutes(r.duration_minutes || 0),
+          NAMES[r.mentor_ghl_id] || "",
         ]);
         row.getCell(3).alignment = { wrapText: true };
-        row.getCell(4).alignment = { horizontal: "center" };
-        row.getCell(4).numFmt = "0.00";
-        row.getCell(5).border = { bottom: { style: "hair", color: { argb: "FFBBBBBB" } } };
+        row.getCell(4).alignment = { horizontal: "left" };
       });
 
       ws.addRow([]);
 
-      // Totals block — label sits in the description column, value under Duration.
-      const totalRow = ws.addRow(["", "", "TOTAL LOGGED", Number(totalHours.toFixed(2)), ""]);
+      // Totals block — label in the description column, value under Total Tattooing Hours.
+      const remainingMinutes = Math.max(REQUIRED_HOURS * 60 - totalMinutes, 0);
+
+      const totalRow = ws.addRow(["", "", "TOTAL LOGGED", formatHoursMinutes(totalMinutes), ""]);
       totalRow.getCell(3).font = { bold: true };
       totalRow.getCell(3).alignment = { horizontal: "right" };
       totalRow.getCell(4).font = { bold: true, color: { argb: AMBER } };
-      totalRow.getCell(4).numFmt = "0.00";
-      totalRow.getCell(4).alignment = { horizontal: "center" };
 
-      const remaining = Math.max(REQUIRED_HOURS - totalHours, 0);
-      const reqRow = ws.addRow(["", "", "REQUIRED", REQUIRED_HOURS, ""]);
+      const reqRow = ws.addRow(["", "", "REQUIRED", `${REQUIRED_HOURS} hours`, ""]);
       reqRow.getCell(3).font = { color: { argb: "FF666666" } };
       reqRow.getCell(3).alignment = { horizontal: "right" };
-      reqRow.getCell(4).alignment = { horizontal: "center" };
 
-      const remRow = ws.addRow(["", "", remaining > 0 ? "REMAINING" : "COMPLETE", remaining > 0 ? Number(remaining.toFixed(2)) : "✓", ""]);
-      remRow.getCell(3).font = { bold: true, color: { argb: remaining > 0 ? "FF666666" : GOLD } };
+      const remRow = ws.addRow([
+        "",
+        "",
+        remainingMinutes > 0 ? "REMAINING" : "COMPLETE",
+        remainingMinutes > 0 ? formatHoursMinutes(remainingMinutes) : "✓",
+        "",
+      ]);
+      remRow.getCell(3).font = { bold: true, color: { argb: remainingMinutes > 0 ? "FF666666" : GOLD } };
       remRow.getCell(3).alignment = { horizontal: "right" };
-      remRow.getCell(4).font = { bold: true, color: { argb: remaining > 0 ? "FF666666" : GOLD } };
-      remRow.getCell(4).alignment = { horizontal: "center" };
-      if (remaining > 0) remRow.getCell(4).numFmt = "0.00";
+      remRow.getCell(4).font = { bold: true, color: { argb: remainingMinutes > 0 ? "FF666666" : GOLD } };
 
       const buffer = await workbook.xlsx.writeBuffer();
       const safeName = apprenticeName.replace(/[^a-z0-9]+/gi, "-");
