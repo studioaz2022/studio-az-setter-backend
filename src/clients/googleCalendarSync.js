@@ -45,21 +45,17 @@ const PAST_GRACE_DAYS = 1;
 const ORIGIN_KEY = "studioaz_origin";
 const ORIGIN_VALUE = "ghl";
 
-/** staff ghlUserId -> { calendarId, locationId, sdk } from the kiosk roster.
- *  Barbers: use their first service calendar (blocks are per-user in GHL, the
- *  calendarId just anchors the slot). Tattoo artists: their single calendar. */
+/** staff ghlUserId -> { locationId, sdk } from the kiosk roster.
+ *  Block slots are PER-USER in GHL: the API takes assignedUserId + locationId
+ *  and blocks the user across all their calendars. Do NOT pass calendarId —
+ *  the SDK's DTO marks it required (types incomplete, known gotcha) but a
+ *  round_robin service calendar id gets rejected with "The calendar is not an
+ *  event calendar". Mirrors iOS CalendarService.createBlockSlot. */
 function resolveStaffCalendar(staffGhlId) {
   const tattoo = TATTOO_ARTIST_DATA.find((a) => a.ghlUserId === staffGhlId);
-  if (tattoo) {
-    return { calendarId: tattoo.calendarId, locationId: TATTOO_LOCATION_ID, sdk: ghl };
-  }
+  if (tattoo) return { locationId: TATTOO_LOCATION_ID, sdk: ghl };
   const barber = BARBER_DATA.find((b) => b.ghlUserId === staffGhlId);
-  if (barber) {
-    const first = Object.values(barber.calendars || {})[0];
-    if (first) {
-      return { calendarId: first, locationId: BARBER_LOCATION_ID, sdk: ghlBarber };
-    }
-  }
+  if (barber) return { locationId: BARBER_LOCATION_ID, sdk: ghlBarber };
   return null;
 }
 
@@ -153,7 +149,6 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
     if (!row) {
       const blockResp = await staffCal.sdk.calendars.createBlockSlot({
         title: "Busy",
-        calendarId: staffCal.calendarId,
         assignedUserId: staffGhlId,
         locationId: staffCal.locationId,
         startTime: startISO,
@@ -200,7 +195,6 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
         { eventId: row.ghl_block_slot_id },
         {
           title: "Busy",
-          calendarId: staffCal.calendarId,
           assignedUserId: staffGhlId,
           startTime: startISO,
           endTime: endISO,
