@@ -48,6 +48,7 @@ const {
 } = require("../payments/squareTransactionSync");
 // Namespaced: exports buildOAuthUrl/exchangeCodeForToken like squareOAuth above.
 const googleCalOAuth = require("../clients/googleCalendarOAuth");
+const googleCalSync = require("../clients/googleCalendarSync");
 const { getServicePriceMap } = require("../config/barberServicePrices");
 const { processArtistInquiry, ARTIST_USER_IDS } = require("../services/tattooInquiryService");
 const {
@@ -7622,6 +7623,28 @@ function createApp() {
         });
       }
       console.error("[API] Google verify failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/staff/:staffGhlId/google/sync-now — Phase 2 inbound sync.
+  // Windowed reconcile: busy Google events -> GHL "Busy" block slots.
+  // ?days=N narrows the window (default 60) — handy for cautious first runs.
+  app.post("/api/staff/:staffGhlId/google/sync-now", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const rangeDays = Math.min(Math.max(parseInt(req.query.days, 10) || 60, 1), 90);
+      const summary = await googleCalSync.syncStaffCalendar(req.params.staffGhlId, { rangeDays });
+      res.json({ success: true, rangeDays, ...summary });
+    } catch (error) {
+      if (error instanceof googleCalOAuth.GoogleReauthRequiredError) {
+        return res.status(401).json({
+          success: false,
+          errorCode: "google_reauth_required",
+          error: "Google Calendar connection expired — please reconnect.",
+        });
+      }
+      console.error("[API] Google sync-now failed:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
