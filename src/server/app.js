@@ -6581,20 +6581,24 @@ function createApp() {
       const workbook = new ExcelJS.Workbook();
       workbook.creator = "Studio AZ Tattoo";
       workbook.created = new Date();
+      // Landscape: six columns + a signature line need the width when printed.
       const ws = workbook.addWorksheet("Apprentice Hours", {
-        pageSetup: { fitToPage: true, fitToWidth: 1, orientation: "portrait" },
+        pageSetup: { fitToPage: true, fitToWidth: 1, fitToHeight: 0, orientation: "landscape" },
       });
 
-      // MDH columns, minus Total Piercings (tattoo-only apprentice):
-      // Date | Client Name | Description of Work | Total Tattooing Hours | Supervisor
+      // MDH columns, minus Total Piercings (tattoo-only apprentice), plus a
+      // trailing blank Supervisor Signature column so the supervisor can sign
+      // each row by hand after printing (supports the required affidavit).
+      // Date | Client Name | Description of Work | Total Tattooing Hours | Supervisor | Supervisor Signature
       ws.columns = [
         { key: "date", width: 14 },
-        { key: "client", width: 24 },
-        { key: "desc", width: 46 },
-        { key: "duration", width: 22 },
-        { key: "supervisor", width: 22 },
+        { key: "client", width: 22 },
+        { key: "desc", width: 40 },
+        { key: "duration", width: 20 },
+        { key: "supervisor", width: 20 },
+        { key: "signature", width: 26 },
       ];
-      const LAST_COL = 5;
+      const LAST_COL = 6;
 
       const AMBER = "FFF29B12";
       const GOLD = "FFC9A54E";
@@ -6648,6 +6652,7 @@ function createApp() {
         "Description of Work",
         "Total Tattooing Hours",
         "Supervisor",
+        "Supervisor Signature",
       ]);
       header.eachCell((cell) => {
         cell.font = { bold: true, color: { argb: "FFFFFFFF" } };
@@ -6666,9 +6671,13 @@ function createApp() {
           work,
           formatHoursMinutes(r.duration_minutes || 0),
           NAMES[r.mentor_ghl_id] || "",
+          "", // signed by hand after printing
         ]);
         row.getCell(3).alignment = { wrapText: true };
         row.getCell(4).alignment = { horizontal: "left" };
+        // Ruled signature line, with room to actually sign.
+        row.getCell(6).border = { bottom: { style: "thin", color: { argb: "FF999999" } } };
+        row.height = 30;
       });
 
       ws.addRow([]);
