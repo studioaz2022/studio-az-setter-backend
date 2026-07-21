@@ -106,9 +106,57 @@ function isBlockingEvent(ev) {
 }
 
 /**
- * Reconcile one staff member's Google calendar into GHL block slots.
- * Idempotent: safe to call from connect, from the watch webhook, from a cron,
- * or manually via /google/sync-now.
+ * Refresh the staff member's calendar list from Google (calendarList API).
+ * Syncs every calendar the user has SELECTED in the Google Calendar UI —
+ * their own calendars plus subscriptions (e.g. a team schedule feed). This
+ * matches the user's mental model: "what my Google Calendar shows, blocks."
+ */
+async function refreshCalendarList(staffGhlId) {
+  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+  const resp = await axios.get(`${CALENDAR_API}/users/me/calendarList`, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+    params: { maxResults: 250, showHidden: false },
+  });
+  const items = resp.data.items || [];
+  const selected = items.filter((c) => c.selected);
+
+  for (const cal of selected) {
+    await supabase.from("staff_google_calendars").upsert(
+      {
+        staff_ghl_user_id: staffGhlId,
+        google_calendar_id: cal.id,
+        summary: cal.summaryOverride || cal.summary || null,
+        access_role: cal.accessRole || null,
+        is_primary: !!cal.primary,
+        selected: true,
+      },
+      { onConflict: "staff_ghl_user_id,google_calendar_id" }
+    );
+  }
+
+  // Calendars unchecked in Google since last refresh: mark deselected so the
+  // sync prunes their blocks.
+  const activeIds = selected.map((c) => c.id);
+  const { data: known } = await supabase
+    .from("staff_google_calendars")
+    .select("google_calendar_id")
+    .eq("staff_ghl_user_id", staffGhlId);
+  for (const row of known || []) {
+    if (!activeIds.includes(row.google_calendar_id)) {
+      await supabase
+        .from("staff_google_calendars")
+        .update({ selected: false })
+        .eq("staff_ghl_user_id", staffGhlId)
+        .eq("google_calendar_id", row.google_calendar_id);
+    }
+  }
+  return activeIds;
+}
+
+/**
+ * Reconcile ALL of a staff member's selected Google calendars into GHL block
+ * slots. Idempotent: safe to call from connect, from the watch webhook, from
+ * a cron, or manually via /google/sync-now.
  */
 async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } = {}) {
   const tokenRow = await googleCalOAuth.getStaffToken(staffGhlId);
@@ -117,22 +165,57 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
   const staffCal = resolveStaffCalendar(staffGhlId);
   if (!staffCal) throw new Error(`Staff ${staffGhlId} not found in kiosk roster — cannot anchor block slots`);
 
-  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
-  const googleCalendarId = tokenRow.calendar_id || "primary";
+  await refreshCalendarList(staffGhlId);
+  const { data: calendars, error: calErr } = await supabase
+    .from("staff_google_calendars")
+    .select("*")
+    .eq("staff_ghl_user_id", staffGhlId);
+  if (calErr) throw new Error(calErr.message);
 
-  const { events, nextSyncToken } = await listWindowEvents(
-    accessToken,
-    googleCalendarId,
-    rangeDays
+  const totals = { created: 0, updated: 0, deleted: 0, unchanged: 0, skipped: 0, calendars: 0 };
+  for (const cal of calendars || []) {
+    const s = await syncOneCalendar(staffGhlId, staffCal, cal, rangeDays);
+    totals.created += s.created;
+    totals.updated += s.updated;
+    totals.deleted += s.deleted;
+    totals.unchanged += s.unchanged;
+    totals.skipped += s.skipped;
+    if (cal.selected) totals.calendars++;
+  }
+
+  await supabase
+    .from("staff_google_tokens")
+    .update({ last_synced_at: new Date().toISOString(), sync_status: "connected", last_error: null })
+    .eq("staff_ghl_user_id", staffGhlId);
+
+  console.log(
+    `[GCalSync] ${staffGhlId}: ${totals.calendars} calendars — ${totals.created} created, ` +
+      `${totals.updated} updated, ${totals.deleted} deleted, ${totals.unchanged} unchanged, ${totals.skipped} skipped`
   );
+  return totals;
+}
+
+/** Reconcile ONE calendar. Deselected calendars just get their blocks pruned. */
+async function syncOneCalendar(staffGhlId, staffCal, cal, rangeDays) {
+  const googleCalendarId = cal.google_calendar_id;
+  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+
+  let events = [];
+  let nextSyncToken = null;
+  if (cal.selected) {
+    const listed = await listWindowEvents(accessToken, googleCalendarId, rangeDays);
+    events = listed.events;
+    nextSyncToken = listed.nextSyncToken;
+  }
   const blocking = events.filter(isBlockingEvent);
   const blockingById = new Map(blocking.map((ev) => [ev.id, ev]));
 
-  // Existing inbound mapping rows for this staff member.
+  // Existing inbound mapping rows for this staff member + THIS calendar.
   const { data: rows, error: rowsErr } = await supabase
     .from("google_calendar_events")
     .select("*")
     .eq("staff_ghl_user_id", staffGhlId)
+    .eq("google_calendar_id", googleCalendarId)
     .eq("direction", "inbound");
   if (rowsErr) throw new Error(`Failed to load mapping rows: ${rowsErr.message}`);
   const rowByEventId = new Map((rows || []).map((r) => [r.google_event_id, r]));
@@ -247,21 +330,16 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
     summary.deleted++;
   }
 
-  // 3) Record sync health (+ syncToken for a future incremental fast-path).
+  // 3) Record per-calendar sync health (+ syncToken for a future fast-path).
   await supabase
-    .from("staff_google_tokens")
+    .from("staff_google_calendars")
     .update({
       last_synced_at: new Date().toISOString(),
-      sync_status: "connected",
-      last_error: null,
       ...(nextSyncToken ? { sync_token: nextSyncToken } : {}),
     })
-    .eq("staff_ghl_user_id", staffGhlId);
+    .eq("staff_ghl_user_id", staffGhlId)
+    .eq("google_calendar_id", googleCalendarId);
 
-  console.log(
-    `[GCalSync] ${staffGhlId}: ${summary.created} created, ${summary.updated} updated, ` +
-      `${summary.deleted} deleted, ${summary.unchanged} unchanged, ${summary.skipped} skipped (window ${rangeDays}d)`
-  );
   return summary;
 }
 
@@ -303,43 +381,49 @@ async function runCoalescedSync(staffGhlId) {
   return state.running;
 }
 
-/** Best-effort stop of an existing push channel. */
-async function stopWatchChannel(staffGhlId) {
-  const row = await googleCalOAuth.getStaffToken(staffGhlId);
-  if (!row?.watch_channel_id || !row?.watch_resource_id) return false;
+/** Best-effort stop of ONE calendar row's push channel. */
+async function stopCalendarWatch(staffGhlId, calRow) {
+  if (!calRow?.watch_channel_id || !calRow?.watch_resource_id) return;
   try {
     const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
     await axios.post(
       `${CALENDAR_API}/channels/stop`,
-      { id: row.watch_channel_id, resourceId: row.watch_resource_id },
+      { id: calRow.watch_channel_id, resourceId: calRow.watch_resource_id },
       { headers: { Authorization: `Bearer ${accessToken}` } }
     );
   } catch (e) {
     // Channel already expired/stopped — nothing to do.
-    console.warn(`[GCalSync] channels.stop for ${staffGhlId}: ${e.response?.data?.error?.message || e.message}`);
+    console.warn(`[GCalSync] channels.stop ${calRow.google_calendar_id}: ${e.response?.data?.error?.message || e.message}`);
   }
   await supabase
-    .from("staff_google_tokens")
+    .from("staff_google_calendars")
     .update({ watch_channel_id: null, watch_resource_id: null, watch_expiration: null, watch_channel_token: null })
-    .eq("staff_ghl_user_id", staffGhlId);
+    .eq("id", calRow.id);
+}
+
+/** Stop every push channel a staff member has (used on disconnect). */
+async function stopWatchChannel(staffGhlId) {
+  const { data: cals } = await supabase
+    .from("staff_google_calendars")
+    .select("*")
+    .eq("staff_ghl_user_id", staffGhlId)
+    .not("watch_channel_id", "is", null);
+  for (const cal of cals || []) {
+    await stopCalendarWatch(staffGhlId, cal);
+  }
   return true;
 }
 
-/** Register (or re-register) the events.watch push channel for a staff member. */
-async function registerWatchChannel(staffGhlId) {
-  const row = await googleCalOAuth.getStaffToken(staffGhlId);
-  if (!row) throw new Error(`No Google Calendar connected for staff ${staffGhlId}`);
-
-  // Replace any existing channel so we never double-nudge.
-  if (row.watch_channel_id) await stopWatchChannel(staffGhlId);
+/** Register the events.watch push channel for ONE calendar row. */
+async function registerCalendarWatch(staffGhlId, calRow) {
+  if (calRow.watch_channel_id) await stopCalendarWatch(staffGhlId, calRow);
 
   const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
   const channelId = crypto.randomUUID();
   const channelToken = crypto.randomBytes(24).toString("hex");
-  const googleCalendarId = row.calendar_id || "primary";
 
   const resp = await axios.post(
-    `${CALENDAR_API}/calendars/${encodeURIComponent(googleCalendarId)}/events/watch`,
+    `${CALENDAR_API}/calendars/${encodeURIComponent(calRow.google_calendar_id)}/events/watch`,
     {
       id: channelId,
       type: "web_hook",
@@ -355,17 +439,48 @@ async function registerWatchChannel(staffGhlId) {
     : new Date(Date.now() + WATCH_TTL_SECONDS * 1000).toISOString();
 
   await supabase
-    .from("staff_google_tokens")
+    .from("staff_google_calendars")
     .update({
       watch_channel_id: channelId,
       watch_resource_id: resp.data.resourceId,
       watch_expiration: expiration,
       watch_channel_token: channelToken,
     })
-    .eq("staff_ghl_user_id", staffGhlId);
+    .eq("id", calRow.id);
 
-  console.log(`[GCalSync] watch channel registered for ${staffGhlId}, expires ${expiration}`);
+  console.log(`[GCalSync] watch registered: ${staffGhlId} / ${calRow.google_calendar_id}, expires ${expiration}`);
   return { channelId, expiration };
+}
+
+/**
+ * Ensure every SELECTED calendar has a live push channel (register missing
+ * or expiring-within-24h ones). Returns how many were (re)registered.
+ */
+async function registerWatchChannel(staffGhlId) {
+  const { data: cals, error } = await supabase
+    .from("staff_google_calendars")
+    .select("*")
+    .eq("staff_ghl_user_id", staffGhlId)
+    .eq("selected", true);
+  if (error) throw new Error(error.message);
+  if (!cals?.length) throw new Error(`No calendars on file for staff ${staffGhlId} — sync first`);
+
+  const cutoff = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+  let registered = 0;
+  const results = [];
+  for (const cal of cals) {
+    const needs = !cal.watch_channel_id || (cal.watch_expiration && cal.watch_expiration < cutoff);
+    if (!needs) continue;
+    try {
+      results.push(await registerCalendarWatch(staffGhlId, cal));
+      registered++;
+    } catch (e) {
+      // Some subscribed calendars refuse watch (rare) — sync still covers
+      // them via the 6h safety net.
+      console.warn(`[GCalSync] watch failed for ${cal.google_calendar_id}: ${e.response?.data?.error?.message || e.message}`);
+    }
+  }
+  return { registered, total: cals.length, channels: results };
 }
 
 /**
@@ -377,7 +492,7 @@ async function handleWatchNudge({ channelId, channelToken, resourceState }) {
   if (!channelId) return { ok: false, reason: "missing channel id" };
 
   const { data: row, error } = await supabase
-    .from("staff_google_tokens")
+    .from("staff_google_calendars")
     .select("staff_ghl_user_id, watch_channel_token")
     .eq("watch_channel_id", channelId)
     .single();
@@ -405,19 +520,18 @@ function startGoogleWatchRenewalLoop() {
   const SIX_HOURS = 6 * 3600 * 1000;
   const tick = async () => {
     try {
-      const cutoff = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
       const { data: rows, error } = await supabase
         .from("staff_google_tokens")
-        .select("staff_ghl_user_id, watch_channel_id, watch_expiration")
+        .select("staff_ghl_user_id")
         .neq("sync_status", "disconnected");
       if (error) throw new Error(error.message);
       for (const row of rows || []) {
-        const needsChannel = !row.watch_channel_id || (row.watch_expiration && row.watch_expiration < cutoff);
         try {
-          if (needsChannel) await registerWatchChannel(row.staff_ghl_user_id);
-          // Safety-net reconcile for EVERY connected calendar each tick —
-          // catches nudges lost while the dyno was restarting (Phase 6).
+          // Safety-net reconcile for EVERY connected staff member each tick
+          // (also refreshes their calendar list), then top up any missing or
+          // expiring-within-24h per-calendar watch channels.
           await runCoalescedSync(row.staff_ghl_user_id);
+          await registerWatchChannel(row.staff_ghl_user_id);
         } catch (e) {
           console.error(`[GCalSync] renewal/reconcile failed for ${row.staff_ghl_user_id}:`, e.message);
         }
@@ -596,14 +710,18 @@ async function logGoogleAudit({ actorGhlId, actorName, actorRole, action, target
  * synced (etag mismatch) — the caller should refresh rather than clobber.
  */
 async function editGoogleOriginEvent({ staffGhlId, googleEventId, startTime, endTime, title }) {
-  const { data: row, error } = await supabase
+  // limit(1): with multi-calendar sync the same event id can appear on two
+  // calendars (e.g. an invite mirrored onto a shared calendar) — editing any
+  // one instance edits the underlying Google event.
+  const { data: rowList, error } = await supabase
     .from("google_calendar_events")
     .select("*")
     .eq("staff_ghl_user_id", staffGhlId)
     .eq("google_event_id", googleEventId)
     .eq("direction", "inbound")
-    .maybeSingle();
+    .limit(1);
   if (error) throw new Error(error.message);
+  const row = rowList?.[0];
   if (!row) throw new Error(`No inbound mapping for event ${googleEventId} (staff ${staffGhlId})`);
 
   const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
@@ -718,6 +836,7 @@ async function cleanupOnDisconnect(staffGhlId) {
   }
 
   await supabase.from("google_calendar_events").delete().eq("staff_ghl_user_id", staffGhlId);
+  await supabase.from("staff_google_calendars").delete().eq("staff_ghl_user_id", staffGhlId);
   console.log(`[GCalSync] disconnect cleanup for ${staffGhlId}: ${blocksRemoved} blocks, ${mirrorsRemoved} future mirrors removed`);
   return { blocksRemoved, mirrorsRemoved };
 }
