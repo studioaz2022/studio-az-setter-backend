@@ -481,4 +481,7 @@ function registerBookingCreateRoute(app) {
   });
 }
 
-module.exports = { registerBookingCreateRoute };
+// parsePhoto/uploadHairstylePhoto are exported so the GHL write path can be
+// exercised against a test contact without booking a real slot on a barber's
+// live calendar.
+module.exports = { registerBookingCreateRoute, parsePhoto, uploadHairstylePhoto };
