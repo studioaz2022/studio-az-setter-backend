@@ -245,7 +245,13 @@ function registerBookingRoutes(app) {
   require("./bookingCreate").registerBookingCreateRoute(app);
 
   app.get("/api/booking/barbershop/services", (req, res) => {
-    res.set("Cache-Control", "public, max-age=3600, s-maxage=86400");
+    // Short cache: this carries PRICES. A 1-hour browser cache meant a price
+    // change took an hour to reach clients; 5 min + stale-while-revalidate
+    // keeps it cheap while letting price edits land quickly.
+    res.set(
+      "Cache-Control",
+      "public, max-age=300, s-maxage=600, stale-while-revalidate=3600"
+    );
     return res.json({ services: servicesCatalog(), tz: SHOP_TZ });
   });
 
