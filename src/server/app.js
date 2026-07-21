@@ -126,6 +126,7 @@ const leadsRoutes = require("../leads/leadsRoutes");
 const { registerReviewsRoutes } = require("../reviews/reviewsRoutes");
 const { registerAvailabilityRoutes } = require("../availability/availabilityRoutes");
 const { registerBookingRoutes } = require("../booking/bookingRoutes");
+const { registerMetaIgRoutes } = require("../integrations/metaIgRoutes");
 const { startSnapshotCron, startMondayRitualCron } = require("../analytics/snapshotCron");
 
 // ═══ ENVIRONMENT VARIABLES ═══
@@ -14690,6 +14691,12 @@ function createApp() {
   // See BOOKING_WIDGET_PLAN.md. Auth = Turnstile + IP rate limit (create only).
   registerBookingRoutes(app);
 
+  // ═══ META / INSTAGRAM PROXY (barbershop-website homepage IG widget) ═══
+  // Public endpoints — token stays server-side. Reads from Supabase
+  // integration_tokens table which is refreshed every 30d by
+  // src/services/metaTokenRefresh.js.
+  registerMetaIgRoutes(app);
+
   // ═══ CONSENT FORM ROUTES ═══
   const {
     sendConsentForm,
@@ -15054,6 +15061,23 @@ function createApp() {
       googleCalSync.startGoogleWatchRenewalLoop();
     } catch (err) {
       console.error("[app] failed to start GCal watch renewal loop:", err.message || err);
+    }
+  }
+
+  // Meta / Instagram long-lived token refresh (barbershop IG feed). Runs
+  // every 30 days, refreshes any ig_native token row in Supabase
+  // integration_tokens. See src/services/metaTokenRefresh.js.
+  if (process.env.DISABLE_META_TOKEN_REFRESH !== "1") {
+    try {
+      const {
+        startMetaTokenRefreshLoop,
+      } = require("../services/metaTokenRefresh");
+      startMetaTokenRefreshLoop();
+    } catch (err) {
+      console.error(
+        "[app] failed to start Meta token refresh loop:",
+        err.message || err
+      );
     }
   }
 
