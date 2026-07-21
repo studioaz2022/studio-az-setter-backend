@@ -485,6 +485,40 @@ async function refundPayment({
  * Given an orderId from a webhook, fetch the order and return the contactId
  * from reference_id.
  */
+/**
+ * Read an order's metadata so a caller can tell WHOSE payment this is.
+ *
+ * The Square webhook assumes every payment on the shop account is a tattoo
+ * deposit. Barbershop booking deposits share that account, so the webhook needs
+ * a way to recognise them and stand down — the booking endpoint has already
+ * recorded them correctly. Returns null when the order can't be read; callers
+ * treat that as "not barbershop" so behaviour is unchanged on failure.
+ */
+async function getOrderMetadata(orderId) {
+  if (!orderId) return null;
+  try {
+    const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const order = res.data?.order;
+    if (!order) return null;
+    const md = order.metadata || {};
+    return {
+      contactId: order.reference_id || null,
+      business: md.business || null,
+      paymentType: md.payment_type || null,
+      artistId: md.artist_id || null,
+      amountCents: order.total_money?.amount || 0,
+    };
+  } catch (err) {
+    console.warn("[Square] could not read order metadata:", err?.message);
+    return null;
+  }
+}
+
 async function getContactIdFromOrder(orderId) {
   if (!orderId) return null;
 
@@ -536,5 +570,6 @@ module.exports = {
   processCheckoutPayment,
   refundPayment,
   getContactIdFromOrder,
+  getOrderMetadata,
   squareEnv, // exported for tests
 };

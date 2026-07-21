@@ -22,6 +22,13 @@ const {
   durationMinutes,
 } = require("./barberDirectory");
 const { logBookingAttempt } = require("./bookingAudit");
+const { depositFor, formatCents } = require("./depositConfig");
+const {
+  chargeDeposit,
+  rollbackAppointment,
+  refundOrphanedCharge,
+  recordDepositTransaction,
+} = require("./bookingDeposit");
 const {
   FIELDS,
   ADD_ONS,
@@ -313,6 +320,19 @@ function registerBookingCreateRoute(app) {
     const mins = durationMinutes(clean.barberSlug, clean.service);
     const slotLabel = `${serviceDef.label} with ${barber.name}, ${clean.slotISO}`;
 
+    // 2b. deposit gate — decided from OUR config, never from the client. A
+    //     request that omits the card token for a deposit barber is rejected
+    //     before we touch GHL or Square.
+    const deposit = depositFor(clean.barberSlug, clean.service);
+    const sourceId = typeof body.sourceId === "string" ? body.sourceId.trim() : "";
+    if (deposit?.required && !sourceId) {
+      await logBookingAttempt({
+        ...audit, success: false, stepReached: "validation",
+        summary: `FAILED: ${clean.barberSlug} requires a ${formatCents(deposit.amountCents)} deposit but no card token was sent`,
+      });
+      return res.status(400).json({ error: "deposit_required", amountCents: deposit.amountCents });
+    }
+
     // 3. Turnstile
     const humanOk = await verifyTurnstile(body.turnstileToken, ip);
     if (!humanOk) {
@@ -398,6 +418,12 @@ function registerBookingCreateRoute(app) {
       ([key, values]) => `${ADD_ONS[key].label}: ${values.join(", ")}`
     );
     const descLines = ["Booked via website widget."];
+    if (deposit?.required) {
+      descLines.push(
+        `DEPOSIT PAID ONLINE: ${formatCents(deposit.amountCents)} (${deposit.percent}%). ` +
+          `BALANCE DUE IN THE CHAIR: ${formatCents(deposit.balanceCents)}.`
+      );
+    }
     if (clean.silent) descLines.push("*** SILENT APPOINTMENT REQUESTED ***");
     if (addOnLines.length) descLines.push(`Add-ons — ${addOnLines.join(" | ")}`);
     if (clean.barberNotes) descLines.push(`Notes to barber: ${clean.barberNotes}`);
@@ -451,6 +477,79 @@ function registerBookingCreateRoute(app) {
       return res.status(502).json({ error: "booking_failed" });
     }
 
+    // 6b. THE DEPOSIT — the chair is booked, now take the money.
+    //     Anything that goes wrong from here rolls the appointment back, because
+    //     an unpaid appointment on Lionel's calendar is worse than no booking.
+    let depositResult = null;
+    if (deposit?.required) {
+      const assignedUserId = appt?.assignedUserId || null;
+      try {
+        depositResult = await chargeDeposit({
+          contactId,
+          contactName: `${clean.firstName} ${clean.lastName}`.trim(),
+          email: clean.email,
+          amountCents: deposit.amountCents,
+          serviceLabel: serviceDef.label,
+          barberName: barber.name,
+          artistUserId: assignedUserId,
+          sourceId,
+        });
+      } catch (err) {
+        const reason = err.bookingError || "payment_failed";
+
+        // A timeout may have charged them anyway — check Square and give it back
+        // before we tear the appointment down.
+        let refund = null;
+        if (err.timedOut && err.sessionId) {
+          refund = await refundOrphanedCharge({
+            sessionId: err.sessionId,
+            amountCents: deposit.amountCents,
+            reason: "Booking rolled back after payment timeout",
+          });
+        }
+
+        const undo = await rollbackAppointment({
+          appointmentId: appt?.id,
+          calendarId: barber.calendarId,
+          assignedUserId,
+        });
+
+        await logBookingAttempt({
+          ...audit, contactId, appointmentId: appt?.id, success: false,
+          stepReached: "deposit_charge", turnstileOk: true,
+          ghlError: err.squareCode ? `square:${err.squareCode}` : null,
+          summary:
+            `FAILED deposit ${formatCents(deposit.amountCents)} (${reason}: ${err.message}) — ${slotLabel}` +
+            ` | rollback invalid=${undo.markedInvalid} deleted=${undo.deleted}` +
+            (undo.error ? ` rollbackError=${undo.error}` : "") +
+            (refund ? ` | orphanRefund=${refund.refunded}` : ""),
+        });
+
+        return res.status(402).json({
+          error: reason,
+          // true only when the appointment is genuinely gone — the widget uses
+          // this to decide between "try another card" and "start over"
+          appointmentReleased: undo.markedInvalid,
+          ...(refund?.refunded ? { refunded: true } : {}),
+        });
+      }
+
+      // Paid. Write the ledger row the rent tracker + Earnings tab read.
+      const ledger = await recordDepositTransaction({
+        contactId,
+        contactName: `${clean.firstName} ${clean.lastName}`.trim(),
+        appointmentId: appt?.id,
+        calendarId: barber.calendarId,
+        artistUserId: assignedUserId,
+        amountCents: deposit.amountCents,
+        squarePaymentId: depositResult.paymentId,
+        squareOrderId: depositResult.orderId,
+        serviceLabel: serviceDef.label,
+        slotISO: clean.slotISO,
+      });
+      depositResult.ledgerRecorded = ledger.recorded;
+    }
+
     // 7. hairstyle photo — after the booking, deliberately. The appointment is
     //    the thing that must not fail; a photo that doesn't stick is a note in
     //    the audit row, not a lost slot.
@@ -470,6 +569,10 @@ function registerBookingCreateRoute(app) {
       clean.droppedLink ? "video link dropped (not a URL)" : null,
       dropped.length ? `add-ons not offered by ${clean.barberSlug}: ${dropped.join(",")}` : null,
       ...Object.entries(clean.addOns).map(([k, v]) => `${k}=${v.join("/")}`),
+      depositResult
+        ? `deposit ${formatCents(deposit.amountCents)} paid=${depositResult.paymentId}` +
+          (depositResult.ledgerRecorded ? "" : " LEDGER-ROW-FAILED")
+        : null,
     ].filter(Boolean);
 
     await logBookingAttempt({
@@ -477,7 +580,21 @@ function registerBookingCreateRoute(app) {
       stepReached: "done", turnstileOk: true,
       summary: `Booked ${slotLabel} (${mins}min)${extras.length ? ` [${extras.join("; ")}]` : ""}`,
     });
-    return res.status(201).json({ appointmentId, contactId, photoUploaded });
+    return res.status(201).json({
+      appointmentId,
+      contactId,
+      photoUploaded,
+      ...(depositResult
+        ? {
+            deposit: {
+              amountCents: deposit.amountCents,
+              balanceCents: deposit.balanceCents,
+              paymentId: depositResult.paymentId,
+              receiptUrl: depositResult.receiptUrl,
+            },
+          }
+        : {}),
+    });
   });
 }
 

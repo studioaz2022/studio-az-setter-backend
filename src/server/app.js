@@ -27,7 +27,7 @@ const { runShadow: runShadowFunnelGate } = require("../ai/v2/shadowGate"); // Ph
 const { resolveBotVersion } = require("../ai/v2/botVersion"); // Phase 5 — v1/v2 routing flag
 const { runV2Inbound } = require("../ai/v2/pipeline"); // Phase 5 — v2 inbound orchestrator
 const { verifyStaffEmail, ghlBarber, getCachedUsers } = require("../clients/ghlMultiLocationSdk");
-const { getContactIdFromOrder, createDepositLinkForContact, getCheckoutSession, processCheckoutPayment } = require("../payments/squareClient");
+const { getContactIdFromOrder, getOrderMetadata, createDepositLinkForContact, getCheckoutSession, processCheckoutPayment } = require("../payments/squareClient");
 const { createFinancingLinkForContact } = require("../payments/stripeClient");
 const {
   buildOAuthUrl,
@@ -1537,6 +1537,29 @@ function createApp() {
         console.log("💳 [DEBUG] No reference_id on payment, fetching from order:", orderId);
         contactId = await getContactIdFromOrder(orderId);
         console.log("💳 [DEBUG] Contact ID from order:", contactId);
+      }
+
+      // ── BARBERSHOP GATE ────────────────────────────────────────────────
+      // Everything below this point assumes a TATTOO deposit: it writes the
+      // transactions row against GHL_LOCATION_ID (the tattoo location), types
+      // the payment purely by amount (<$50 becomes a "tip"), moves the GHL
+      // opportunity to QUALIFIED, assigns a tattoo artist and texts the lead.
+      //
+      // Barbershop booking deposits share this Square account. Run through here
+      // a $40 haircut deposit would be filed as a TIP against the tattoo shop,
+      // and the customer would get tattoo-consult messaging. The booking
+      // endpoint already recorded that payment correctly — with the right
+      // location, artist, transaction_type and service_price — so this webhook's
+      // only correct action is to stand down.
+      if (orderId) {
+        const orderMeta = await getOrderMetadata(orderId);
+        if (orderMeta?.business === "barbershop") {
+          console.log(
+            `💈 Square webhook: barbershop payment ${payment.id} (${orderMeta.paymentType || "unknown"}) — ` +
+              `already recorded by the booking endpoint, skipping the tattoo pipeline`
+          );
+          return res.json({ received: true, skipped: "barbershop" });
+        }
       }
 
       if (contactId) {
