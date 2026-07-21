@@ -7669,6 +7669,44 @@ function createApp() {
     }
   });
 
+  // GET /api/google-calendar/block-meta?viewerGhlId&viewerRole&from&to
+  // Phase 3 (privacy tier): which GHL block slots are Google-synced, and what
+  // the REAL title is — but the title is only included when the viewer is
+  // owner/admin or the calendar's own artist. Everyone else gets title:null
+  // (the iOS app renders "Busy"). Role is client-asserted (same honor-system
+  // model as the front-desk dashboard — this is an internal staff app).
+  app.get("/api/google-calendar/block-meta", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { viewerGhlId, viewerRole, from, to } = req.query;
+      if (!from || !to) {
+        return res.status(400).json({ success: false, error: "from and to are required" });
+      }
+      const privileged = viewerRole === "owner" || viewerRole === "admin";
+
+      const { supabase } = require("../clients/supabaseClient");
+      const { data: rows, error } = await supabase
+        .from("google_calendar_events")
+        .select("ghl_block_slot_id, staff_ghl_user_id, real_title, start_time, end_time")
+        .eq("direction", "inbound")
+        .not("ghl_block_slot_id", "is", null)
+        .lte("start_time", to)
+        .gte("end_time", from);
+      if (error) throw new Error(error.message);
+
+      const blocks = (rows || []).map((r) => ({
+        blockSlotId: r.ghl_block_slot_id,
+        staffGhlUserId: r.staff_ghl_user_id,
+        title:
+          privileged || r.staff_ghl_user_id === viewerGhlId ? r.real_title : null,
+      }));
+      res.json({ success: true, blocks });
+    } catch (error) {
+      console.error("[API] block-meta failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // POST /webhooks/google/calendar — Google push-channel nudges land here.
   // No payload; identity comes from headers. We validate the per-channel
   // secret (X-Goog-Channel-Token) and ACK fast — the reconcile runs async.
