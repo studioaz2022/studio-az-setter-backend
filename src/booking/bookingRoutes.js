@@ -31,6 +31,7 @@ const {
   serviceNote,
 } = require("./barberDirectory");
 const { addOnsForBarber } = require("./bookingFields");
+const { depositFor } = require("./depositConfig");
 
 const SHOP_TZ = "America/Chicago";
 const SLOTS_CACHE_TTL_MS = 60 * 1000; // time-picker needs fresher data than the 15-min "Next:" tiles
@@ -237,6 +238,9 @@ function servicesCatalog() {
         // paid extras this barber offers (David: eyebrows + waxing). Ships with
         // the catalog so the details step needs no extra round trip.
         addOns: addOnsForBarber(b.slug),
+        // deposit terms, or null. Present here so the widget knows a payment
+        // step is coming before the customer starts filling anything in.
+        deposit: depositFor(b.slug, slug),
       })),
     };
   });
