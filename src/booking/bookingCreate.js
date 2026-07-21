@@ -22,10 +22,23 @@ const {
   durationMinutes,
 } = require("./barberDirectory");
 const { logBookingAttempt } = require("./bookingAudit");
+const {
+  FIELDS,
+  ADD_ONS,
+  offersAddOn,
+  normalizeAddOnSelection,
+  isHttpUrl,
+  buildCustomFields,
+} = require("./bookingFields");
 
 const LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 const SHOP_ADDRESS = "333 Washington Ave N, Suite 100";
 const MAX_BOOKAHEAD_DAYS = 31; // matches GHL calendar allowBookingFor
+
+// The hairstyle photo rides along as a data URL in the JSON body. The widget
+// downscales before sending; this is the backstop, not the expected size.
+const MAX_PHOTO_BYTES = 5 * 1024 * 1024;
+const ALLOWED_PHOTO_TYPES = ["image/jpeg", "image/png", "image/webp", "image/heic"];
 
 // ── IP rate limit: 5 attempts / 10 min (in-memory; single Render instance) ──
 const RATE_LIMIT = 5;
@@ -65,6 +78,72 @@ function normalizePhone(raw) {
   return null;
 }
 
+/**
+ * Decode the widget's `hairstylePhoto` data URL into { buffer, mimeType, filename }.
+ * Returns null when absent, or { error } when present but unusable — a bad photo
+ * must never sink an otherwise valid booking, so callers treat errors as "skip
+ * the photo", not "reject the request".
+ */
+function parsePhoto(raw) {
+  if (!raw) return null;
+  const m = /^data:([a-z/+.-]+);base64,(.+)$/i.exec(String(raw));
+  if (!m) return { error: "photo is not a data URL" };
+  const mimeType = m[1].toLowerCase();
+  if (!ALLOWED_PHOTO_TYPES.includes(mimeType)) {
+    return { error: `unsupported photo type ${mimeType}` };
+  }
+  let buffer;
+  try {
+    buffer = Buffer.from(m[2], "base64");
+  } catch {
+    return { error: "photo is not valid base64" };
+  }
+  if (!buffer.length) return { error: "photo is empty" };
+  if (buffer.length > MAX_PHOTO_BYTES) {
+    return { error: `photo too large (${Math.round(buffer.length / 1024)}KB)` };
+  }
+  const ext = mimeType.split("/")[1].replace("jpeg", "jpg");
+  return { buffer, mimeType, filename: `desired-hairstyle.${ext}` };
+}
+
+/**
+ * Push the photo into the FILE_UPLOAD custom field. This endpoint (not the
+ * contact PUT) is the ONLY safe way to populate a FILE_UPLOAD field — see the
+ * warning at the top of bookingFields.js. Resolves to true/false; never throws,
+ * because the appointment already exists by the time this runs.
+ */
+async function uploadHairstylePhoto(contactId, photo) {
+  const token = process.env.GHL_BARBER_SHOP_TOKEN;
+  if (!token) {
+    console.warn("[booking] GHL_BARBER_SHOP_TOKEN unset — skipping photo upload");
+    return false;
+  }
+  try {
+    const form = new FormData();
+    form.append(
+      `${FIELDS.hairstylePhoto.id}_1`,
+      new Blob([photo.buffer], { type: photo.mimeType }),
+      photo.filename
+    );
+    const url =
+      `https://services.leadconnectorhq.com/forms/upload-custom-files` +
+      `?contactId=${encodeURIComponent(contactId)}&locationId=${encodeURIComponent(LOCATION_ID)}`;
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}`, Version: "2021-07-28", Accept: "application/json" },
+      body: form,
+    });
+    if (!res.ok) {
+      console.warn(`[booking] photo upload failed ${res.status}: ${(await res.text()).slice(0, 200)}`);
+      return false;
+    }
+    return true;
+  } catch (err) {
+    console.warn("[booking] photo upload errored:", err?.message);
+    return false;
+  }
+}
+
 function validateBody(body) {
   const errors = [];
   const barberSlug = String(body.barberSlug || "");
@@ -91,9 +170,33 @@ function validateBody(body) {
   }
   if (!body.turnstileToken) errors.push("missing captcha token");
 
+  // ── the optional custom-field inputs ──
+  const silent = body.silent === true || body.silent === "true";
+  const barberNotes = String(body.barberNotes || "").trim().slice(0, FIELDS.notes.maxLength);
+
+  // A malformed video link shouldn't block a booking, but we must not hand GHL
+  // junk either — drop it and say so rather than failing the whole request.
+  const rawLink = String(body.videoLink || "").trim();
+  const videoLink = rawLink && isHttpUrl(rawLink) ? rawLink : "";
+  const droppedLink = !!rawLink && !videoLink;
+
+  // add-ons: { eyebrows: [...], waxing: [...] } — options must be real, and the
+  // barber must actually offer them. Unknown values are discarded silently.
+  const addOns = {};
+  const rawAddOns = body.addOns && typeof body.addOns === "object" ? body.addOns : {};
+  for (const key of Object.keys(ADD_ONS)) {
+    // pass everything through even if this barber can't offer it —
+    // buildCustomFields does the gating and reports it for the audit row
+    const valid = normalizeAddOnSelection(key, rawAddOns[key]);
+    if (valid.length) addOns[key] = valid;
+  }
+
   return {
     errors,
-    clean: { barberSlug, service, firstName, lastName, email, phone, note, slotISO, slotMs },
+    clean: {
+      barberSlug, service, firstName, lastName, email, phone, note, slotISO, slotMs,
+      silent, barberNotes, videoLink, droppedLink, addOns,
+    },
   };
 }
 
@@ -220,7 +323,15 @@ function registerBookingCreateRoute(app) {
       return res.status(403).json({ error: "captcha_failed" });
     }
 
+    // 3b. the hairstyle photo (optional). A bad photo is never fatal — we book
+    //     the appointment and note the reason in the audit row.
+    const photo = parsePhoto(body.hairstylePhoto);
+    const photoError = photo?.error || null;
+
     // 4. upsert contact (GHL dedups per location "Allow Duplicate Contact" setting)
+    //    The customer's preferences ride along here — one call, and NEVER the
+    //    FILE_UPLOAD field (that would 400 and discard every field with it).
+    const { customFields, dropped } = buildCustomFields(clean, clean.barberSlug);
     let contactId = null;
     try {
       const up = await ghlBarber.contacts.upsertContact({
@@ -231,6 +342,7 @@ function registerBookingCreateRoute(app) {
         phone: clean.phone,
         source: "website:booking-widget",
         tags: ["website-booking"],
+        ...(customFields.length ? { customFields } : {}),
       });
       contactId = up?.contact?.id || up?.id || null;
       if (!contactId) throw new Error("upsert returned no contact id");
@@ -274,7 +386,31 @@ function registerBookingCreateRoute(app) {
     }
 
     // 6. create appointment — GHL validates the slot (ignoreFreeSlotValidation: false)
+    //    Everything the customer asked for is repeated in the description: the
+    //    barber reads the calendar event, not the contact record.
     const endISO = new Date(clean.slotMs + mins * 60 * 1000).toISOString();
+    // only what actually got written — an add-on this barber doesn't offer was
+    // dropped from the contact, so it must not appear on the calendar either
+    const acceptedAddOns = Object.entries(clean.addOns).filter(([key]) =>
+      offersAddOn(clean.barberSlug, key)
+    );
+    const addOnLines = acceptedAddOns.map(
+      ([key, values]) => `${ADD_ONS[key].label}: ${values.join(", ")}`
+    );
+    const descLines = ["Booked via website widget."];
+    if (clean.silent) descLines.push("*** SILENT APPOINTMENT REQUESTED ***");
+    if (addOnLines.length) descLines.push(`Add-ons — ${addOnLines.join(" | ")}`);
+    if (clean.barberNotes) descLines.push(`Notes to barber: ${clean.barberNotes}`);
+    if (clean.note) descLines.push(`Customer note: ${clean.note}`);
+    if (clean.videoLink) descLines.push(`Hairstyle video: ${clean.videoLink}`);
+    if (photo?.buffer) descLines.push("Hairstyle photo attached to the contact record.");
+
+    const titleFlags = [
+      clean.silent ? "SILENT" : null,
+      addOnLines.length ? "+add-ons" : null,
+      clean.barberNotes || clean.note ? "see notes" : null,
+    ].filter(Boolean);
+
     let appt;
     try {
       appt = await ghlBarber.calendars.createAppointment({
@@ -283,10 +419,10 @@ function registerBookingCreateRoute(app) {
         contactId,
         startTime: clean.slotISO,
         endTime: endISO,
-        title: `${serviceDef.label} — ${barber.name}${clean.note ? " (see notes)" : ""}`,
-        description: clean.note
-          ? `Booked via website widget.\nCustomer note: ${clean.note}`
-          : "Booked via website widget.",
+        title: `${serviceDef.label} — ${barber.name}${
+          titleFlags.length ? ` (${titleFlags.join(", ")})` : ""
+        }`,
+        description: descLines.join("\n"),
         appointmentStatus: "confirmed",
         ignoreDateRange: false,
         ignoreFreeSlotValidation: false,
@@ -315,14 +451,33 @@ function registerBookingCreateRoute(app) {
       return res.status(502).json({ error: "booking_failed" });
     }
 
-    // 7. success
+    // 7. hairstyle photo — after the booking, deliberately. The appointment is
+    //    the thing that must not fail; a photo that doesn't stick is a note in
+    //    the audit row, not a lost slot.
+    let photoUploaded = false;
+    if (photo?.buffer) {
+      photoUploaded = await uploadHairstylePhoto(contactId, photo);
+    }
+
+    // 8. success
     const appointmentId = appt?.id || null;
+    const extras = [
+      clean.silent ? "silent" : null,
+      clean.barberNotes ? "notes" : null,
+      clean.videoLink ? "video-link" : null,
+      photo?.buffer ? (photoUploaded ? "photo" : "photo FAILED") : null,
+      photoError ? `photo rejected (${photoError})` : null,
+      clean.droppedLink ? "video link dropped (not a URL)" : null,
+      dropped.length ? `add-ons not offered by ${clean.barberSlug}: ${dropped.join(",")}` : null,
+      ...Object.entries(clean.addOns).map(([k, v]) => `${k}=${v.join("/")}`),
+    ].filter(Boolean);
+
     await logBookingAttempt({
       ...audit, contactId, appointmentId, success: true,
       stepReached: "done", turnstileOk: true,
-      summary: `Booked ${slotLabel} (${mins}min)`,
+      summary: `Booked ${slotLabel} (${mins}min)${extras.length ? ` [${extras.join("; ")}]` : ""}`,
     });
-    return res.status(201).json({ appointmentId, contactId });
+    return res.status(201).json({ appointmentId, contactId, photoUploaded });
   });
 }
 

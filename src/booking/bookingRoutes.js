@@ -30,6 +30,7 @@ const {
   durationMinutes,
   serviceNote,
 } = require("./barberDirectory");
+const { addOnsForBarber } = require("./bookingFields");
 
 const SHOP_TZ = "America/Chicago";
 const SLOTS_CACHE_TTL_MS = 60 * 1000; // time-picker needs fresher data than the 15-min "Next:" tiles
@@ -233,6 +234,9 @@ function servicesCatalog() {
         price: b.prices[slug], // null = "Varies"
         durationMinutes: durationMinutes(b.slug, slug),
         note: serviceNote(b.slug, slug), // per-barber caveat, or null
+        // paid extras this barber offers (David: eyebrows + waxing). Ships with
+        // the catalog so the details step needs no extra round trip.
+        addOns: addOnsForBarber(b.slug),
       })),
     };
   });

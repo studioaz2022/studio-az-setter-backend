@@ -565,6 +565,13 @@ function createApp() {
     if (req.path === "/square/webhook" || req.path === "/fireflies/webhook" || req.path === "/stripe/webhook") {
       return next();
     }
+    // The booking widget can carry a base64 "desired hairstyle" photo. It is
+    // downscaled in the browser first, but base64 adds ~33% and phone cameras
+    // are generous — 1mb rejects legitimate bookings. Turnstile + a 5/10min IP
+    // limit already gate this route, and the handler caps the decoded photo.
+    if (req.path === "/api/booking/barbershop/create") {
+      return express.json({ limit: "8mb" })(req, res, next);
+    }
     return express.json({ limit: "1mb" })(req, res, next);
   });
 
