@@ -51,6 +51,13 @@ const REFRESH_ENDPOINT =
 // ── In-memory state ───────────────────────────────────────────────
 let refreshInFlight = false;
 let timerHandle = null;
+// Guard against SMS spam. Keyed by provider slug. Only ONE alert per
+// provider per ALERT_SUPPRESSION_MS window, regardless of how many
+// refresh failures happen. Resets when a refresh succeeds. This mirrors
+// cacheReconcileLoop.lastStaleAlertSentAt but per-provider so multiple
+// providers don't step on each other's suppression.
+const lastAlertAt = new Map(); // provider -> ms timestamp
+const ALERT_SUPPRESSION_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 /**
  * Lazy Supabase client — created on first use so app.js can load this
@@ -74,8 +81,22 @@ function getSupabase() {
 /**
  * Send failure SMS to Lionel via the barbershop GHL SDK. Best-effort:
  * any send error is logged and swallowed so the loop keeps running.
+ *
+ * Suppresses repeat alerts within ALERT_SUPPRESSION_MS per provider.
+ * The first alert for a provider fires; subsequent failures within the
+ * window get logged only. Reset on successful refresh so we alert again
+ * on the next outage.
  */
 async function sendRefreshFailureSMS(provider, errMessage) {
+  const lastAt = lastAlertAt.get(provider) || 0;
+  const sinceLastMs = Date.now() - lastAt;
+  if (sinceLastMs < ALERT_SUPPRESSION_MS) {
+    const hoursAgo = (sinceLastMs / (60 * 60 * 1000)).toFixed(1);
+    console.log(
+      `[metaTokenRefresh] 🔇 alert suppressed for ${provider} — last SMS ${hoursAgo}h ago (window ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
+    );
+    return false;
+  }
   try {
     const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
     if (!ghlBarber) {
@@ -93,8 +114,9 @@ async function sendRefreshFailureSMS(provider, errMessage) {
       contactId: OWNER_ALERT_CONTACT_ID,
       message,
     });
+    lastAlertAt.set(provider, Date.now());
     console.log(
-      `[metaTokenRefresh] 📱 Refresh-failure SMS sent for ${provider}`
+      `[metaTokenRefresh] 📱 Refresh-failure SMS sent for ${provider} (next alert suppressed for ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
     );
     return true;
   } catch (err) {
@@ -152,6 +174,10 @@ async function refreshOne(row) {
     if (writeErr) {
       return { ok: false, error: `Supabase write: ${writeErr.message}` };
     }
+
+    // Refresh succeeded — clear any alert suppression so we alert again
+    // on the NEXT outage (rather than staying silent for 24h).
+    lastAlertAt.delete(provider);
 
     return { ok: true, newExpiresAt };
   } catch (err) {
