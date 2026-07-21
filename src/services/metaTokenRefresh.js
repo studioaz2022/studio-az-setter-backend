@@ -82,21 +82,54 @@ function getSupabase() {
  * Send failure SMS to Lionel via the barbershop GHL SDK. Best-effort:
  * any send error is logged and swallowed so the loop keeps running.
  *
- * Suppresses repeat alerts within ALERT_SUPPRESSION_MS per provider.
+ * TWO layers of suppression to prevent runaway SMS spam:
+ *   1. In-memory Map — cheap, catches rapid-fire retries in the same process
+ *   2. Supabase row column `last_alert_at` — survives deploy/restart, so a
+ *      deploy landing mid-outage can't bypass the guard
+ *
  * The first alert for a provider fires; subsequent failures within the
- * window get logged only. Reset on successful refresh so we alert again
- * on the next outage.
+ * ALERT_SUPPRESSION_MS window get logged only. Reset on successful refresh
+ * (both layers) so we alert again on the next outage.
  */
 async function sendRefreshFailureSMS(provider, errMessage) {
+  // Layer 1: in-memory
   const lastAt = lastAlertAt.get(provider) || 0;
   const sinceLastMs = Date.now() - lastAt;
   if (sinceLastMs < ALERT_SUPPRESSION_MS) {
     const hoursAgo = (sinceLastMs / (60 * 60 * 1000)).toFixed(1);
     console.log(
-      `[metaTokenRefresh] 🔇 alert suppressed for ${provider} — last SMS ${hoursAgo}h ago (window ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
+      `[metaTokenRefresh] 🔇 alert suppressed (in-memory) for ${provider} — last SMS ${hoursAgo}h ago (window ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
     );
     return false;
   }
+
+  // Layer 2: persistent (survives restarts). Read the row's last_alert_at.
+  try {
+    const { data: row } = await getSupabase()
+      .from("integration_tokens")
+      .select("last_alert_at")
+      .eq("provider", provider)
+      .maybeSingle();
+    if (row && row.last_alert_at) {
+      const persistedSinceMs = Date.now() - new Date(row.last_alert_at).getTime();
+      if (persistedSinceMs < ALERT_SUPPRESSION_MS) {
+        const hoursAgo = (persistedSinceMs / (60 * 60 * 1000)).toFixed(1);
+        console.log(
+          `[metaTokenRefresh] 🔇 alert suppressed (persisted) for ${provider} — last SMS ${hoursAgo}h ago (window ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
+        );
+        // Also warm the in-memory guard so the next call short-circuits faster.
+        lastAlertAt.set(provider, new Date(row.last_alert_at).getTime());
+        return false;
+      }
+    }
+  } catch (checkErr) {
+    // If we can't read the persisted guard, fall through to send — better to
+    // over-alert than to miss a real outage. Log the check failure though.
+    console.warn(
+      `[metaTokenRefresh] persistent-suppression check failed for ${provider}: ${checkErr.message}. Falling through to send.`
+    );
+  }
+
   try {
     const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
     if (!ghlBarber) {
@@ -114,9 +147,22 @@ async function sendRefreshFailureSMS(provider, errMessage) {
       contactId: OWNER_ALERT_CONTACT_ID,
       message,
     });
-    lastAlertAt.set(provider, Date.now());
+    const nowMs = Date.now();
+    lastAlertAt.set(provider, nowMs);
+    // Persist to Supabase too. Best-effort — if the write fails the
+    // in-memory guard still protects this process at minimum.
+    try {
+      await getSupabase()
+        .from("integration_tokens")
+        .update({ last_alert_at: new Date(nowMs).toISOString() })
+        .eq("provider", provider);
+    } catch (persistErr) {
+      console.warn(
+        `[metaTokenRefresh] failed to persist last_alert_at for ${provider}: ${persistErr.message}`
+      );
+    }
     console.log(
-      `[metaTokenRefresh] 📱 Refresh-failure SMS sent for ${provider} (next alert suppressed for ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h)`
+      `[metaTokenRefresh] 📱 Refresh-failure SMS sent for ${provider} (next alert suppressed for ${ALERT_SUPPRESSION_MS / (60 * 60 * 1000)}h, persisted)`
     );
     return true;
   } catch (err) {
@@ -175,9 +221,18 @@ async function refreshOne(row) {
       return { ok: false, error: `Supabase write: ${writeErr.message}` };
     }
 
-    // Refresh succeeded — clear any alert suppression so we alert again
+    // Refresh succeeded — clear both suppression layers so we alert again
     // on the NEXT outage (rather than staying silent for 24h).
     lastAlertAt.delete(provider);
+    // Also clear the persisted guard on the row. Best-effort — if this write
+    // fails, the next alert MAY be suppressed by the persisted value; that's
+    // a lesser evil than false alarms.
+    try {
+      await supabase
+        .from("integration_tokens")
+        .update({ last_alert_at: null })
+        .eq("provider", provider);
+    } catch { /* swallow */ }
 
     return { ok: true, newExpiresAt };
   } catch (err) {
