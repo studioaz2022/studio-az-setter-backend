@@ -30,11 +30,20 @@
 const { createClient } = require("@supabase/supabase-js");
 
 // ── Tunables ──────────────────────────────────────────────────────
-const REFRESH_INTERVAL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
-const STARTUP_GRACE_MS = 60 * 1000; // 60s after boot
-// If a token has <this many days of life left when we check, we treat the
-// refresh as urgent (still runs, just also logged loudly).
-const REFRESH_URGENCY_DAYS = 7;
+//
+// The tick cadence is intentionally SHORT (6h) rather than 30d. Two reasons:
+//   1. Node's setInterval silently clamps ms values > 2^31-1 (~24.8 days)
+//      and fires every 1ms instead. A 30-day interval literally can't work.
+//   2. Ticking often + gating on expires_at is a self-healing pattern —
+//      a deploy that lands close to expiry catches up on the next tick
+//      without needing to know exactly when the previous refresh happened.
+// Actual refresh work only happens when a row is within REFRESH_WINDOW_DAYS
+// of expiry, so the API is called at most ~once per (60 - window) days per
+// token.
+const TICK_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+const STARTUP_GRACE_MS = 60 * 1000;          // 60s after boot
+const REFRESH_WINDOW_DAYS = 14;              // refresh when <14d left
+const REFRESH_URGENCY_DAYS = 7;              // extra-loud log when <7d left
 const OWNER_ALERT_CONTACT_ID = "H3NamSlW7XAiF7WVUUo8"; // Lionel (barbershop)
 const REFRESH_ENDPOINT =
   "https://graph.instagram.com/refresh_access_token";
@@ -182,11 +191,35 @@ async function runRefresh() {
       return;
     }
 
+    // Only refresh rows within REFRESH_WINDOW_DAYS of expiry. Everything
+    // else is silently skipped — cheap and self-healing.
+    const due = rows.filter((row) => {
+      if (!row.expires_at) return true; // unknown → play safe, refresh
+      const daysLeft =
+        (new Date(row.expires_at).getTime() - Date.now()) /
+        (24 * 60 * 60 * 1000);
+      return daysLeft < REFRESH_WINDOW_DAYS;
+    });
+
+    if (due.length === 0) {
+      const nextRow = rows.reduce((a, b) =>
+        !a || new Date(b.expires_at) < new Date(a.expires_at) ? b : a
+      , null);
+      const nextDays = nextRow?.expires_at
+        ? ((new Date(nextRow.expires_at).getTime() - Date.now()) /
+            (24 * 60 * 60 * 1000)).toFixed(1)
+        : "?";
+      console.log(
+        `[metaTokenRefresh] no tokens due for refresh (nearest expires in ${nextDays}d, threshold ${REFRESH_WINDOW_DAYS}d)`
+      );
+      return;
+    }
+
     console.log(
-      `[metaTokenRefresh] refreshing ${rows.length} ig_native token(s)`
+      `[metaTokenRefresh] ${due.length} of ${rows.length} ig_native token(s) due for refresh`
     );
 
-    for (const row of rows) {
+    for (const row of due) {
       const daysLeft = row.expires_at
         ? (new Date(row.expires_at).getTime() - Date.now()) /
           (24 * 60 * 60 * 1000)
@@ -245,17 +278,23 @@ async function runRefresh() {
 function startMetaTokenRefreshLoop() {
   if (timerHandle) return;
   console.log(
-    `[metaTokenRefresh] starting — first run in ${STARTUP_GRACE_MS / 1000}s, then every ${REFRESH_INTERVAL_MS / (24 * 60 * 60 * 1000)}d`
+    `[metaTokenRefresh] starting — first run in ${STARTUP_GRACE_MS / 1000}s, then every ${TICK_INTERVAL_MS / (60 * 60 * 1000)}h (refresh only when <${REFRESH_WINDOW_DAYS}d of life left)`
   );
-  setTimeout(() => {
+  // Assign timerHandle FIRST (guarded against re-entry), then arm the
+  // startup delay. Reason: previous shape assigned timerHandle inside the
+  // setTimeout callback, so any startMetaTokenRefreshLoop() call in the
+  // 60s window would re-enter and schedule extra timers. Belt-and-braces.
+  timerHandle = setTimeout(() => {
     runRefresh().catch((err) =>
       console.error("[metaTokenRefresh] runRefresh threw:", err)
     );
+    // Now switch to interval mode. This overwrites the setTimeout handle
+    // which is fine — the timeout already fired.
     timerHandle = setInterval(() => {
       runRefresh().catch((err) =>
         console.error("[metaTokenRefresh] runRefresh threw:", err)
       );
-    }, REFRESH_INTERVAL_MS);
+    }, TICK_INTERVAL_MS);
   }, STARTUP_GRACE_MS);
 }
 
