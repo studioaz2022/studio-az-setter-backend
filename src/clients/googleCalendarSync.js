@@ -191,15 +191,35 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
         summary.unchanged++;
         continue;
       }
-      await staffCal.sdk.calendars.editBlockSlot(
-        { eventId: row.ghl_block_slot_id },
-        {
+      try {
+        await staffCal.sdk.calendars.editBlockSlot(
+          { eventId: row.ghl_block_slot_id },
+          {
+            title: "Busy",
+            assignedUserId: staffGhlId,
+            startTime: startISO,
+            endTime: endISO,
+          }
+        );
+      } catch (e) {
+        // Block hand-deleted in GHL — self-heal by recreating instead of
+        // failing the whole sweep (Phase 6 hardening).
+        console.warn(`[GCalSync] editBlockSlot ${row.ghl_block_slot_id} failed (${e.message}) — recreating`);
+        const blockResp = await staffCal.sdk.calendars.createBlockSlot({
           title: "Busy",
           assignedUserId: staffGhlId,
+          locationId: staffCal.locationId,
           startTime: startISO,
           endTime: endISO,
-        }
-      );
+        });
+        const newId = blockResp?.id || blockResp?.data?.id;
+        if (!newId) throw new Error(`Recreate returned no id for event ${ev.id}`);
+        await supabase
+          .from("google_calendar_events")
+          .update({ ghl_block_slot_id: newId })
+          .eq("id", row.id);
+        row.ghl_block_slot_id = newId;
+      }
       await supabase
         .from("google_calendar_events")
         .update({ start_time: startISO, end_time: endISO, real_title: title, etag: ev.etag || null, status: ev.status || "confirmed" })
@@ -393,12 +413,13 @@ function startGoogleWatchRenewalLoop() {
       if (error) throw new Error(error.message);
       for (const row of rows || []) {
         const needsChannel = !row.watch_channel_id || (row.watch_expiration && row.watch_expiration < cutoff);
-        if (!needsChannel) continue;
         try {
-          await registerWatchChannel(row.staff_ghl_user_id);
+          if (needsChannel) await registerWatchChannel(row.staff_ghl_user_id);
+          // Safety-net reconcile for EVERY connected calendar each tick —
+          // catches nudges lost while the dyno was restarting (Phase 6).
           await runCoalescedSync(row.staff_ghl_user_id);
         } catch (e) {
-          console.error(`[GCalSync] renewal failed for ${row.staff_ghl_user_id}:`, e.message);
+          console.error(`[GCalSync] renewal/reconcile failed for ${row.staff_ghl_user_id}:`, e.message);
         }
       }
     } catch (e) {
@@ -543,6 +564,164 @@ async function removeAppointmentFromGoogle(apptId) {
   return { action: "deleted", googleEventId: row.google_event_id };
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// Phase 5 — edit-back: change a Google-origin event from inside the iOS app.
+// PATCHes Google (with If-Match optimistic concurrency), then keeps the GHL
+// block + mapping row consistent. Phase 6 — disconnect cleanup + audit trail.
+// ═══════════════════════════════════════════════════════════════════════════
+
+/** Append-only audit record (best-effort — never fails the caller). */
+async function logGoogleAudit({ actorGhlId, actorName, actorRole, action, targetId, summary, details, locationId }) {
+  try {
+    await supabase.from("audit_events").insert({
+      actor_ghl_id: actorGhlId || null,
+      actor_name: actorName || actorGhlId || "unknown",
+      actor_role: actorRole || null,
+      action,
+      target_type: "google_calendar",
+      target_id: targetId || null,
+      summary,
+      details: details || null,
+      location_id: locationId || null,
+      source: "backend",
+    });
+  } catch (e) {
+    console.warn(`[GCalSync] audit insert failed (${action}): ${e.message}`);
+  }
+}
+
+/**
+ * Edit a Google-origin (inbound) event from the app.
+ * Returns { conflict: true } when the event changed in Google since we last
+ * synced (etag mismatch) — the caller should refresh rather than clobber.
+ */
+async function editGoogleOriginEvent({ staffGhlId, googleEventId, startTime, endTime, title }) {
+  const { data: row, error } = await supabase
+    .from("google_calendar_events")
+    .select("*")
+    .eq("staff_ghl_user_id", staffGhlId)
+    .eq("google_event_id", googleEventId)
+    .eq("direction", "inbound")
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!row) throw new Error(`No inbound mapping for event ${googleEventId} (staff ${staffGhlId})`);
+
+  const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+  const patch = {};
+  if (startTime) patch.start = { dateTime: new Date(startTime).toISOString() };
+  if (endTime) patch.end = { dateTime: new Date(endTime).toISOString() };
+  if (title !== undefined && title !== null && title !== "") patch.summary = title;
+
+  let resp;
+  try {
+    resp = await axios.patch(
+      `${CALENDAR_API}/calendars/${encodeURIComponent(row.google_calendar_id || "primary")}/events/${googleEventId}`,
+      patch,
+      {
+        headers: {
+          Authorization: `Bearer ${accessToken}`,
+          ...(row.etag ? { "If-Match": row.etag } : {}),
+        },
+      }
+    );
+  } catch (e) {
+    if (e.response?.status === 412) {
+      // Event moved underneath us — re-sync so the app shows current truth.
+      runCoalescedSync(staffGhlId).catch(() => {});
+      return { conflict: true };
+    }
+    throw e;
+  }
+
+  const newStart = resp.data.start?.dateTime
+    ? new Date(resp.data.start.dateTime).toISOString()
+    : row.start_time;
+  const newEnd = resp.data.end?.dateTime
+    ? new Date(resp.data.end.dateTime).toISOString()
+    : row.end_time;
+  const newTitle = resp.data.summary || row.real_title;
+
+  const staffCal = resolveStaffCalendar(staffGhlId);
+  try {
+    await staffCal.sdk.calendars.editBlockSlot(
+      { eventId: row.ghl_block_slot_id },
+      { title: "Busy", assignedUserId: staffGhlId, startTime: newStart, endTime: newEnd }
+    );
+  } catch (e) {
+    // Block missing — the next reconcile self-heals; don't fail the edit.
+    console.warn(`[GCalSync] edit-back block update failed: ${e.message}`);
+    runCoalescedSync(staffGhlId).catch(() => {});
+  }
+
+  await supabase
+    .from("google_calendar_events")
+    .update({
+      start_time: newStart,
+      end_time: newEnd,
+      real_title: newTitle,
+      etag: resp.data.etag || null,
+    })
+    .eq("id", row.id);
+
+  return {
+    conflict: false,
+    googleEventId,
+    startTime: newStart,
+    endTime: newEnd,
+    title: newTitle,
+  };
+}
+
+/**
+ * Disconnect cleanup (Phase 6): remove every inbound GHL block, delete
+ * FUTURE outbound mirror events from the artist's Google calendar (past ones
+ * stay — they're history), then drop mapping rows. Runs BEFORE token revoke.
+ */
+async function cleanupOnDisconnect(staffGhlId) {
+  const staffCal = resolveStaffCalendar(staffGhlId);
+  const { data: rows } = await supabase
+    .from("google_calendar_events")
+    .select("*")
+    .eq("staff_ghl_user_id", staffGhlId);
+  if (!rows?.length) return { blocksRemoved: 0, mirrorsRemoved: 0 };
+
+  let blocksRemoved = 0;
+  let mirrorsRemoved = 0;
+  let accessToken = null;
+  try {
+    accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
+  } catch (_) {
+    // Token already dead — GHL cleanup still proceeds; Google mirrors stay.
+  }
+
+  for (const row of rows) {
+    if (row.direction === "inbound" && row.ghl_block_slot_id && staffCal) {
+      await staffCal.sdk.calendars
+        .deleteEvent({ eventId: row.ghl_block_slot_id })
+        .then(() => blocksRemoved++)
+        .catch((e) => console.warn(`[GCalSync] cleanup block ${row.ghl_block_slot_id}: ${e.message}`));
+    }
+    if (
+      row.direction === "outbound" &&
+      accessToken &&
+      row.start_time &&
+      new Date(row.start_time) > new Date()
+    ) {
+      await axios
+        .delete(
+          `${CALENDAR_API}/calendars/${encodeURIComponent(row.google_calendar_id || "primary")}/events/${row.google_event_id}`,
+          { headers: { Authorization: `Bearer ${accessToken}` } }
+        )
+        .then(() => mirrorsRemoved++)
+        .catch(() => {});
+    }
+  }
+
+  await supabase.from("google_calendar_events").delete().eq("staff_ghl_user_id", staffGhlId);
+  console.log(`[GCalSync] disconnect cleanup for ${staffGhlId}: ${blocksRemoved} blocks, ${mirrorsRemoved} future mirrors removed`);
+  return { blocksRemoved, mirrorsRemoved };
+}
+
 module.exports = {
   syncStaffCalendar,
   resolveStaffCalendar,
@@ -554,4 +733,7 @@ module.exports = {
   bootstrapAfterConnect,
   mirrorAppointmentToGoogle,
   removeAppointmentFromGoogle,
+  editGoogleOriginEvent,
+  cleanupOnDisconnect,
+  logGoogleAudit,
 };

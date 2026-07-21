@@ -7565,6 +7565,13 @@ function createApp() {
       googleCalSync
         .bootstrapAfterConnect(result.staffGhlId)
         .catch((e) => console.error("[GoogleCalOAuth] post-connect bootstrap failed:", e.message));
+      googleCalSync.logGoogleAudit({
+        actorGhlId: result.staffGhlId,
+        actorName: result.googleEmail || result.staffGhlId,
+        action: "google.connect",
+        targetId: result.staffGhlId,
+        summary: `Google Calendar connected (${result.googleEmail || "email unknown"})`,
+      });
       res.redirect(
         `studioaz://google-oauth?success=true&email=${encodeURIComponent(result.googleEmail || "")}`
       );
@@ -7602,9 +7609,24 @@ function createApp() {
   // Revokes at Google (best-effort) and deletes the connection row.
   app.delete("/api/staff/:staffGhlId/google/disconnect", async (req, res) => {
     try {
-      // Stop the push channel while the token still works, then revoke+delete.
+      // Order matters: stop channel + clean up synced artifacts while the
+      // token still works, THEN revoke + delete the token row (Phase 6).
       await googleCalSync.stopWatchChannel(req.params.staffGhlId).catch(() => {});
+      const cleanup = await googleCalSync
+        .cleanupOnDisconnect(req.params.staffGhlId)
+        .catch((e) => {
+          console.error("[API] disconnect cleanup failed:", e.message);
+          return null;
+        });
       await googleCalOAuth.disconnectStaff(req.params.staffGhlId);
+      googleCalSync.logGoogleAudit({
+        actorGhlId: req.params.staffGhlId,
+        actorName: req.params.staffGhlId,
+        action: "google.disconnect",
+        targetId: req.params.staffGhlId,
+        summary: `Google Calendar disconnected (${cleanup?.blocksRemoved ?? "?"} blocks cleaned up)`,
+        details: cleanup || undefined,
+      });
       res.json({ success: true });
     } catch (error) {
       console.error("[API] Error disconnecting Google Calendar:", error.message);
@@ -7687,22 +7709,79 @@ function createApp() {
       const { supabase } = require("../clients/supabaseClient");
       const { data: rows, error } = await supabase
         .from("google_calendar_events")
-        .select("ghl_block_slot_id, staff_ghl_user_id, real_title, start_time, end_time")
+        .select("ghl_block_slot_id, staff_ghl_user_id, real_title, google_event_id, start_time, end_time")
         .eq("direction", "inbound")
         .not("ghl_block_slot_id", "is", null)
         .lte("start_time", to)
         .gte("end_time", from);
       if (error) throw new Error(error.message);
 
-      const blocks = (rows || []).map((r) => ({
-        blockSlotId: r.ghl_block_slot_id,
-        staffGhlUserId: r.staff_ghl_user_id,
-        title:
-          privileged || r.staff_ghl_user_id === viewerGhlId ? r.real_title : null,
-      }));
+      const blocks = (rows || []).map((r) => {
+        const canSee = privileged || r.staff_ghl_user_id === viewerGhlId;
+        return {
+          blockSlotId: r.ghl_block_slot_id,
+          staffGhlUserId: r.staff_ghl_user_id,
+          title: canSee ? r.real_title : null,
+          // Needed for edit-back; only exposed to viewers who may edit.
+          googleEventId: canSee ? r.google_event_id : null,
+        };
+      });
       res.json({ success: true, blocks });
     } catch (error) {
       console.error("[API] block-meta failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // PATCH /api/staff/:staffGhlId/google-events/:googleEventId — Phase 5
+  // edit-back. Body: { startTime?, endTime?, title?, viewerGhlId, viewerRole,
+  // viewerName? }. Authorized for owner/admin or the calendar's own artist
+  // (honor-system role assertion). 409 on etag conflict — the event changed
+  // in Google since our last sync; the app should refresh and retry.
+  app.patch("/api/staff/:staffGhlId/google-events/:googleEventId", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { staffGhlId, googleEventId } = req.params;
+      const { startTime, endTime, title, viewerGhlId, viewerRole, viewerName } = req.body || {};
+      const privileged = viewerRole === "owner" || viewerRole === "admin";
+      if (!privileged && viewerGhlId !== staffGhlId) {
+        return res.status(403).json({ success: false, error: "Not authorized to edit this calendar" });
+      }
+      if (!startTime && !endTime && !title) {
+        return res.status(400).json({ success: false, error: "Nothing to update" });
+      }
+
+      const result = await googleCalSync.editGoogleOriginEvent({
+        staffGhlId, googleEventId, startTime, endTime, title,
+      });
+      if (result.conflict) {
+        return res.status(409).json({
+          success: false,
+          errorCode: "conflict",
+          error: "This event changed in Google Calendar — refresh and try again.",
+        });
+      }
+
+      googleCalSync.logGoogleAudit({
+        actorGhlId: viewerGhlId,
+        actorName: viewerName || viewerGhlId,
+        actorRole: viewerRole,
+        action: "google.event_edit",
+        targetId: googleEventId,
+        summary: `Edited Google event via app (${result.startTime} → ${result.endTime})`,
+        details: { staffGhlId, startTime: result.startTime, endTime: result.endTime },
+      });
+
+      res.json({ success: true, ...result });
+    } catch (error) {
+      if (error instanceof googleCalOAuth.GoogleReauthRequiredError) {
+        return res.status(401).json({
+          success: false,
+          errorCode: "google_reauth_required",
+          error: "Google Calendar connection expired — please reconnect.",
+        });
+      }
+      console.error("[API] Google event edit failed:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
