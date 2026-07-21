@@ -28,6 +28,7 @@ const {
   serviceOffered,
   eligibleBarbers,
   durationMinutes,
+  serviceNote,
 } = require("./barberDirectory");
 
 const SHOP_TZ = "America/Chicago";
@@ -231,6 +232,7 @@ function servicesCatalog() {
         name: b.name,
         price: b.prices[slug], // null = "Varies"
         durationMinutes: durationMinutes(b.slug, slug),
+        note: serviceNote(b.slug, slug), // per-barber caveat, or null
       })),
     };
   });

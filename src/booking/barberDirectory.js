@@ -11,6 +11,9 @@
 // calendar configs on 2026-07-14 (see BOOKING_WIDGET_PLAN.md Phase 1). If a
 // barber's calendar duration changes in GHL, update here.
 //
+// `notes` carries per-barber, per-service caveats shown in the booking flow
+// (e.g. Elle/Anna H+B excludes straight razor).
+//
 // Service eligibility = a price key present for that barber. This encodes the
 // roster footnotes (Liam's $45 hot towel is a face shave, he does NO standalone
 // beard trims; Joshua does NO standalone beard trims). Do not infer from the
@@ -25,21 +28,21 @@ const BARBERS = {
     calendarId: "38Uhu6i5W4L5yGJbE0My",
     slotDurationMinutes: 60,
     slotIntervalMinutes: 60,
-    prices: { haircut: 35 },
+    prices: { haircut: 35, "haircut-beard": 50 },
   },
   liam: {
     name: "Liam Meagher",
     calendarId: "kiGx7ec1vj9e62U33ZhU",
     slotDurationMinutes: 45,
     slotIntervalMinutes: 15,
-    prices: { haircut: 45, "hot-towel": 45 },
+    prices: { haircut: 45, "haircut-beard": 55, "hot-towel": 45 },
   },
   david: {
     name: "David Mackflin",
     calendarId: "qvcPzTqyaQOxsijIQqAN",
     slotDurationMinutes: 40,
     slotIntervalMinutes: 40,
-    prices: { haircut: 50 },
+    prices: { haircut: 50, "haircut-beard": 65 },
   },
   logan: {
     name: "Logan Jensen",
@@ -54,7 +57,7 @@ const BARBERS = {
     slotDurationMinutes: 45,
     slotIntervalMinutes: 60,
     // hot-towel price varies with beard length → null renders "Varies" in the UI
-    prices: { haircut: 65, beard: 35, "hot-towel": null },
+    prices: { haircut: 65, "haircut-beard": 80, beard: 35, "hot-towel": null },
   },
   elle: {
     name: "Elle Gibeau",
@@ -62,20 +65,25 @@ const BARBERS = {
     slotDurationMinutes: 45,
     slotIntervalMinutes: 45,
     prices: { haircut: 70, "haircut-beard": 85 },
+    notes: { "haircut-beard": "Does not include straight razor." },
   },
   joshua: {
     name: "Joshua Flores",
     calendarId: "X1xINoRML65yAOVUsAGa",
     slotDurationMinutes: 45,
     slotIntervalMinutes: 45,
-    prices: { haircut: 65 },
+    prices: { haircut: 65, "haircut-beard": 75 },
+    notes: {
+      "haircut-beard":
+        "No hot towel. Straight razor on cheeks only. Hair wash may or may not be included, depending on time.",
+    },
   },
   chavez: {
     name: "Lionel Chavez",
     calendarId: "Bsv9ngkRgsbLzgtN3Vpq",
     slotDurationMinutes: 30,
     slotIntervalMinutes: 30,
-    prices: { haircut: 80 },
+    prices: { haircut: 80, "haircut-beard": 100 },
   },
   anna: {
     name: "Anna Kinkead",
@@ -83,6 +91,7 @@ const BARBERS = {
     slotDurationMinutes: 40,
     slotIntervalMinutes: 40,
     prices: { haircut: 45, "haircut-beard": 60 },
+    notes: { "haircut-beard": "Does not include straight razor." },
   },
 };
 
@@ -114,6 +123,11 @@ function eligibleBarbers(serviceSlug) {
     .map(([slug, b]) => ({ slug, ...b }));
 }
 
+/** Per-barber caveat for a service ("what's not included"), or null. */
+function serviceNote(barberSlug, serviceSlug) {
+  return BARBERS[barberSlug]?.notes?.[serviceSlug] || null;
+}
+
 /** Appointment length in minutes for barber × service. */
 function durationMinutes(barberSlug, serviceSlug) {
   const b = BARBERS[barberSlug];
@@ -132,4 +146,5 @@ module.exports = {
   serviceOffered,
   eligibleBarbers,
   durationMinutes,
+  serviceNote,
 };
