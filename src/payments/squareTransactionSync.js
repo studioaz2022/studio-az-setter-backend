@@ -640,6 +640,10 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     squareTipCents: squarePayment.tip_money?.amount || null,
     calendarId: matchedAppointment?.calendarId || null,
     orderDetails,
+    // lets the classifier tell a balance apart from a second deposit
+    contactId,
+    appointmentId: matchedAppointment?.id || null,
+    createdAt,
   });
 
   // Deposits are auto-saved to Supabase immediately (excluded from Review Payments screen).
@@ -829,6 +833,9 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         squareTipCents: sp.tip_money?.amount || null,
         calendarId: match.calendarId || null,
         orderDetails: candidate.orderDetails,
+        contactId,
+        appointmentId: match.id || null,
+        createdAt: sp.created_at || null,
       });
 
       // Auto-save deposits (they don't appear in Review Payments)
@@ -1049,7 +1056,63 @@ async function fetchSquareCustomer(accessToken, customerId, barberGhlId) {
  * Used by matchAndRecordPayment() and batchProximityMatch() to detect deposits
  * before deciding whether to auto-save or defer to user confirmation.
  */
-async function classifyTransactionType({ serviceCents, squareTipCents, calendarId, orderDetails }) {
+/**
+ * Has a deposit already been paid toward this booking?
+ *
+ * At a 50% deposit the BALANCE is the same number as the deposit ($40 on an $80
+ * haircut), which is exactly the signature the deposit heuristic looks for. So
+ * without this, the second half of a website booking would be filed as a second
+ * deposit and the appointment would look like it was never paid for.
+ *
+ * Prefers the appointment as the key (precise); falls back to the contact over a
+ * short window when the payment hasn't been matched to one yet.
+ *
+ * Fails OPEN — on any error it returns false, leaving the previous behaviour
+ * untouched. A mislabelled row is a reporting problem; a thrown error here would
+ * break the whole sync.
+ */
+async function depositAlreadyPaid({ contactId, appointmentId, createdAt }) {
+  if (!appointmentId && !contactId) return false;
+  try {
+    let q = supabase
+      .from("transactions")
+      .select("id, gross_amount, appointment_id")
+      .eq("transaction_type", "deposit")
+      .is("deleted_at", null)
+      .limit(1);
+
+    if (appointmentId) {
+      q = q.eq("appointment_id", appointmentId);
+    } else {
+      // no appointment link yet — any deposit from this contact in the last 60
+      // days is far more likely to be this booking's than a coincidence
+      const since = new Date(
+        (createdAt ? Date.parse(createdAt) : Date.now()) - 60 * 24 * 3600 * 1000
+      ).toISOString();
+      q = q.eq("contact_id", contactId).gte("created_at", since);
+    }
+
+    const { data, error } = await q;
+    if (error) {
+      console.warn(`[SquareSync] deposit-already-paid check failed: ${error.message}`);
+      return false;
+    }
+    return !!(data && data.length);
+  } catch (err) {
+    console.warn(`[SquareSync] deposit-already-paid check threw: ${err.message}`);
+    return false;
+  }
+}
+
+async function classifyTransactionType({
+  serviceCents,
+  squareTipCents,
+  calendarId,
+  orderDetails,
+  contactId = null,
+  appointmentId = null,
+  createdAt = null,
+}) {
   const serviceAmount = serviceCents / 100;
   const itemType = orderDetails?.itemType || null;
   const isProductSale = orderDetails?.isProductSale || false;
@@ -1064,7 +1127,16 @@ async function classifyTransactionType({ serviceCents, squareTipCents, calendarI
     const hasTip = squareTipCents != null && squareTipCents > 0;
     const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
-    if (!hasTip && amountMatches && isCustomAmount) return "deposit";
+    if (!hasTip && amountMatches && isCustomAmount) {
+      if (await depositAlreadyPaid({ contactId, appointmentId, createdAt })) {
+        console.log(
+          `[SquareSync] $${serviceAmount} looks like a deposit but one is already ` +
+            `on file for this booking — recording the BALANCE (session_payment)`
+        );
+        return "session_payment";
+      }
+      return "deposit";
+    }
   } else if (!calendarId && !isProductSale) {
     const hasTip = squareTipCents != null && squareTipCents > 0;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
@@ -1078,7 +1150,17 @@ async function classifyTransactionType({ serviceCents, squareTipCents, calendarI
         if (pct) knownDepositAmounts.add(Math.round(price * (pct / 100)));
       }
       const isKnownDepositAmount = knownDepositAmounts.has(serviceAmount);
-      if (isKnownDepositAmount) return "deposit";
+      if (isKnownDepositAmount) {
+        // same 50% collision as above — a balance equal to the deposit
+        if (await depositAlreadyPaid({ contactId, appointmentId, createdAt })) {
+          console.log(
+            `[SquareSync] $${serviceAmount} matches a known deposit amount but one ` +
+              `is already on file — recording the BALANCE (session_payment)`
+          );
+          return "session_payment";
+        }
+        return "deposit";
+      }
 
       // If the line item name mentions "tattoo" or "deposit", classify as deposit
       // (handles tattoo deposits processed through the same Square location)
@@ -1113,7 +1195,10 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
   const isProductSale = orderDetails?.isProductSale || false;
 
   // Determine transaction type using shared classifier
-  const transactionType = await classifyTransactionType({ serviceCents, squareTipCents, calendarId, orderDetails });
+  const transactionType = await classifyTransactionType({
+    serviceCents, squareTipCents, calendarId, orderDetails,
+    contactId, appointmentId, createdAt,
+  });
 
   // For product sales, use the listing price (before tax) as the revenue amount
   if (transactionType === "product_sale" && orderDetails?.basePriceCents) {
@@ -1303,7 +1388,10 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     const amountMatches = Math.abs(serviceAmount - expectedDeposit) <= 1;
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
     if (!hasTip && amountMatches && isCustomAmount) {
-      transactionType = "deposit";
+      // at 50% the balance is the same number as the deposit — see depositAlreadyPaid
+      transactionType = (await depositAlreadyPaid({ contactId, appointmentId, createdAt }))
+        ? "session_payment"
+        : "deposit";
     }
   } else if (!calendarId && !isProductSale) {
     // Fallback deposit detection without calendarId
@@ -1311,7 +1399,9 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     const isCustomAmount = itemType === "CUSTOM_AMOUNT" || itemType === null;
     const isKnownDepositAmount = serviceAmount === 40 || serviceAmount === 50;
     if (!hasTip && isCustomAmount && isKnownDepositAmount) {
-      transactionType = "deposit";
+      transactionType = (await depositAlreadyPaid({ contactId, appointmentId, createdAt }))
+        ? "session_payment"
+        : "deposit";
     }
   }
 
@@ -1436,4 +1526,8 @@ module.exports = {
   recordWalkIn,
   toLocalDate,
   SquareReauthRequiredError,
+  // exported for verification — the 50%-deposit collision is worth being able
+  // to assert on directly rather than only through a full sync run
+  classifyTransactionType,
+  depositAlreadyPaid,
 };
