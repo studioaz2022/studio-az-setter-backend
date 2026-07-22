@@ -51,11 +51,22 @@ const ORIGIN_VALUE = "ghl";
  *  the SDK's DTO marks it required (types incomplete, known gotcha) but a
  *  round_robin service calendar id gets rejected with "The calendar is not an
  *  event calendar". Mirrors iOS CalendarService.createBlockSlot. */
-function resolveStaffCalendar(staffGhlId) {
+function resolveStaffCalendar(staffGhlId, locationIdHint = null) {
   const tattoo = TATTOO_ARTIST_DATA.find((a) => a.ghlUserId === staffGhlId);
   if (tattoo) return { locationId: TATTOO_LOCATION_ID, sdk: ghl };
   const barber = BARBER_DATA.find((b) => b.ghlUserId === staffGhlId);
   if (barber) return { locationId: BARBER_LOCATION_ID, sdk: ghlBarber };
+
+  // Not a booking artist (admins, owner, brand-new hires not yet in
+  // kioskConfig). Block slots are per-USER — assignedUserId + locationId is
+  // all the API needs — so the roster is only a convenience. Fall back to the
+  // location captured at connect time.
+  if (locationIdHint === BARBER_LOCATION_ID) {
+    return { locationId: BARBER_LOCATION_ID, sdk: ghlBarber };
+  }
+  if (locationIdHint === TATTOO_LOCATION_ID) {
+    return { locationId: TATTOO_LOCATION_ID, sdk: ghl };
+  }
   return null;
 }
 
@@ -162,8 +173,12 @@ async function syncStaffCalendar(staffGhlId, { rangeDays = DEFAULT_RANGE_DAYS } 
   const tokenRow = await googleCalOAuth.getStaffToken(staffGhlId);
   if (!tokenRow) throw new Error(`No Google Calendar connected for staff ${staffGhlId}`);
 
-  const staffCal = resolveStaffCalendar(staffGhlId);
-  if (!staffCal) throw new Error(`Staff ${staffGhlId} not found in kiosk roster — cannot anchor block slots`);
+  const staffCal = resolveStaffCalendar(staffGhlId, tokenRow.location_id);
+  if (!staffCal) {
+    throw new Error(
+      `Cannot resolve a GHL location for staff ${staffGhlId} (token location_id: ${tokenRow.location_id || "none"}) — cannot anchor block slots`
+    );
+  }
 
   await refreshCalendarList(staffGhlId);
   const { data: calendars, error: calErr } = await supabase
@@ -576,7 +591,7 @@ async function mirrorAppointmentToGoogle(appt) {
     return removeAppointmentFromGoogle(apptId);
   }
 
-  const staffCal = resolveStaffCalendar(staffGhlId);
+  const staffCal = resolveStaffCalendar(staffGhlId, tokenRow.location_id);
   const googleCalendarId = tokenRow.calendar_id || "primary";
   const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
 
@@ -759,7 +774,7 @@ async function editGoogleOriginEvent({ staffGhlId, googleEventId, startTime, end
     : row.end_time;
   const newTitle = resp.data.summary || row.real_title;
 
-  const staffCal = resolveStaffCalendar(staffGhlId);
+  const staffCal = resolveStaffCalendar(staffGhlId, row.location_id);
   try {
     await staffCal.sdk.calendars.editBlockSlot(
       { eventId: row.ghl_block_slot_id },
@@ -796,7 +811,8 @@ async function editGoogleOriginEvent({ staffGhlId, googleEventId, startTime, end
  * stay — they're history), then drop mapping rows. Runs BEFORE token revoke.
  */
 async function cleanupOnDisconnect(staffGhlId) {
-  const staffCal = resolveStaffCalendar(staffGhlId);
+  const tokenRow = await googleCalOAuth.getStaffToken(staffGhlId);
+  const staffCal = resolveStaffCalendar(staffGhlId, tokenRow?.location_id);
   const { data: rows } = await supabase
     .from("google_calendar_events")
     .select("*")
