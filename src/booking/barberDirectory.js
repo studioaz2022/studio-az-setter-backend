@@ -81,6 +81,11 @@ const BARBERS = {
   chavez: {
     name: "Lionel Chavez",
     calendarId: "Bsv9ngkRgsbLzgtN3Vpq",
+    // GHL user behind this round_robin calendar (its only teamMember). The
+    // deposit flow needs it even when createAppointment's response omits
+    // assignedUserId: the rollback edit rejects without it, and the ledger's
+    // artist_ghl_id column is NOT NULL.
+    ghlUserId: "1kFG5FWdUDhXLUX46snG",
     slotDurationMinutes: 30,
     slotIntervalMinutes: 30,
     prices: { haircut: 80, "haircut-beard": 100 },

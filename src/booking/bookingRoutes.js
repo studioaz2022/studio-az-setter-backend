@@ -260,7 +260,21 @@ function registerBookingRoutes(app) {
       "Cache-Control",
       "public, max-age=300, s-maxage=600, stale-while-revalidate=3600"
     );
-    return res.json({ services: servicesCatalog(), tz: SHOP_TZ });
+    return res.json({
+      services: servicesCatalog(),
+      tz: SHOP_TZ,
+      // Square Web Payments SDK bootstrap for the deposit step. Served from
+      // THIS process's env — the same env the orders are created with — so the
+      // card form and the charge can never point at different Square
+      // environments. These are public identifiers (like a Turnstile sitekey).
+      payments: {
+        provider: "square",
+        applicationId: process.env.SQUARE_APPLICATION_ID || null,
+        locationId: process.env.SQUARE_LOCATION_ID || null,
+        environment:
+          process.env.SQUARE_ENVIRONMENT === "production" ? "production" : "sandbox",
+      },
+    });
   });
 
   app.get("/api/availability/barbershop/:barberSlug/slots", async (req, res) => {

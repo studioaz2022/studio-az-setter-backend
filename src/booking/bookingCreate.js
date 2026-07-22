@@ -482,7 +482,9 @@ function registerBookingCreateRoute(app) {
     //     an unpaid appointment on Lionel's calendar is worse than no booking.
     let depositResult = null;
     if (deposit?.required) {
-      const assignedUserId = appt?.assignedUserId || null;
+      // Prefer what GHL says it assigned; fall back to the directory's known
+      // user. Both the rollback edit and the ledger row hard-require this.
+      const assignedUserId = appt?.assignedUserId || barber.ghlUserId || null;
       try {
         depositResult = await chargeDeposit({
           contactId,
