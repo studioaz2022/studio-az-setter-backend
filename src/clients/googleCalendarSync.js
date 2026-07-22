@@ -124,10 +124,39 @@ function isBlockingEvent(ev) {
  */
 async function refreshCalendarList(staffGhlId) {
   const accessToken = await googleCalOAuth.getValidAccessToken(staffGhlId);
-  const resp = await axios.get(`${CALENDAR_API}/users/me/calendarList`, {
-    headers: { Authorization: `Bearer ${accessToken}` },
-    params: { maxResults: 250, showHidden: false },
-  });
+
+  let resp;
+  try {
+    resp = await axios.get(`${CALENDAR_API}/users/me/calendarList`, {
+      headers: { Authorization: `Bearer ${accessToken}` },
+      params: { maxResults: 250, showHidden: false },
+    });
+  } catch (e) {
+    // calendarList.list needs calendar.readonly / calendar.calendarlist*.
+    // Our verified scope is calendar.events, which can read/write events on
+    // any calendar but CANNOT enumerate them. Degrade to 'primary' — that
+    // still covers every staff member who keeps events on their main
+    // calendar. Enumerating secondary/subscribed calendars requires adding a
+    // scope (and re-verification). See GOOGLE_CALENDAR_SYNC_PLAN.md Phase 7.
+    if (e.response?.status === 403 || e.response?.status === 401) {
+      console.warn(
+        `[GCalSync] calendarList denied for ${staffGhlId} (${e.response?.data?.error?.message || e.message}) — falling back to primary only`
+      );
+      await supabase.from("staff_google_calendars").upsert(
+        {
+          staff_ghl_user_id: staffGhlId,
+          google_calendar_id: "primary",
+          summary: "Primary",
+          is_primary: true,
+          selected: true,
+        },
+        { onConflict: "staff_ghl_user_id,google_calendar_id" }
+      );
+      return ["primary"];
+    }
+    throw e;
+  }
+
   const items = resp.data.items || [];
   const selected = items.filter((c) => c.selected);
 
