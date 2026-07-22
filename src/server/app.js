@@ -15066,11 +15066,57 @@ function createApp() {
     }
   });
 
+  // ── Background loops: deployed service ONLY ─────────────────────────
+  // These loops mutate PRODUCTION state — they rotate live tokens in
+  // Supabase and text the owner's real phone. They must run in exactly one
+  // place: the deployed Render service.
+  //
+  // Why this guard exists (2026-07-22): a `node -e "createApp(); listen()"`
+  // test server was left running on a laptop for 32 hours. It loaded the
+  // real .env, so it had the Supabase service-role key and the GHL
+  // barbershop token, and createApp() dutifully started every loop. It then
+  // spent a day and a half rotating the production IG token and texting the
+  // owner a failure alert every time the laptop's wifi blinked — while
+  // holding a code image from before three separate fixes were deployed, so
+  // the alerts never changed and Render's logs showed nothing. Roughly eight
+  // hours went into debugging the deployed service, which was innocent.
+  //
+  // Detection is deliberately fail-SAFE toward running:
+  //   • RENDER / RENDER_SERVICE_ID set  → definitely deployed → start.
+  //   • a .env FILE on disk             → definitely a dev box → skip.
+  //     (.env is gitignored + untracked, so it never reaches Render.)
+  //   • neither signal                  → unknown → start, preserving the
+  //     old behaviour. A guard that silently disables the webhook watchdog
+  //     in production would be far worse than one that over-runs.
+  // Set ENABLE_BACKGROUND_LOOPS=1 to opt a dev box in on purpose.
+  const isDeployed =
+    process.env.RENDER === "true" || !!process.env.RENDER_SERVICE_ID;
+  const isDevMachine = require("fs").existsSync(
+    require("path").join(__dirname, "..", "..", ".env")
+  );
+  const backgroundLoopsAllowed =
+    isDeployed ||
+    process.env.ENABLE_BACKGROUND_LOOPS === "1" ||
+    !isDevMachine;
+
+  if (!backgroundLoopsAllowed) {
+    console.log(
+      "[app] 🛑 background loops SKIPPED — local .env detected and " +
+        "ENABLE_BACKGROUND_LOOPS is not 1. This process will not rotate " +
+        "tokens, reconcile the cache, or send alert SMS."
+    );
+  } else {
+    console.log(
+      `[app] ▶ background loops ENABLED (deployed=${isDeployed}, ` +
+        `localEnvFile=${isDevMachine})`
+    );
+  }
+
   // Cache reconcile + webhook staleness watchdog (see
   // src/services/cacheReconcileLoop.js for context — wired here so it
   // starts whenever the app boots). Set DISABLE_CACHE_RECONCILE_LOOP=1
   // to opt out (e.g. in tests).
-  if (process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+  if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
     try {
       const {
         startCacheReconcileLoop,
@@ -15086,7 +15132,7 @@ function createApp() {
 
   // Google Calendar watch-channel renewal (re-registers channels expiring
   // within 24h; also a sync safety net). Same opt-out as the loop above.
-  if (process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+  if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
     try {
       googleCalSync.startGoogleWatchRenewalLoop();
     } catch (err) {
@@ -15094,10 +15140,10 @@ function createApp() {
     }
   }
 
-  // Meta / Instagram long-lived token refresh (barbershop IG feed). Runs
-  // every 30 days, refreshes any ig_native token row in Supabase
-  // integration_tokens. See src/services/metaTokenRefresh.js.
-  if (process.env.DISABLE_META_TOKEN_REFRESH !== "1") {
+  // Meta / Instagram long-lived token refresh (barbershop IG feed). Ticks
+  // every 6h and only refreshes a row with <14d of life left. See
+  // src/services/metaTokenRefresh.js.
+  if (backgroundLoopsAllowed && process.env.DISABLE_META_TOKEN_REFRESH !== "1") {
     try {
       const {
         startMetaTokenRefreshLoop,
