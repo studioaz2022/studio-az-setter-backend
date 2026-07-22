@@ -252,6 +252,94 @@ function registerBookingRoutes(app) {
   // write side (POST /api/booking/barbershop/create) — see bookingCreate.js
   require("./bookingCreate").registerBookingCreateRoute(app);
 
+  // ── Apple Pay domain registration (admin) ──
+  // POST /api/booking/apple-pay/register  { "domain": "example.com" }
+  // Header: x-internal-key
+  //
+  // Square requires every domain that SERVES an Apple Pay button to be
+  // registered against the merchant, and verifies it by fetching
+  // /.well-known/apple-developer-merchantid-domain-association from that
+  // domain at registration time. Google Pay needs none of this.
+  //
+  // This lives on the server on purpose: the production Square token exists
+  // only in Render's env, and registering from a laptop would mean copying a
+  // live payment credential onto it. It's also needed again at DNS cutover
+  // for the real domain, so it isn't single-use.
+  app.post("/api/booking/apple-pay/register", async (req, res) => {
+    const expected = process.env.INTERNAL_API_KEY;
+    if (!expected) {
+      return res.status(503).json({ error: "INTERNAL_API_KEY not configured" });
+    }
+    if (req.get("x-internal-key") !== expected) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const domain = String(req.body?.domain || "")
+      .trim()
+      .replace(/^https?:\/\//i, "")
+      .replace(/\/.*$/, "");
+    if (!domain || !domain.includes(".")) {
+      return res.status(400).json({ error: "domain required, e.g. example.com" });
+    }
+
+    const token = process.env.SQUARE_ACCESS_TOKEN;
+    const isProd = process.env.SQUARE_ENVIRONMENT === "production";
+    const base = isProd
+      ? "https://connect.squareup.com"
+      : "https://connect.squareupsandbox.com";
+    if (!token) return res.status(503).json({ error: "SQUARE_ACCESS_TOKEN not configured" });
+
+    try {
+      // Pre-flight the file ourselves so a failure names the real cause rather
+      // than Square's generic verification error.
+      const assocUrl = `https://${domain}/.well-known/apple-developer-merchantid-domain-association`;
+      let assocStatus = null;
+      try {
+        const probe = await fetch(assocUrl, { redirect: "follow" });
+        assocStatus = probe.status;
+      } catch {
+        assocStatus = "unreachable";
+      }
+
+      const r = await fetch(`${base}/v2/apple-pay/domains`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Square-Version": "2025-01-23",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ domain_name: domain }),
+      });
+      const data = await r.json().catch(() => ({}));
+
+      if (!r.ok || data.errors) {
+        return res.status(r.status === 200 ? 502 : r.status).json({
+          ok: false,
+          domain,
+          environment: isProd ? "production" : "sandbox",
+          associationFileStatus: assocStatus,
+          hint:
+            assocStatus !== 200
+              ? "The association file isn't being served on that domain yet — Square can't verify it."
+              : undefined,
+          errors: data.errors || null,
+        });
+      }
+
+      console.log(`[applePay] registered ${domain} → ${data.status}`);
+      return res.json({
+        ok: true,
+        domain,
+        status: data.status,
+        environment: isProd ? "production" : "sandbox",
+        associationFileStatus: assocStatus,
+      });
+    } catch (err) {
+      console.error("[applePay] registration failed:", err?.message);
+      return res.status(502).json({ ok: false, domain, error: err?.message });
+    }
+  });
+
   app.get("/api/booking/barbershop/services", (req, res) => {
     // Short cache: this carries PRICES. A 1-hour browser cache meant a price
     // change took an hour to reach clients; 5 min + stale-while-revalidate
