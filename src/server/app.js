@@ -14700,6 +14700,9 @@ function createApp() {
   // ═══ BARBER GALLERY UPLOADER (BARBER_GALLERY_UPLOADER_PLAN.md) ═══
   app.use("/api/barber-gallery", require("../barberGallery/barberGalleryRoutes"));
 
+  // ═══ GALLERY MARKETING ANALYTICS (future-marketing-platform-roadmap.md Phase 4) ═══
+  app.use("/api/gallery", require("../barberGallery/galleryAnalyticsRoutes"));
+
   // ═══ SEO TOOLKIT ROUTES ═══
   app.use("/api/seo", seoRoutes);
 
