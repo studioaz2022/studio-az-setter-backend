@@ -152,6 +152,18 @@ router.get("/stats", async (req, res) => {
         const count = (t) => sessions[t]?.size || 0;
         const impressions = count("impression");
         const flips = count("flip");
+        // Sessions that opened the print AND took a CTA on it — the
+        // "did the photo move them?" signal. Same-session co-occurrence;
+        // gallery CTAs live on the card back, so open-first is structural.
+        let actedSessions = 0;
+        const flipSet = sessions.flip;
+        if (flipSet) {
+          const acted = new Set([
+            ...(sessions.book_click || []),
+            ...(sessions.bio_click || []),
+          ]);
+          for (const s of acted) if (flipSet.has(s)) actedSessions += 1;
+        }
         const meta = metaById.get(photoId);
         return {
           photoId,
@@ -166,6 +178,7 @@ router.get("/stats", async (req, res) => {
           bioClicks: count("bio_click"),
           conversions: count("conversion"),
           flipRate: impressions > 0 ? +(flips / impressions).toFixed(4) : null,
+          actionRate: flips > 0 ? +(actedSessions / flips).toFixed(4) : null,
         };
       })
       .sort((a, b) => b.impressions - a.impressions);
