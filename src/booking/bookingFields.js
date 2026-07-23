@@ -39,6 +39,28 @@ const FIELDS = {
     type: "TEXT",
     maxLength: 500,
   },
+  // ── Lead attribution (marketing roadmap Phase 2) ──
+  // IDs from scripts/create-lead-source-fields.js run 2026-07-23. Written
+  // ONLY when the upsert reports a NEW contact — an existing client's
+  // original source (e.g. kiosk walk-in tagging) must never be overwritten.
+  leadSource: {
+    id: "3vZ96H9V39ISzwCOAzsT",
+    name: "Lead Source",
+    type: "TEXT",
+    maxLength: 100,
+  },
+  leadCampaign: {
+    id: "ST1cGJ5zI0nMyyQAVADh",
+    name: "Lead Campaign",
+    type: "TEXT",
+    maxLength: 100,
+  },
+  leadBarberAttribution: {
+    id: "05VuuiTApJegWG2yF6UC",
+    name: "Lead Barber Attribution",
+    type: "TEXT",
+    maxLength: 48,
+  },
 };
 
 // Paid extras offered by specific barbers only. `barbers` is the allow-list —
@@ -147,6 +169,29 @@ function buildCustomFields(input, barberSlug) {
   return { customFields, dropped };
 }
 
+/**
+ * customFields array for the lead-attribution follow-up update (NEW
+ * contacts only — see the FIELDS comment). Empty array when the widget
+ * sent no usable attribution.
+ */
+function buildLeadSourceFields(attribution) {
+  const customFields = [];
+  if (!attribution) return customFields;
+  if (attribution.leadSource) {
+    customFields.push({ id: FIELDS.leadSource.id, field_value: attribution.leadSource });
+  }
+  if (attribution.leadCampaign) {
+    customFields.push({ id: FIELDS.leadCampaign.id, field_value: attribution.leadCampaign });
+  }
+  if (attribution.leadBarber) {
+    customFields.push({
+      id: FIELDS.leadBarberAttribution.id,
+      field_value: attribution.leadBarber,
+    });
+  }
+  return customFields;
+}
+
 module.exports = {
   FIELDS,
   ADD_ONS,
@@ -155,4 +200,5 @@ module.exports = {
   normalizeAddOnSelection,
   isHttpUrl,
   buildCustomFields,
+  buildLeadSourceFields,
 };

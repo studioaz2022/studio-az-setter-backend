@@ -36,7 +36,9 @@ const {
   normalizeAddOnSelection,
   isHttpUrl,
   buildCustomFields,
+  buildLeadSourceFields,
 } = require("./bookingFields");
+const { recordGalleryConversion } = require("../barberGallery/galleryConversions");
 
 const LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 const SHOP_ADDRESS = "333 Washington Ave N, Suite 100";
@@ -151,6 +153,41 @@ async function uploadHairstylePhoto(contactId, photo) {
   }
 }
 
+// ── marketing attribution (roadmap Phases 2+4) ──────────────────────
+// Everything here is OPTIONAL and best-effort: malformed attribution is
+// silently dropped, never a validation error — it must not cost a booking.
+
+const ATTR_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+const ATTR_SLUG_RE = /^[a-z0-9-]{1,48}$/;
+
+function parseAttribution(raw) {
+  if (!raw || typeof raw !== "object") return null;
+  const clip = (v, n) =>
+    typeof v === "string" && v.trim() ? v.trim().slice(0, n) : null;
+
+  const leadSource = clip(raw.leadSource, FIELDS.leadSource.maxLength);
+  const leadCampaign = clip(raw.leadCampaign, FIELDS.leadCampaign.maxLength);
+  const leadBarberRaw = clip(raw.leadBarber, FIELDS.leadBarberAttribution.maxLength);
+  const leadBarber = leadBarberRaw && ATTR_SLUG_RE.test(leadBarberRaw) ? leadBarberRaw : null;
+
+  let gallery = null;
+  const g = raw.gallery;
+  if (
+    g && typeof g === "object" &&
+    ATTR_UUID_RE.test(String(g.photoId || "")) &&
+    ATTR_SLUG_RE.test(String(g.barberSlug || ""))
+  ) {
+    gallery = {
+      photoId: g.photoId,
+      barberSlug: g.barberSlug,
+      sessionId: ATTR_UUID_RE.test(String(g.sessionId || "")) ? g.sessionId : null,
+    };
+  }
+
+  if (!leadSource && !gallery) return null;
+  return { leadSource, leadCampaign, leadBarber, gallery };
+}
+
 function validateBody(body) {
   const errors = [];
   const barberSlug = String(body.barberSlug || "");
@@ -203,6 +240,7 @@ function validateBody(body) {
     clean: {
       barberSlug, service, firstName, lastName, email, phone, note, slotISO, slotMs,
       silent, barberNotes, videoLink, droppedLink, addOns,
+      attribution: parseAttribution(body.attribution),
     },
   };
 }
@@ -353,6 +391,8 @@ function registerBookingCreateRoute(app) {
     //    FILE_UPLOAD field (that would 400 and discard every field with it).
     const { customFields, dropped } = buildCustomFields(clean, clean.barberSlug);
     let contactId = null;
+    // null = GHL didn't say (older response shape) — recorded as unknown.
+    let isNewClient = null;
     try {
       const up = await ghlBarber.contacts.upsertContact({
         locationId: LOCATION_ID,
@@ -366,6 +406,7 @@ function registerBookingCreateRoute(app) {
       });
       contactId = up?.contact?.id || up?.id || null;
       if (!contactId) throw new Error("upsert returned no contact id");
+      if (typeof up?.new === "boolean") isNewClient = up.new;
     } catch (err) {
       const ghlError = err?.response?.data?.message || err?.message;
       await logBookingAttempt({
@@ -374,6 +415,26 @@ function registerBookingCreateRoute(app) {
         summary: `FAILED at upsertContact: ${ghlError} — ${slotLabel}`,
       });
       return res.status(502).json({ error: "contact_failed" });
+    }
+
+    // 4b. lead attribution — NEW contacts only, so an existing client's
+    //     original source (kiosk walk-in tag, an earlier campaign) is never
+    //     overwritten. Failure is an audit note, never a failed booking.
+    let leadFieldsWritten = false;
+    const leadFields =
+      isNewClient === true ? buildLeadSourceFields(clean.attribution) : [];
+    if (leadFields.length) {
+      try {
+        await ghlBarber.contacts.updateContact(
+          { contactId },
+          { customFields: leadFields }
+        );
+        leadFieldsWritten = true;
+      } catch (err) {
+        console.warn(
+          `[booking] lead-source write failed: ${err?.response?.data?.message || err?.message}`
+        );
+      }
     }
 
     // 5. combo room re-check: getSlots only proves native-duration room, so for
@@ -560,8 +621,20 @@ function registerBookingCreateRoute(app) {
       photoUploaded = await uploadHairstylePhoto(contactId, photo);
     }
 
-    // 8. success
+    // 8. success — credit the gallery print that drove this booking (if any).
+    //    Server-side and after the appointment exists, so a conversion row can
+    //    never exist for a booking that didn't.
     const appointmentId = appt?.id || null;
+    let conversionRecorded = false;
+    if (clean.attribution?.gallery) {
+      conversionRecorded = await recordGalleryConversion({
+        gallery: clean.attribution.gallery,
+        contactId,
+        isNewClient,
+        leadSource: clean.attribution.leadSource || null,
+      });
+    }
+
     const extras = [
       clean.silent ? "silent" : null,
       clean.barberNotes ? "notes" : null,
@@ -574,6 +647,12 @@ function registerBookingCreateRoute(app) {
       depositResult
         ? `deposit ${formatCents(deposit.amountCents)} paid=${depositResult.paymentId}` +
           (depositResult.ledgerRecorded ? "" : " LEDGER-ROW-FAILED")
+        : null,
+      isNewClient === null ? null : isNewClient ? "NEW client" : "returning client",
+      clean.attribution?.leadSource ? `lead=${clean.attribution.leadSource}` : null,
+      leadFields.length ? (leadFieldsWritten ? "lead-fields written" : "lead-fields FAILED") : null,
+      clean.attribution?.gallery
+        ? `gallery-conversion photo=${clean.attribution.gallery.photoId.slice(0, 8)}${conversionRecorded ? "" : " INSERT-FAILED"}`
         : null,
     ].filter(Boolean);
 

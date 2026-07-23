@@ -111,7 +111,7 @@ router.get("/stats", async (req, res) => {
 
     let query = supabase
       .from("gallery_events")
-      .select("event_type, photo_id, barber_slug, session_id")
+      .select("event_type, photo_id, barber_slug, session_id, contact_id, is_new_client")
       .gte("created_at", since)
       .limit(50000);
     if (barber) query = query.eq("barber_slug", barber);
@@ -119,15 +119,20 @@ router.get("/stats", async (req, res) => {
     const { data: events, error } = await query;
     if (error) throw error;
 
-    // photo_id → { type → Set(session_id) }
+    // photo_id → { type → Set(session_id), newClients: Set(contact) }
     const byPhoto = new Map();
     for (const ev of events || []) {
       let photo = byPhoto.get(ev.photo_id);
       if (!photo) {
-        photo = { barberSlug: ev.barber_slug, sessions: {} };
+        photo = { barberSlug: ev.barber_slug, sessions: {}, newClients: new Set() };
         byPhoto.set(ev.photo_id, photo);
       }
       (photo.sessions[ev.event_type] ??= new Set()).add(ev.session_id);
+      // "brand-new client brought in by this print" — distinct contacts whose
+      // first-ever GHL record was created by a booking this photo converted.
+      if (ev.event_type === "conversion" && ev.is_new_client === true) {
+        photo.newClients.add(ev.contact_id || ev.session_id);
+      }
     }
 
     // Enrich with photo metadata (public read; stats still return if this fails).
@@ -148,7 +153,7 @@ router.get("/stats", async (req, res) => {
     }
 
     const photos = [...byPhoto.entries()]
-      .map(([photoId, { barberSlug, sessions }]) => {
+      .map(([photoId, { barberSlug, sessions, newClients }]) => {
         const count = (t) => sessions[t]?.size || 0;
         const impressions = count("impression");
         const flips = count("flip");
@@ -177,6 +182,7 @@ router.get("/stats", async (req, res) => {
           bookClicks: count("book_click"),
           bioClicks: count("bio_click"),
           conversions: count("conversion"),
+          newClients: newClients.size,
           flipRate: impressions > 0 ? +(flips / impressions).toFixed(4) : null,
           actionRate: flips > 0 ? +(actedSessions / flips).toFixed(4) : null,
         };
@@ -190,9 +196,10 @@ router.get("/stats", async (req, res) => {
         acc.bookClicks += p.bookClicks;
         acc.bioClicks += p.bioClicks;
         acc.conversions += p.conversions;
+        acc.newClients += p.newClients;
         return acc;
       },
-      { impressions: 0, flips: 0, bookClicks: 0, bioClicks: 0, conversions: 0 }
+      { impressions: 0, flips: 0, bookClicks: 0, bioClicks: 0, conversions: 0, newClients: 0 }
     );
 
     return res.json({ success: true, days, barber, totals, photos });
