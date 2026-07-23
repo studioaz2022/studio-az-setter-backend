@@ -6,6 +6,12 @@
 //   fields:    barberSlug, barberFirst, ghlFolderId, cutPillar, tags (JSON array of slugs)
 //   returns:   { success, ghlFileId, url, width, height, seoFilename, altText }
 //
+// POST /api/barber-gallery/recrop  (gated by x-internal-key)
+//   JSON:      sourceUrl, ghlFolderId, seoFilename, crop { left, top, width, height }
+//   returns:   { success, ghlFileId, url, width, height }
+//   Trims the live WebP to a 4:5 window (no upscale). Uploader updates the row,
+//   then DELETEs the previous GHL file. SEO/alt are not regenerated.
+//
 // Pipeline: auto-orient → normalize to 4:5 (1280x1600, cover) → WebP q80 (EXIF
 // stripped by default) → SEO filename + auto alt-text → upload to the barber's
 // GHL Media Library folder. Metadata row insert happens in the uploader app
@@ -239,6 +245,150 @@ router.post("/upload", makeRequireInternalKey(), upload.single("file"), async (r
     // Never log error.config/headers — GHL SDK errors can carry the auth token.
     console.error(`❌ [BarberGallery] upload failed: status=${error?.response?.status} ${error.message?.slice(0, 200)}`);
     return res.status(500).json({ success: false, error: "Upload processing failed" });
+  }
+});
+
+// Hosts we will fetch live gallery masters from for reframe. Reject anything else
+// so this endpoint can't be used as an open proxy.
+const REFRAME_URL_HOSTS = new Set(["assets.cdn.filesafe.space"]);
+const MIN_CROP_EDGE = 400; // short side; website cards never need less
+
+/**
+ * POST /api/barber-gallery/recrop
+ * JSON: { sourceUrl, ghlFolderId, seoFilename, crop: { left, top, width, height } }
+ *
+ * Fetches the live WebP, extracts a 4:5 window in source pixels (no upscale),
+ * re-encodes WebP q80 once, uploads a new GHL file. Does NOT delete the old
+ * file — the uploader updates the Supabase row first, then DELETEs the old id.
+ * SEO filename is reused as-is (tags/alt don't change on a reframe).
+ */
+router.post("/recrop", makeRequireInternalKey(), async (req, res) => {
+  try {
+    if (!ghlBarber) {
+      return res.status(503).json({ success: false, error: "Barber GHL SDK not configured" });
+    }
+
+    const { sourceUrl, ghlFolderId, seoFilename, crop } = req.body || {};
+    if (!sourceUrl || !ghlFolderId || !seoFilename || !crop) {
+      return res.status(400).json({
+        success: false,
+        error: "sourceUrl, ghlFolderId, seoFilename, and crop are required",
+      });
+    }
+
+    let parsed;
+    try {
+      parsed = new URL(sourceUrl);
+    } catch {
+      return res.status(400).json({ success: false, error: "sourceUrl is not a valid URL" });
+    }
+    if (parsed.protocol !== "https:" || !REFRAME_URL_HOSTS.has(parsed.hostname)) {
+      return res.status(400).json({ success: false, error: "sourceUrl host is not allowed" });
+    }
+
+    const left = Math.round(Number(crop.left));
+    const top = Math.round(Number(crop.top));
+    let width = Math.round(Number(crop.width));
+    let height = Math.round(Number(crop.height));
+    if (![left, top, width, height].every((n) => Number.isFinite(n) && n >= 0)) {
+      return res.status(400).json({ success: false, error: "crop must be non-negative numbers" });
+    }
+    if (width < MIN_CROP_EDGE || height < MIN_CROP_EDGE) {
+      return res.status(400).json({
+        success: false,
+        error: `Crop too tight — keep at least ${MIN_CROP_EDGE}px on each side.`,
+      });
+    }
+    // WebP encode is happier with even dims; trim 1px if needed (still ~4:5).
+    if (width % 2 === 1) width -= 1;
+    if (height % 2 === 1) height -= 1;
+
+    const ratio = width / height;
+    if (Math.abs(ratio - 4 / 5) > 0.02) {
+      return res.status(400).json({ success: false, error: "crop must be 4:5 portrait" });
+    }
+
+    let sourceBuf;
+    try {
+      const upstream = await fetch(sourceUrl, {
+        redirect: "follow",
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!upstream.ok) {
+        return res.status(502).json({ success: false, error: `Could not fetch source (${upstream.status})` });
+      }
+      const len = Number(upstream.headers.get("content-length") || 0);
+      if (len > 20 * 1024 * 1024) {
+        return res.status(413).json({ success: false, error: "Source image too large" });
+      }
+      sourceBuf = Buffer.from(await upstream.arrayBuffer());
+      if (sourceBuf.length > 20 * 1024 * 1024) {
+        return res.status(413).json({ success: false, error: "Source image too large" });
+      }
+    } catch (e) {
+      return res.status(502).json({
+        success: false,
+        error: `Could not fetch source (${e.message?.slice(0, 80) || "network error"})`,
+      });
+    }
+
+    let processed;
+    let outW;
+    let outH;
+    try {
+      const meta = await sharp(sourceBuf).metadata();
+      const srcW = meta.width || 0;
+      const srcH = meta.height || 0;
+      if (!srcW || !srcH) {
+        return res.status(415).json({ success: false, error: "Could not read source dimensions" });
+      }
+      if (left + width > srcW || top + height > srcH) {
+        return res.status(400).json({
+          success: false,
+          error: `crop is outside the source (${srcW}x${srcH})`,
+        });
+      }
+
+      // Decode → extract → WebP. No resize/upscale — keep the real pixel window.
+      processed = await sharp(sourceBuf)
+        .extract({ left, top, width, height })
+        .webp({ quality: WEBP_QUALITY })
+        .toBuffer();
+      outW = width;
+      outH = height;
+    } catch (e) {
+      return res.status(415).json({
+        success: false,
+        error: `Could not crop image (${e.message?.slice(0, 80)}).`,
+      });
+    }
+
+    const safeName = String(seoFilename).replace(/[^a-zA-Z0-9._-]/g, "") || "reframe.webp";
+    const fd = new FormData();
+    fd.append("file", processed, { filename: safeName, contentType: "image/webp" });
+    fd.append("name", safeName);
+    fd.append("parentId", ghlFolderId);
+    const uploaded = await ghlBarber.medias.uploadMediaContent(fd, { headers: fd.getHeaders() });
+    if (!uploaded?.url || !uploaded?.fileId) {
+      return res.status(502).json({ success: false, error: "GHL upload returned no url/fileId" });
+    }
+
+    console.log(
+      `✂️ [BarberGallery] recrop ${safeName} → ${outW}x${outH} (${processed.length} bytes) fileId=${uploaded.fileId}`
+    );
+    return res.json({
+      success: true,
+      ghlFileId: uploaded.fileId,
+      url: uploaded.url,
+      width: outW,
+      height: outH,
+      bytes: processed.length,
+    });
+  } catch (error) {
+    console.error(
+      `❌ [BarberGallery] recrop failed: status=${error?.response?.status} ${error.message?.slice(0, 200)}`
+    );
+    return res.status(500).json({ success: false, error: "Recrop processing failed" });
   }
 });
 
