@@ -72,12 +72,37 @@ jest.mock("../src/config/pipelineConfig", () => {
 });
 
 const { transitionToStage } = require("../src/ai/opportunityManager");
-const { updateSystemFields } = require("../src/clients/ghlClient");
-const { getOpportunitiesByContact } = require("../src/clients/ghlOpportunityClient");
+const { getContact, updateSystemFields } = require("../src/clients/ghlClient");
 
 function lastSystemFieldsCall() {
   const calls = updateSystemFields.mock.calls;
   return calls[calls.length - 1]?.[1] || {};
+}
+
+/**
+ * Puts the contact at `stageKey` the way production actually reads it.
+ *
+ * `ensureOpportunity` derives `currentStage` from the CONTACT's
+ * `opportunity_stage` custom field — not from the opportunity's
+ * `pipelineStageId`. Supplying `opportunity_id` short-circuits the
+ * findExisting/reopen branch, which is correct for a contact already moving
+ * through the funnel: that branch deliberately sets `opportunity_stage` to the
+ * TARGET stage (a reopened opportunity starts at the entry stage), so driving
+ * these tests through it would always report currentStage === stageKey and
+ * make the LOST guard untestable.
+ *
+ * Pass null for a contact with an opportunity but no recorded stage.
+ */
+function contactAtStage(stageKey) {
+  getContact.mockResolvedValue({
+    id: "c1",
+    firstName: "Maria",
+    lastName: "Garcia",
+    customField: {
+      opportunity_id: "opp1",
+      ...(stageKey ? { opportunity_stage: stageKey } : {}),
+    },
+  });
 }
 
 describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", () => {
@@ -87,9 +112,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
 
   test("auto-derives last_stage_before_lost from currentStage (Deposit Paid)", async () => {
     // Contact currently sits at QUALIFIED (= "Deposit Paid" per §6.6 mapping).
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-qualified" },
-    ]);
+    contactAtStage("QUALIFIED");
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
     });
@@ -104,9 +127,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
     // From the refund form's perspective: drop_off_stage=post_consult
     // → "Consult Completed" — which CANNOT be derived from CONSULT_APPOINTMENT
     // (that maps to "Consult Scheduled"). The override path is the §6.6 fix.
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-consult-appointment" },
-    ]);
+    contactAtStage("CONSULT_APPOINTMENT");
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
       lastStageBeforeLostOverride: "Consult Completed",
@@ -120,9 +141,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
   });
 
   test("Tattoo Booked → 'Tattoo Booked' when canceled post-booking", async () => {
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-tattoo-booked" },
-    ]);
+    contactAtStage("TATTOO_BOOKED");
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
       lostReason: "scheduling_conflict",
@@ -135,9 +154,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
   });
 
   test("idempotency: when currentStage is ALREADY LOST, do not overwrite last_stage_before_lost", async () => {
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-cold-nurture-lost" },
-    ]);
+    contactAtStage("COLD_NURTURE_LOST");
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
       lostReason: "other",
@@ -153,9 +170,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
   });
 
   test("non-LOST transitions never write the three Lost-analytics fields", async () => {
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-discovery" },
-    ]);
+    contactAtStage("DISCOVERY");
     await transitionToStage("c1", "QUALIFIED", {});
     const last = lastSystemFieldsCall();
     expect(last).not.toHaveProperty("last_stage_before_lost");
@@ -166,9 +181,7 @@ describe("transitionToStage → COLD_NURTURE_LOST writes Lost-deal analytics", (
   test("LOST from unknown/null stage → no last_stage_before_lost written (defensive)", async () => {
     // Edge: contact has no opportunity history. We DO move to LOST but we
     // shouldn't lie about the prior stage.
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: "stage-that-doesnt-exist" },
-    ]);
+    contactAtStage("COMPLETED");
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
       lostReason: "personal_or_medical",
@@ -194,10 +207,7 @@ describe("deriveLastStageBeforeLost mapping (§6.6)", () => {
   ];
 
   test.each(cases)("from %s → '%s'", async (fromStage, label) => {
-    const stageId = `stage-${fromStage.toLowerCase().replace(/_/g, "-")}`;
-    getOpportunitiesByContact.mockResolvedValueOnce([
-      { id: "opp1", pipelineStageId: stageId },
-    ]);
+    contactAtStage(fromStage);
     await transitionToStage("c1", "COLD_NURTURE_LOST", {
       allowRegression: true,
     });

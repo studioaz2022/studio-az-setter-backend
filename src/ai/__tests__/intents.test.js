@@ -43,16 +43,25 @@ describe("detectIntents", () => {
     expect(intents.process_or_price_question_intent).toBe(true);
   });
 
-  test("translator affirmation requires translator_needed=true", () => {
-    const canonicalState = { consultationType: "appointment", translatorNeeded: false };
-    const intents = detectIntents("Yes that works", canonicalState);
-    expect(intents.translator_affirm_intent).toBe(false);
+  // `translator_affirm_intent` was deliberately removed (intents.js:28/149) —
+  // a translator is now implied by the slot the lead selects rather than by a
+  // separate affirmation turn. This guards against it being reintroduced as an
+  // intent, which would resurrect the duplicate handlers.
+  test("translator_affirm_intent is not part of the intent contract", () => {
+    for (const translatorNeeded of [true, false]) {
+      const intents = detectIntents("Yes that works", {
+        consultationType: "appointment",
+        translatorNeeded,
+      });
+      expect(intents).not.toHaveProperty("translator_affirm_intent");
+    }
   });
 
-  test("translator affirmation fires only when translator_needed=true", () => {
-    const canonicalState = { consultationType: "appointment", translatorNeeded: true };
-    const intents = detectIntents("Yes that works", canonicalState);
-    expect(intents.translator_affirm_intent).toBe(true);
-    expect(intents.scheduling_intent).toBe(true);
+  test("a translator mention routes to the consult-path branch", () => {
+    // `/\btranslator\b/` is a consult-path pattern, not a price/process one:
+    // the deterministic handler answers translator questions from that branch
+    // (deterministicResponses.js:606) while it explains the video-call option.
+    const intents = detectIntents("Will there be a translator on the call?", {});
+    expect(intents.consult_path_choice_intent).toBe(true);
   });
 });

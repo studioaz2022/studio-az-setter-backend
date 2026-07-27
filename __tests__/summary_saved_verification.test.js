@@ -1,7 +1,7 @@
 // summary_saved_verification.test.js
 // Verify that once summary is saved, "what times?" responses contain only times
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
 }));
 

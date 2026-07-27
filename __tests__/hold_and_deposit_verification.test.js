@@ -1,7 +1,7 @@
 // hold_and_deposit_verification.test.js
 // Verify that slot selection creates hold + sends deposit link exactly once
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
   getContact: jest.fn(async () => ({
     id: "contact123",
@@ -149,8 +149,10 @@ describe("Hold and Deposit Link Verification", () => {
     expect(updatedFields.hold_last_activity_at).toBeDefined();
     expect(updatedFields.hold_warning_sent).toBe(false);
 
-    // Step 6: Verify response message includes hold confirmation and deposit link
-    expect(response.bubbles[0]).toContain("holding");
+    // Step 6: Verify response message includes hold confirmation and deposit link.
+    // Matched loosely so copy edits ("holding" → "on hold") don't fail the run —
+    // what matters is that the lead is told the slot is being held.
+    expect(response.bubbles[0]).toMatch(/on hold|holding/i);
     expect(response.bubbles[0]).toContain("Friday, Dec 20 at 5pm");
     expect(response.bubbles[0]).toContain("https://pay.square.com/test-link-123");
     expect(response.bubbles[0]).toContain("$100");

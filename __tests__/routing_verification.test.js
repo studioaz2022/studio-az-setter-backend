@@ -1,7 +1,7 @@
 // routing_verification.test.js
 // Verify routing decisions for specific messages
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
 }));
 

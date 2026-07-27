@@ -26,7 +26,7 @@ jest.mock("../holdLifecycle", () => ({
   evaluateHoldState: jest.fn().mockResolvedValue(),
 }));
 
-jest.mock("../../ghlClient", () => ({
+jest.mock("../../clients/ghlClient", () => ({
   updateSystemFields: jest.fn().mockResolvedValue(),
   sendConversationMessage: jest.fn().mockResolvedValue(),
 }));

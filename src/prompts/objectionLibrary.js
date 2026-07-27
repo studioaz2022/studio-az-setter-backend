@@ -81,8 +81,11 @@ const OBJECTIONS = {
       /tengo que consultar/i,
       /preguntarle a/i,
       /show (it to )?(someone|my)/i,
-      /check with/i,
-      /talk to (my )?/i,
+      // These two must name a person. Bare /talk to/ and /check with/ also
+      // matched "talk to the artist", and because detectObjection returns the
+      // first insertion-order match, ask_partner shadowed talk_to_artist
+      // entirely — the lead got validation-framing instead of middleman-framing.
+      /(talk to|check with) (my |the )?(partner|spouse|husband|wife|boyfriend|girlfriend|mom|dad|parents|family|friend)/i,
       /run it by/i,
     ],
     belief_to_fix: "They want validation or fear judgment.",
@@ -252,7 +255,10 @@ const OBJECTIONS = {
     trigger_patterns: [
       /give me (a |an |the )?(exact )?price/i,
       /dime el precio exacto/i,
-      /how much (is it|will it (be|cost))/i,
+      // Covers "how much does/would/will it cost", "how much do you charge",
+      // "how much for a sleeve". Kept verb-anchored so "how much time do I
+      // need?" is not mistaken for a price demand.
+      /how much (is|does|would|will|do you charge|for)/i,
       /cuánto (cuesta|va a costar|sería)/i,
       /what('s| is) the (total )?price/i,
       /need (a |the )?price (first|now|before)/i,

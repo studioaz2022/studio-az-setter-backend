@@ -1,7 +1,7 @@
 // multi_intent_routing.test.js
 // Verify multi-intent routing: consult path choice + scheduling
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
   sendConversationMessage: jest.fn(async () => ({})),
   getContact: jest.fn(async () => ({ id: "contact123" })),

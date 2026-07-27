@@ -1,7 +1,7 @@
 // canonical_case_study_replay.test.js
 // End-to-end acceptance replay of the canonical case study from CODEX_MAX_FINAL_IMPLEMENTATION_SPEC.md
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async (contactId, fields) => {
     // Track all field updates
     mockFieldUpdates[contactId] = { ...mockFieldUpdates[contactId], ...fields };
@@ -159,7 +159,6 @@ describe("Canonical Case Study End-to-End Replay", () => {
     const validationResults = {
       schedulingReturnsConcreteTimes: { passed: false, evidence: [] },
       multiIntentAppliesSideEffects: { passed: false, evidence: [] },
-      translatorConfirmationSetsFlag: { passed: false, evidence: [] },
       rescheduleCancelDeterministic: { passed: false, evidence: [] },
       depositLinkNotResentAfterPayment: { passed: false, evidence: [] },
       consultExplainedSetInSameTurn: { passed: false, evidence: [] },
@@ -265,22 +264,13 @@ describe("Canonical Case Study End-to-End Replay", () => {
         }
       }
       
-      // 3. Translator confirmation sets flag and returns slots
-      if (intents.translator_affirm_intent) {
-        const flagSet = canonicalAfter.translatorConfirmed === true;
-        const slotsOffered = /1\)|2\)|3\)|Which works/i.test(outboundMessage);
-        
-        if (flagSet && slotsOffered) {
-          validationResults.translatorConfirmationSetsFlag.passed = true;
-          validationResults.translatorConfirmationSetsFlag.evidence.push({
-            step: stepNum,
-            translatorConfirmed: canonicalAfter.translatorConfirmed,
-            message: outboundMessage,
-            log: logEntry,
-          });
-        }
-      }
-      
+      // 3. (REMOVED) Translator confirmation no longer has its own turn.
+      // `translator_affirm_intent` was deleted (intents.js:28/149): choosing a
+      // video consult now confirms the translator and offers slots in the SAME
+      // turn, so there is no separate affirmation step left to validate here.
+      // The replacement is covered directly in
+      // src/ai/__tests__/deterministicResponses.test.js.
+
       // 4. Consult explained flag set in same turn
       if (outboundMessage.includes("consult") || outboundMessage.includes("deposit") || 
           outboundMessage.includes("translator") || selectedHandler === "deterministic") {
@@ -457,10 +447,6 @@ describe("Canonical Case Study End-to-End Replay", () => {
         name: "Multi-intent ('Video call this week — what times?') applies consult-path side effects AND returns slots immediately",
       },
       {
-        key: "translatorConfirmationSetsFlag",
-        name: "Translator confirmation ('Yes that works') sets translator_confirmed=true and returns slots immediately",
-      },
-      {
         key: "rescheduleCancelDeterministic",
         name: "Reschedule and cancel are deterministic (no AI) and cancel/reschedule the active appointment ID",
       },
@@ -502,7 +488,6 @@ describe("Canonical Case Study End-to-End Replay", () => {
     // Assertions
     expect(validationResults.schedulingReturnsConcreteTimes.passed).toBe(true);
     expect(validationResults.multiIntentAppliesSideEffects.passed).toBe(true);
-    expect(validationResults.translatorConfirmationSetsFlag.passed).toBe(true);
     expect(validationResults.depositLinkNotResentAfterPayment.passed).toBe(true);
     expect(validationResults.consultExplainedSetInSameTurn.passed).toBe(true);
     expect(validationResults.noRepeatedAcknowledgements.passed).toBe(true);
@@ -527,13 +512,16 @@ describe("Canonical Case Study End-to-End Replay", () => {
 
     const outbound = result.aiResult?.bubbles?.[0] || "";
 
-    expect(result.routing?.selected_handler).toBe("consult_path");
+    // A video-call choice now confirms the path AND offers slots in the same
+    // turn (controller.js:349) instead of costing an extra round trip, so the
+    // handler is consult_path_scheduling rather than plain consult_path.
+    expect(result.routing?.selected_handler).toBe("consult_path_scheduling");
     expect(result.routing?.selected_handler).not.toBe("deterministic");
     expect(result.routing?.selected_handler).not.toBe("ai");
-    expect(result.routing?.reason).toBe("consult_path_choice_intent");
-    expect(outbound).toMatch(/translator on the call/i);
-    expect(result.aiResult?.bubbles?.length).toBeGreaterThan(0);
-    expect(outbound.trim().length).toBeGreaterThan(0);
+    expect(result.routing?.reason).toBe("video_consult_with_slots");
+    expect(result.aiResult?.internal_notes).toBe(
+      "consult_path_video_with_immediate_slots"
+    );
 
     const updatedFields = mockFieldUpdates[TEST_CONTACT_ID];
     expect(updatedFields.consultation_type).toBe("appointment");

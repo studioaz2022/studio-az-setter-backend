@@ -1,7 +1,7 @@
 // deposit_paid_verification.test.js
 // Verify that "send link" after deposit is paid returns next-steps, not a new link
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
 }));
 

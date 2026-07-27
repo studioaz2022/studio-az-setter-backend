@@ -12,7 +12,7 @@ jest.mock("../bookingController", () => ({
   createConsultAppointment: jest.fn(async () => ({ id: "apt_123" })),
 }));
 
-jest.mock("../../../ghlClient", () => ({
+jest.mock("../../clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
   sendConversationMessage: jest.fn(async () => ({})),
 }));
@@ -239,27 +239,62 @@ describe("buildDeterministicResponse", () => {
     expect(res.bubbles[0]).toMatch(/canceled/i);
   });
 
-  test("translator affirmation sets confirmed and schedules", async () => {
-    const intents = { translator_affirm_intent: true, scheduling_intent: true };
-    const res = await buildDeterministicResponse({
-      intents,
-      derivedPhase: "scheduling",
-      canonicalState: {
-        consultationType: "appointment",
-        translatorNeeded: true,
-      },
-      contact: { id: "contact123" },
-      messageText: "Yes that works",
+  // `translator_affirm_intent` was removed (see the REMOVED notes in
+  // intents.js:28/149 and deterministicResponses.js:320/775). A translator is
+  // no longer confirmed by a separate "yes" turn — it is carried by the slot the
+  // lead picks. These two tests cover that replacement.
+
+  test("slot selection carries the translator through from the chosen slot", async () => {
+    parseTimeSelection.mockReturnValueOnce({
+      startTime: "2025-01-01T17:00:00.000Z",
+      endTime: "2025-01-01T17:30:00.000Z",
+      displayText: "Wed 5:00 PM",
+      calendarId: "cal_1",
+      artist: "Joan",
+      translator: "Ana",
+      translatorCalendarId: "cal_translator",
+      translatorNeeded: true,
     });
 
-    expect(updateSystemFields).toHaveBeenCalledWith(
-      "contact123",
+    await buildDeterministicResponse({
+      intents: { slot_selection_intent: true },
+      derivedPhase: "scheduling",
+      canonicalState: { lastSentSlots: [{ startTime: "2025-01-01T17:00:00.000Z" }] },
+      contact: { id: "contact123" },
+      messageText: "option 1",
+    });
+
+    expect(createConsultAppointment).toHaveBeenCalledWith(
       expect.objectContaining({
-        translator_confirmed: true,
-        consultation_type_locked: true,
+        translatorNeeded: true,
+        translatorName: "Ana",
+        translatorCalendarId: "cal_translator",
       })
     );
-    expect(res.bubbles[0]).toMatch(/openings/i);
-    expect(res.bubbles[0]).toMatch(/Which works best/i);
+  });
+
+  test("a slot with no translator does not invent one", async () => {
+    parseTimeSelection.mockReturnValueOnce({
+      startTime: "2025-01-01T17:00:00.000Z",
+      endTime: "2025-01-01T17:30:00.000Z",
+      displayText: "Wed 5:00 PM",
+      calendarId: "cal_1",
+      artist: "Joan",
+    });
+
+    await buildDeterministicResponse({
+      intents: { slot_selection_intent: true },
+      derivedPhase: "scheduling",
+      canonicalState: { lastSentSlots: [{ startTime: "2025-01-01T17:00:00.000Z" }] },
+      contact: { id: "contact123" },
+      messageText: "option 1",
+    });
+
+    expect(createConsultAppointment).toHaveBeenCalledWith(
+      expect.objectContaining({
+        translatorName: null,
+        translatorCalendarId: null,
+      })
+    );
   });
 });

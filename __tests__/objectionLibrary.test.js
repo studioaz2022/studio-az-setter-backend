@@ -164,16 +164,38 @@ describe("Objection Library", () => {
       expect(context).toContain("Core Reframe");
       expect(context).toContain("Response Template (EN)");
       expect(context).toContain("$100 deposit");
-      expect(context).toContain("[TIME A] or [TIME B]");
+      // The close references the lead's OWN confirmed time — the two-random-times
+      // format ("[TIME A] or [TIME B]") was deliberately removed, see
+      // GLOBAL_RULES.time_reference_rule.
+      expect(context).toContain("or a different time");
+      expect(context).toContain("Do NOT offer two random new times");
+      expect(context).toContain(objection.closing_touch);
     });
 
     it("should format objection context for Spanish", () => {
       const objection = getObjectionById("price_too_high");
       const context = formatObjectionContext(objection, "es");
-      
+
       expect(context).toContain("Response Template (ES)");
       expect(context).toContain("depósito de $100");
-      expect(context).toContain("[TIME A] o [TIME B]");
+      expect(context).toContain("Match their language (Spanish)");
+      expect(context).toContain(objection.closing_touch_es);
+    });
+
+    it("instructs a soft-close objection NOT to offer times", () => {
+      const context = formatObjectionContext(getObjectionById("need_to_think"), "en");
+      expect(context).toContain("SOFT CLOSE");
+      expect(context).toContain("do NOT give specific times");
+    });
+
+    it("carries the refundable-deposit instruction even when the template omits it", () => {
+      // exact_price_now's template intentionally does not name the deposit; the
+      // requirement lives in the injected rules instead.
+      const objection = getObjectionById("exact_price_now");
+      expect(objection.response_templates.en.toLowerCase()).not.toContain("deposit");
+      expect(formatObjectionContext(objection, "en")).toContain(
+        "Mention refundable deposit and that it goes toward the tattoo"
+      );
     });
 
     it("should return empty string for null objection", () => {
@@ -185,9 +207,23 @@ describe("Objection Library", () => {
     it("should have all required global rules", () => {
       expect(GLOBAL_RULES.structure).toBeDefined();
       expect(GLOBAL_RULES.response_format).toBeDefined();
-      expect(GLOBAL_RULES.required_ending).toContain("TIME A / TIME B");
-      expect(GLOBAL_RULES.financing_rule).toContain("NEVER for consult deposit");
-      expect(GLOBAL_RULES.close_rule).toContain("Always use TIME A / TIME B");
+      // The close now mirrors the lead's own confirmed time instead of always
+      // presenting two fresh options.
+      expect(GLOBAL_RULES.required_ending).toContain("or a different time");
+      expect(GLOBAL_RULES.close_rule).toContain("or a different time");
+      expect(GLOBAL_RULES.time_reference_rule).toContain(
+        "Don't offer two new random times"
+      );
+      expect(GLOBAL_RULES.financing_rule).toContain(
+        "NEVER mention financing for the $100 deposit"
+      );
+    });
+
+    it("never reintroduces the two-random-times close", () => {
+      // Guard against a regression back to the old rigid format.
+      const allRules = Object.values(GLOBAL_RULES).filter((v) => typeof v === "string").join(" ");
+      expect(allRules).not.toContain("TIME A");
+      expect(allRules).not.toContain("TIME B");
     });
   });
 
@@ -218,54 +254,63 @@ describe("Objection Library", () => {
 
 describe("Objection Response Templates", () => {
   describe("Template Quality", () => {
-    it("all English templates should end with time choice", () => {
-      for (const [id, objection] of Object.entries(OBJECTIONS)) {
-        const template = objection.response_templates.en.toLowerCase();
-        const hasTimeChoice = 
-          template.includes("[time a]") || 
-          template.includes("time a") ||
-          template.includes("which works");
-        expect(hasTimeChoice).toBe(true);
-      }
+    // Jest's expect() takes a single argument, so these collect offending
+    // objection ids and assert on the list — a failure then names the culprit.
+
+    it("every objection ships both languages and a closing touch in each", () => {
+      const incomplete = Object.entries(OBJECTIONS)
+        .filter(
+          ([, o]) =>
+            !o.response_templates?.en ||
+            !o.response_templates?.es ||
+            !o.closing_touch ||
+            !o.closing_touch_es
+        )
+        .map(([id]) => id);
+      expect(incomplete).toEqual([]);
     });
 
-    it("all Spanish templates should end with time choice", () => {
-      for (const [id, objection] of Object.entries(OBJECTIONS)) {
-        const template = objection.response_templates.es.toLowerCase();
-        const hasTimeChoice = 
-          template.includes("[time a]") || 
-          template.includes("time a") ||
-          template.includes("cuál") ||
-          template.includes("prefieres");
-        expect(hasTimeChoice).toBe(true);
-      }
+    it("hard-close objections move toward a time; soft-close ones deliberately do not", () => {
+      const offenders = Object.entries(OBJECTIONS)
+        .filter(([, o]) =>
+          o.soft_close === true
+            ? // A soft close asks whether they want times at all — it must not
+              // presume a booking.
+              !/times|schedule|look up/.test(o.closing_touch.toLowerCase())
+            : // A hard close ends on a question that advances to the consult.
+              !o.closing_touch.trim().endsWith("?")
+        )
+        .map(([id]) => id);
+      expect(offenders).toEqual([]);
     });
 
-    it("all templates should mention the deposit", () => {
-      for (const [id, objection] of Object.entries(OBJECTIONS)) {
-        const enTemplate = objection.response_templates.en.toLowerCase();
-        const esTemplate = objection.response_templates.es.toLowerCase();
-        
-        expect(
-          enTemplate.includes("deposit") || 
-          enTemplate.includes("$100")
-        ).toBe(true);
-        
-        expect(
-          esTemplate.includes("depósito") || 
-          esTemplate.includes("$100")
-        ).toBe(true);
-      }
+    it("no template hardcodes a two-option time close", () => {
+      const offenders = Object.entries(OBJECTIONS)
+        .filter(([, o]) =>
+          ["en", "es"].some((lang) => {
+            const t = o.response_templates[lang].toLowerCase();
+            return t.includes("[time a]") || t.includes("[time b]");
+          })
+        )
+        .map(([id]) => id);
+      expect(offenders).toEqual([]);
     });
 
-    it("all templates should mention refundable", () => {
+    it("no template offers financing for the deposit", () => {
+      // GLOBAL_RULES.financing_rule: financing applies to the tattoo TOTAL only.
+      const offenders = [];
       for (const [id, objection] of Object.entries(OBJECTIONS)) {
-        const enTemplate = objection.response_templates.en.toLowerCase();
-        const esTemplate = objection.response_templates.es.toLowerCase();
-        
-        expect(enTemplate.includes("refund")).toBe(true);
-        expect(esTemplate.includes("reembols")).toBe(true);
+        for (const lang of ["en", "es"]) {
+          const t = objection.response_templates[lang].toLowerCase();
+          if (
+            /financ\w*[^.]{0,40}(deposit|depósito)/.test(t) ||
+            /(deposit|depósito)[^.]{0,40}financ\w*/.test(t)
+          ) {
+            offenders.push(`${id}.${lang}`);
+          }
+        }
       }
+      expect(offenders).toEqual([]);
     });
   });
 });

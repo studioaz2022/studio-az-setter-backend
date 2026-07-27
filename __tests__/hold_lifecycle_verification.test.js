@@ -1,7 +1,7 @@
 // hold_lifecycle_verification.test.js
 // Verify hold lifecycle: one warning at 10min, one release at 20min
 
-jest.mock("../ghlClient", () => ({
+jest.mock("../src/clients/ghlClient", () => ({
   updateSystemFields: jest.fn(async () => ({})),
   sendConversationMessage: jest.fn(async () => ({})),
 }));
