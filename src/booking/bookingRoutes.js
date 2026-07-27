@@ -32,6 +32,13 @@ const {
 } = require("./barberDirectory");
 const { addOnsForBarber } = require("./bookingFields");
 const { depositFor } = require("./depositConfig");
+const { refundPayment } = require("../payments/squareClient");
+const { createClient } = require("@supabase/supabase-js");
+
+const supabaseAdmin = createClient(
+  process.env.SUPABASE_URL,
+  process.env.SUPABASE_SERVICE_ROLE_KEY
+);
 
 const SHOP_TZ = "America/Chicago";
 const SLOTS_CACHE_TTL_MS = 60 * 1000; // time-picker needs fresher data than the 15-min "Next:" tiles
@@ -337,6 +344,93 @@ function registerBookingRoutes(app) {
     } catch (err) {
       console.error("[applePay] registration failed:", err?.message);
       return res.status(502).json({ ok: false, domain, error: err?.message });
+    }
+  });
+
+  // ── Deposit refund (admin) ──
+  // POST /api/booking/deposit/refund  { "squarePaymentId": "...", "amountCents"?: n }
+  // Header: x-internal-key
+  //
+  // Runs server-side because the production Square token lives only here. Guards
+  // hard: the payment MUST correspond to a checkout_session tagged
+  // business=barbershop, so this endpoint can only ever refund a barbershop
+  // deposit — never an arbitrary tattoo payment. Refunds the full session amount
+  // unless a smaller amountCents is passed. On success it neutralises the
+  // matching transactions row (soft-delete) so the money stops showing as owed
+  // in Earnings / rent-tracker.
+  app.post("/api/booking/deposit/refund", async (req, res) => {
+    const expected = process.env.INTERNAL_API_KEY;
+    if (!expected) return res.status(503).json({ error: "INTERNAL_API_KEY not configured" });
+    if (req.get("x-internal-key") !== expected) {
+      return res.status(401).json({ error: "unauthorized" });
+    }
+
+    const squarePaymentId = String(req.body?.squarePaymentId || "").trim();
+    if (!squarePaymentId) {
+      return res.status(400).json({ error: "squarePaymentId required" });
+    }
+
+    // Guard: only refund a known barbershop deposit session.
+    const { data: session, error: sErr } = await supabaseAdmin
+      .from("checkout_sessions")
+      .select("id, status, amount_cents, business, square_payment_id, square_order_id")
+      .eq("square_payment_id", squarePaymentId)
+      .maybeSingle();
+    if (sErr) return res.status(500).json({ error: `session lookup failed: ${sErr.message}` });
+    if (!session) {
+      return res.status(404).json({ error: "no checkout session for that payment" });
+    }
+    if (session.business !== "barbershop") {
+      return res.status(403).json({ error: `refund endpoint is barbershop-only (session is ${session.business})` });
+    }
+
+    const amountCents =
+      typeof req.body?.amountCents === "number" ? req.body.amountCents : session.amount_cents;
+    if (!amountCents || amountCents > session.amount_cents) {
+      return res.status(400).json({ error: `amountCents must be 1..${session.amount_cents}` });
+    }
+
+    try {
+      const refund = await refundPayment({
+        paymentId: squarePaymentId,
+        amountCents,
+        idempotencyKey: `bk-refund-${squarePaymentId}`.slice(0, 45),
+        reason: String(req.body?.reason || "Barbershop deposit refund"),
+      });
+
+      // Neutralise the ledger row for a FULL refund so Earnings/rent-tracker
+      // stop counting money that's been returned. Partial refunds keep the row
+      // (a human should reconcile), so only soft-delete on a full refund.
+      let ledgerNeutralised = false;
+      if (amountCents === session.amount_cents) {
+        const { error: uErr } = await supabaseAdmin
+          .from("transactions")
+          .update({
+            deleted_at: new Date().toISOString(),
+            notes: `Refunded via admin endpoint (refund ${refund.refundId}, ${refund.status})`,
+          })
+          .eq("square_payment_id", squarePaymentId)
+          .is("deleted_at", null);
+        ledgerNeutralised = !uErr;
+        if (uErr) console.warn("[deposit-refund] ledger soft-delete failed:", uErr.message);
+      }
+
+      await supabaseAdmin
+        .from("checkout_sessions")
+        .update({ status: "refunded" })
+        .eq("id", session.id);
+
+      console.log(`[deposit-refund] ${squarePaymentId} → ${refund.status} $${amountCents / 100}`);
+      return res.json({
+        ok: true,
+        refundId: refund.refundId,
+        status: refund.status,
+        amountCents,
+        ledgerNeutralised,
+      });
+    } catch (err) {
+      console.error("[deposit-refund] failed:", err?.message);
+      return res.status(502).json({ ok: false, error: err?.message });
     }
   });
 
