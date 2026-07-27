@@ -148,8 +148,14 @@ function buildCustomFields(input, barberSlug) {
   if (input.silent) {
     customFields.push({ id: FIELDS.silent.id, field_value: FIELDS.silent.options });
   }
-  if (input.notes) {
-    customFields.push({ id: FIELDS.notes.id, field_value: input.notes });
+  // The caller's cleaned object names this `barberNotes` (matches the request
+  // body and the appointment-description code). Accept `notes` too so a direct
+  // caller isn't surprised. This was a live bug: reading only `input.notes`
+  // left the Notes-to-Barber field empty on every real booking, because the
+  // route passes `barberNotes`.
+  const barberNotes = input.barberNotes ?? input.notes;
+  if (barberNotes) {
+    customFields.push({ id: FIELDS.notes.id, field_value: barberNotes });
   }
   if (input.videoLink) {
     customFields.push({ id: FIELDS.videoLink.id, field_value: input.videoLink });
