@@ -333,10 +333,15 @@ async function getCalendarFreeSlots(calendarId, startDate, endDate, sdkInstance)
  * @param {string} params.startTime - ISO datetime string
  * @param {string} params.endTime - ISO datetime string
  * @param {string} [params.userId] - Filter to a specific user's appointments
+ * @param {string} [params.calendarId] - Filter to a single calendar
  * @param {Object} [params.sdkInstance] - GHL SDK instance (defaults to tattoo shop SDK)
  * @returns {Promise<Array>} Array of calendar event objects
+ *
+ * NOTE: GHL requires one of userId / calendarId / groupId — a location-wide
+ * query is rejected with "Either of userId, calendarId or groupId is required".
+ * Callers must scope the fetch.
  */
-async function fetchAppointmentsForDateRange({ locationId, startTime, endTime, userId, sdkInstance }) {
+async function fetchAppointmentsForDateRange({ locationId, startTime, endTime, userId, calendarId, sdkInstance }) {
   const sdk = sdkInstance || ghl;
 
   // GHL /calendars/events requires epoch milliseconds, not ISO strings
@@ -345,6 +350,7 @@ async function fetchAppointmentsForDateRange({ locationId, startTime, endTime, u
 
   const params = { locationId, startTime: startMs, endTime: endMs };
   if (userId) params.userId = userId;
+  if (calendarId) params.calendarId = calendarId;
 
   try {
     const result = await sdk.calendars.getCalendarEvents(params);

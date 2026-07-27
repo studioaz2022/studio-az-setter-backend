@@ -14746,6 +14746,12 @@ function createApp() {
     checkPhoneForExistingContact,
   } = require("../consentForm/consentFormService");
 
+  const {
+    runConsentAutomationSweep,
+    fillAndSend,
+    getTaskContext,
+  } = require("../consentForm/consentAutomationService");
+
   // Check if a phone number belongs to an existing GHL contact (called from iOS before creating new contact)
   app.post("/api/consent-form/check-phone", async (req, res) => {
     try {
@@ -14893,6 +14899,57 @@ function createApp() {
     }
   });
 
+  // ─── Consent Form Automation (24h pre-appointment sweep) ───
+  //
+  // Registered before the /:contactId routes below so "automation" is never
+  // mistaken for a contact ID.
+
+  // Context for the Command Center fill-fields sheet (pre-fill values).
+  app.get("/api/consent-form/automation/context/:appointmentId", async (req, res) => {
+    try {
+      const result = await getTaskContext(req.params.appointmentId);
+      res.status(result.success ? 200 : 404).json(result);
+    } catch (err) {
+      console.error("❌ GET /api/consent-form/automation/context error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // The task's one button: write the fields to GHL, send the form, close the task.
+  app.post("/api/consent-form/automation/fill-and-send", async (req, res) => {
+    try {
+      const { appointmentId, quotedPrice, tattooPlacement, numberOfSessions, completedByGhlUserId } = req.body;
+
+      if (!appointmentId) {
+        return res.status(400).json({ success: false, error: "appointmentId is required" });
+      }
+
+      const result = await fillAndSend({
+        appointmentId,
+        quotedPrice,
+        tattooPlacement,
+        numberOfSessions,
+        completedByGhlUserId,
+      });
+
+      res.status(result.success ? 200 : 400).json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/automation/fill-and-send error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Manual sweep trigger (verification + ops).
+  app.post("/api/consent-form/automation/sweep", async (req, res) => {
+    try {
+      const result = await runConsentAutomationSweep();
+      res.json(result);
+    } catch (err) {
+      console.error("❌ POST /api/consent-form/automation/sweep error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // ─── Phase 6: Consent Form Updates & Amendments ───
 
   // Update an unsigned consent form (new token, expire old, send SMS)
@@ -15033,6 +15090,10 @@ function createApp() {
   // ═══ CONSENT FORM DAY-OF REMINDER CRON ═══
   const { startConsentReminderCron } = require("../consentForm/consentReminderCron");
   startConsentReminderCron();
+
+  // ═══ CONSENT FORM 24H AUTOMATION SWEEP ═══
+  const { startConsentAutomationCron } = require("../consentForm/consentAutomationCron");
+  startConsentAutomationCron();
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();

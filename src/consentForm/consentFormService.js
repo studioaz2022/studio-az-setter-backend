@@ -20,6 +20,8 @@ const ARTIST_LICENSE_MAP = {
   joan: "3110164",
   andrew: "319777",
   lionel: "317960",
+  kaelani: "3110381",
+  // Megan is an apprentice — no license number yet, so the field renders blank.
 };
 
 // GHL custom field IDs for consent form fields
