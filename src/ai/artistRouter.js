@@ -15,6 +15,10 @@ const {
   ARTIST_ASSIGNED_USER_IDS,
   ARTIST_NAME_TO_ID,
 } = require("../config/constants");
+const {
+  autoAssignPool,
+  withoutInstagramOnly,
+} = require("../config/artistAvailability");
 const { searchOpportunities } = require("../clients/ghlOpportunityClient");
 
 function formatArtistKey(key) {
@@ -265,10 +269,14 @@ async function getArtistWorkloads() {
 
 async function getArtistWithLowestWorkload(candidateArtists = null) {
   const workloads = await refreshArtistWorkloads();
-  const pool =
-    Array.isArray(candidateArtists) && candidateArtists.length > 0
-      ? candidateArtists
-      : Object.keys(workloads);
+  // Never balance onto an artist who can't receive leads (see artistAvailability).
+  // With no candidates given, use the explicit auto-assign pool rather than every
+  // tracked artist — workloads also tracks Megan, who is apprentice-only and must
+  // not be picked automatically.
+  const requested = withoutInstagramOnly(
+    Array.isArray(candidateArtists) ? candidateArtists : []
+  );
+  const pool = requested.length > 0 ? requested : autoAssignPool();
 
   let selected = null;
   let lowest = Number.POSITIVE_INFINITY;
@@ -305,12 +313,20 @@ async function selectArtistWithWorkloadBalancing(candidateArtists) {
     return null;
   }
 
-  // If only one candidate, return it
-  if (candidateArtists.length === 1) {
-    return normalizeArtistName(candidateArtists[0]);
+  // Drop Instagram-only artists before the single-candidate short-circuit —
+  // otherwise a style whose pool narrows to one of them would return them
+  // without ever reaching getArtistWithLowestWorkload's filter.
+  const eligible = withoutInstagramOnly(candidateArtists);
+  if (eligible.length === 0) {
+    return getArtistWithLowestWorkload();
   }
 
-  return getArtistWithLowestWorkload(candidateArtists);
+  // If only one candidate, return it
+  if (eligible.length === 1) {
+    return normalizeArtistName(eligible[0]);
+  }
+
+  return getArtistWithLowestWorkload(eligible);
 }
 
 /**

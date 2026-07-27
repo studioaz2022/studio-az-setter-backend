@@ -32,8 +32,11 @@ const {
 const { sendConversationMessage } = require("../clients/ghlClient");
 const { boolField, normalizeCustomFields } = require("./opportunityManager");
 
-// Active artists for time-first slot generation
-const ACTIVE_ARTISTS = ["Joan", "Andrew", "Kaelani"];
+// Active artists for time-first slot generation. Sourced from artistAvailability
+// so the Instagram-only switch applies here too — an artist who can't see leads
+// shouldn't have their slots offered to a client with no artist preference.
+const { autoAssignPool } = require("../config/artistAvailability");
+const ACTIVE_ARTISTS = autoAssignPool();
 
 /**
  * Generate a unique pairing key for linking artist and translator appointments.

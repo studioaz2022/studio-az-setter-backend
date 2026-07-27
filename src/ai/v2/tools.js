@@ -47,7 +47,10 @@ const ARTIST_CONSULT = {
   Megan: { online: CALENDARS.MEGAN_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.MEGAN_IN_PERSON, userId: GHL_USER_IDS.MEGAN },
   Kaelani: { online: CALENDARS.KAELANI_ONLINE, in_person: IN_PERSON_CONSULTATION_CALENDARS.KAELANI_IN_PERSON, userId: GHL_USER_IDS.KAELANI },
 };
-const ACTIVE_ARTISTS = ["Andrew", "Joan", "Kaelani"]; // workload pool when the lead has no specific artist
+// Workload pool when the lead has no specific artist. Sourced from
+// artistAvailability, which drops Instagram-only artists (see the switch there).
+const { autoAssignPool } = require("../../config/artistAvailability");
+const ACTIVE_ARTISTS = autoAssignPool();
 
 /** Match an artist string (any case) to a known consult artist key (Andrew/Joan/Claudia), or null. */
 function consultArtistKey(name) {
