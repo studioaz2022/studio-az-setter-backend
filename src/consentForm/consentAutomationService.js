@@ -29,6 +29,11 @@ const {
 
 const GHL_LOCATION_ID = process.env.GHL_LOCATION_ID;
 
+// Kill switch. Set CONSENT_AUTOMATION_ENABLED=0 on Render to stop the sweep
+// dead without a revert or redeploy of code — it texts real clients, so there
+// needs to be a way to pause it from the dashboard.
+const AUTOMATION_ENABLED = process.env.CONSENT_AUTOMATION_ENABLED !== "0";
+
 // Log-only mode for pre-flight verification: decisions are computed and printed
 // but nothing is sent, inserted, or updated.
 const DRY_RUN = process.env.CONSENT_AUTOMATION_DRY_RUN === "1";
@@ -458,6 +463,11 @@ async function claimAndSend({
  */
 async function runConsentAutomationSweep() {
   const stats = { appointments: 0, sent: 0, tasksCreated: 0, skipped: 0, errors: 0, held: 0 };
+
+  if (!AUTOMATION_ENABLED) {
+    console.log("⏸️ [Consent Automation] Disabled via CONSENT_AUTOMATION_ENABLED=0 — sweep skipped");
+    return { success: true, disabled: true, ...stats };
+  }
 
   if (!supabase) {
     console.warn("⚠️ [Consent Automation] Supabase not configured — sweep skipped");
