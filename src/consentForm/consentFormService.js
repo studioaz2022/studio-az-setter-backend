@@ -56,24 +56,24 @@ function lookupLicense(artistName) {
   return ARTIST_LICENSE_MAP[firstName] || "";
 }
 
-// Apprentice (temporary) technicians → their supervising artist of record.
+// Apprentice (temporary) technicians → their supervising artists of record.
 // Keyed by first name (case-insensitive), matching lookupLicense. Drives the
-// voluntary apprentice-disclosure checkbox on the consent form. Not legally
+// voluntary apprentice-disclosure notice on the consent form. Not legally
 // required by MN (see mn-body-art-licensure-rules) — a liability choice.
 const APPRENTICE_MAP = {
-  meg: "Andrew Fernandez",
-  megan: "Andrew Fernandez",
+  meg: ["Andrew Fernandez", "Lionel Chavez"],
+  megan: ["Andrew Fernandez", "Lionel Chavez"],
 };
 
 /**
- * Given a technician name, return apprentice status + supervising artist.
- * @returns {{ isApprentice: boolean, mentorName: string|null }}
+ * Given a technician name, return apprentice status + supervising artists.
+ * @returns {{ isApprentice: boolean, mentorNames: string[]|null }}
  */
 function apprenticeInfo(artistName) {
-  if (!artistName) return { isApprentice: false, mentorName: null };
+  if (!artistName) return { isApprentice: false, mentorNames: null };
   const firstName = artistName.split(" ")[0].toLowerCase();
-  const mentorName = APPRENTICE_MAP[firstName] || null;
-  return { isApprentice: !!mentorName, mentorName };
+  const mentorNames = APPRENTICE_MAP[firstName] || null;
+  return { isApprentice: !!mentorNames, mentorNames };
 }
 
 /**
@@ -419,9 +419,6 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
       ? (() => { try { return JSON.parse(submission.medicalHistory); } catch { return []; } })()
       : submission.medicalHistory || [];
     const consentChecked = submission.consentCheckbox === true || submission.consentCheckbox === "true";
-    // Apprentice disclosure acknowledgment (only present when the artist is an apprentice).
-    const apprenticeAcknowledged =
-      submission.apprenticeAcknowledged === true || submission.apprenticeAcknowledged === "true";
 
     // 4. Write full record to Supabase (including e-signature evidence package)
     const now = new Date().toISOString();
@@ -441,7 +438,6 @@ async function submitConsentForm(token, submission, requestMeta = {}) {
         medical_history_description: submission.medicalHistoryDescription || null,
         id_photo_url: idPhotoUrl || submission.idPhotoFallbackUrl || null,
         consent_checkbox: consentChecked,
-        apprentice_acknowledged: apprenticeAcknowledged,
         signature_data: submission.signatureData || null,
         // Backfill optional fields if artist left them empty
         date_of_procedure: submission.dateOfProcedure || form.date_of_procedure || null,
@@ -1034,6 +1030,8 @@ async function getAmendmentByToken(token) {
         assignedTechnician: form?.assigned_technician || null,
         originalSignedAt: form?.signed_at || form?.completed_at || null,
         languagePreference,
+        // Apprentice disclosure — shown as a notice on the amendment too.
+        ...apprenticeInfo(form?.assigned_technician),
       },
     };
   } catch (err) {
