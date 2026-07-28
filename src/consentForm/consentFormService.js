@@ -60,9 +60,11 @@ function lookupLicense(artistName) {
 // Keyed by first name (case-insensitive), matching lookupLicense. Drives the
 // voluntary apprentice-disclosure notice on the consent form. Not legally
 // required by MN (see mn-body-art-licensure-rules) — a liability choice.
+// NOTE: "Leonel Chavez" is Lionel's LEGAL first name — used here only because
+// this is a legal document. Everywhere else in the system he is "Lionel".
 const APPRENTICE_MAP = {
-  meg: ["Andrew Fernandez", "Lionel Chavez"],
-  megan: ["Andrew Fernandez", "Lionel Chavez"],
+  meg: ["Andrew Fernandez", "Leonel Chavez"],
+  megan: ["Andrew Fernandez", "Leonel Chavez"],
 };
 
 /**
