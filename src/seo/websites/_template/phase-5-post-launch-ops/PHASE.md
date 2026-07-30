@@ -51,8 +51,9 @@ Automated keyword + competitor tracking:
 Verify domain in Search Console + connect to API:
 - [ ] Add domain property in [Search Console](https://search.google.com/search-console) (DNS TXT verification via Cloudflare)
 - [ ] Submit `sitemap.xml` URL
-- [ ] Request indexing for top 10 priority pages (homepage + service pages + artist/staff pages)
-- [ ] Add property to backend `searchConsoleClient.js` `SITES` map
+- [ ] Request indexing for top priority pages via the web UI (homepage + service pages + artist/staff pages) — UI-only, no API equivalent for general pages
+- [ ] Add property to backend `searchConsoleClient.js` `SITES` map AND to `indexInspector.js` (`SITE_PROPERTY` + `SITEMAP`) so the index sweep works for the new site
+- [ ] Run `node src/seo/runIndexCheck.js <sitekey>` and confirm no pages are stuck "unknown to Google"
 - [ ] Test API access: `GET /api/seo/search-console/keywords/{site}`
 - [ ] Set up weekly cron to pull keyword performance into `phase-5-post-launch-ops/search-console-weekly/`
 
@@ -78,6 +79,7 @@ Google Analytics 4 + conversion tracking:
 Set-and-forget weekly tasks:
 - [ ] **Weekly GBP post** — backend cron Mon 9am, posts rotating content via v4 API
 - [ ] **Weekly keyword pull** — Sunday night, pulls Search Console + SerpAPI data, writes to `phase-5-post-launch-ops/weekly-reports/`
+- [ ] **Weekly index sweep** — `node src/seo/runIndexCheck.js <sitekey>`, writes the indexed/not-indexed report to `phase-5-post-launch-ops/index-reports/`. Surfaces regressions (a page that dropped out of the index) and pages stuck not-indexed so the Insight Loop can act on them.
 - [ ] **New review alert** — daily check for new reviews via v4 API, sends notification (Slack/email/iOS push)
 - [ ] **Auto-reply to new reviews** — optional: draft Spanish/English reply via Claude API, post via v4
 - [ ] **Monthly content refresh reminder** — first of month, identifies the oldest page and prompts for update
@@ -131,12 +133,13 @@ Server-side visitor count + real-world Core Web Vitals.
 - [ ] Free tier handles small-business traffic comfortably
 - [ ] View at: `vercel.com/<team>/<project>/analytics` and `/speed-insights`
 
-#### 9d. Search Console URL Inspection API
-Per-URL indexing health checks.
-- [ ] Already covered by existing `webmasters.readonly` scope — no new auth needed
-- [ ] Endpoint: `POST https://searchconsole.googleapis.com/v1/urlInspection/index:inspect` with `{inspectionUrl, siteUrl}`
-- [ ] Useful for: confirming a page is indexed, last crawl date, mobile usability, AMP/HTTPS status
-- [ ] Add a `urlInspect()` helper to `searchConsoleClient.js`
+#### 9d. Search Console URL Inspection API — ✅ BUILT (`src/seo/indexInspector.js` + `runIndexCheck.js`)
+Per-URL indexing health checks. **This is the ONLY legitimate indexing lever available via API** — there is no API to *force* indexing of general web pages (the Indexing API is restricted to JobPosting/BroadcastEvent). This tool diagnoses; you act on the reason it reports.
+- [x] Covered by existing `webmasters.readonly` scope — no new auth needed
+- [x] `inspectUrl(siteKey, url)` and `sweepSitemap(siteKey)` implemented in `indexInspector.js`
+- [x] CLI wrapper: `node src/seo/runIndexCheck.js <sitekey|full-url>` — sweeps the sitemap, groups indexed vs. not-indexed, prints the `coverageState` reason per miss, and flags canonical mismatches
+- [ ] Add the site's property to `SITE_PROPERTY` + `SITEMAP` maps in `indexInspector.js` (both `tattoo` and `barbershop` already wired)
+- **Reading the results:** "Discovered/Crawled – currently not indexed" = quality/thin/dup signal → improve content + internal links. "URL is unknown to Google" = orphaned page nothing links to → add an internal link (re-submitting the sitemap will NOT fix this).
 
 #### 9e. GBP Performance Daily Metrics
 Per-day GBP impression + action counts (we already wired the location/keywords endpoints — this is the daily timeseries).
@@ -342,3 +345,48 @@ With Phase 5 wired up:
 - **You spend 30 min/week reviewing data**, not 30 hours/week creating it
 
 This is the difference between a site that ranks once and a site that compounds authority every month.
+
+---
+
+## Verification (Phase 5 doesn't "complete" — but each deliverable has its own done-state)
+
+Phase 5 is ongoing operations, so verification is per-deliverable rather than per-phase. Mark a deliverable "wired" when:
+
+**Per-deliverable wired criteria:**
+- [ ] **GBP API** — at least one successful v1 read AND one v4 write (e.g. a test post) logged in `phase-5-post-launch-ops/gbp-api-setup.md`
+- [ ] **SerpAPI** — `serp-baseline-{date}.md` file exists with rankings for every primary keyword
+- [ ] **Search Console** — at least 7 days of impression data flowing, weekly cron writing to `search-console-weekly/`
+- [ ] **Cloudflare API** — at least one programmatic DNS/redirect read or write run from this site's context (recorded in `cloudflare-setup.md`)
+- [ ] **GA4 Measurement** — Realtime + 24h DebugView both show events firing
+- [ ] **Automation cron jobs** — each job has run at least once successfully, log recorded
+- [ ] **Review generation** — first batch of review requests sent, response rate tracked
+- [ ] **Citations** — Bing Places + Apple Business Connect both live, NAP verified
+- [ ] **Analytics data sources (all 5)** — each source has one successful programmatic pull
+- [ ] **`data-baseline-{date}.md`** — exists with all 5 sources reconciled
+- [ ] **Monthly snapshot cron** — first month-end snapshot generated automatically (not manually)
+- [ ] **`JOURNAL.md`** — exists at the site's root with the launch-week backfill entry
+- [ ] **Insight Loop** — at least one weekly loop document under `insights/` with a verified outcome
+- [ ] **GA4 conversion events** — every form's `_submitted` event registered as a conversion via API; custom dimensions registered
+- [ ] **Funnel report endpoint** — `/api/seo/funnel/:site/:formName` returns valid JSON when called
+
+**Phase 5 "minimum viable" milestone (for PIPELINE.md status):**
+- Mark Phase 5 as IN PROGRESS while building out deliverables
+- Mark Phase 5 as COMPLETE once all 14 wired-criteria above are checked AND `phase-5-summary.md` (below) is written
+- Even then, the insight loop continues forever — "COMPLETE" means "infrastructure done, ongoing tempo established"
+
+## End-of-Phase Summary
+
+Write `phase-5-summary.md` in this folder once all wired criteria are met. This becomes the operational playbook for the site going forward.
+
+Required sections:
+1. **Wired data sources** — checkmarked list with which env vars + endpoints power each
+2. **Active automation cron jobs** — schedule + what each does + where it writes results
+3. **Memory files written** — list of memory files this site contributed (`gbp_api_access.md` updates, `cloudflare_credentials.md` zone IDs added, etc.)
+4. **Baseline metrics at start of operations** — link to `data-baseline-{date}.md`
+5. **First insight loop result** — link to first `insights/*.md` entry, with verdict
+6. **Funnel definitions registered** — list of every funnel that can be queried via the API
+7. **Conversion events live in GA4** — list of every `_submitted` / `_lead_captured` event being tracked
+8. **Known gaps / Phase 5b backlog** — anything we chose to ship without (e.g. "Bing Places claim pending — submitted but verification slow")
+9. **Recommended ongoing tempo** — what the operator should do weekly/monthly to keep the loop running
+10. **Cross-site lessons learned** — anything discovered this site that should feed back into `_template/` for future sites
+

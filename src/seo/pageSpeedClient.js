@@ -1,6 +1,10 @@
 // pageSpeedClient.js
-// Google PageSpeed Insights API client — no auth needed (free public API)
+// Google PageSpeed Insights API client — requires PAGESPEED_API_KEY (a plain
+// Google API key; PageSpeed does not accept OAuth tokens, so the SEO toolkit's
+// GOOGLE_SEO_REFRESH_TOKEN does not apply here). Keyless requests are technically
+// allowed but share a global anonymous quota that is always exhausted.
 
+require("dotenv").config({ quiet: true });
 const axios = require("axios");
 
 const API_URL = "https://www.googleapis.com/pagespeedonline/v5/runPagespeed";
@@ -20,10 +24,18 @@ const SITES = {
 async function runPageSpeed(siteKey, strategy = "mobile", categories = ["performance", "accessibility", "seo", "best-practices"]) {
   const url = SITES[siteKey] || siteKey;
 
+  // Without a key the request falls into Google's shared anonymous quota pool,
+  // which is permanently exhausted — fail loudly instead of degrading silently.
+  const apiKey = process.env.PAGESPEED_API_KEY;
+  if (!apiKey) {
+    throw new Error("PAGESPEED_API_KEY is not set");
+  }
+
   const params = {
     url,
     strategy,
     category: categories,
+    key: apiKey,
   };
 
   const resp = await axios.get(API_URL, { params, timeout: 60000 });

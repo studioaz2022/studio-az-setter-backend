@@ -155,13 +155,79 @@ Hit the Core Web Vitals thresholds. Test at [pagespeed.web.dev](https://pagespee
 ### 7. `search-console-submit.md`
 - [ ] Add domain property in [Search Console](https://search.google.com/search-console) — choose "Domain" type, verify via DNS TXT in Cloudflare
 - [ ] Submit sitemap: `https://yourdomain.com/sitemap.xml`
-- [ ] Use URL Inspection → Request Indexing on top 10 priority pages
+- [ ] In the web UI, run URL Inspection → Request Indexing on the homepage + top priority pages (UI-only; there is NO API for this on general web pages — the Indexing API is restricted to JobPosting/BroadcastEvent, so do not attempt to script it)
+- [ ] **Run the index sweep** to get a baseline of what Google has actually indexed: `node src/seo/runIndexCheck.js <sitekey>` — records indexed vs. not-indexed per URL, with the coverageState reason for each miss. Save output to `phase-4-deploy-verify/index-baseline-{date}.md`
 - [ ] Verify property is collecting impression data within 48 hours
 
 ### 8. `gbp-website-update.md`
 - [ ] Log into [business.google.com](https://business.google.com)
 - [ ] Edit Profile → Website → change URL to new production domain
 - [ ] Save (takes effect immediately for new searches, may take 24h to fully propagate)
+
+---
+
+## Verification (run before requesting approval — i.e. before declaring "site is live")
+
+All boxes must be true on the LIVE production domain (not the preview URL) before Phase 4 is complete.
+
+**Domain + DNS:**
+- [ ] Production domain serves the site over HTTPS without browser warnings
+- [ ] Both root and www resolve, with the correct primary (redirect chain matches canonical strategy)
+- [ ] Cloudflare proxy is OFF (grey cloud) for the records pointing at Vercel
+- [ ] SSL certificate issued by Vercel (check via browser cert inspector)
+- [ ] DNS TTL is reasonable (300-3600s — not 86400 in case we need to roll back)
+
+**Assets:**
+- [ ] Favicon visible in browser tab on Chrome + Safari + Firefox + mobile Safari
+- [ ] `/site.webmanifest` returns 200 with valid JSON
+- [ ] OG image (`/og-image.jpg`) returns 200, is exactly 1200x630, and renders in [Facebook Sharing Debugger](https://developers.facebook.com/tools/debug/) without errors
+- [ ] Tested by sending the URL via iMessage to a personal device — preview shows correctly
+- [ ] GA4 firing — confirmed via Realtime within 60s of the verification visit
+- [ ] Vercel Analytics + Speed Insights packages installed and rendering (check `vercel.com/<team>/<project>/analytics`)
+
+**SEO state (run for at least homepage + 3 inner pages):**
+- [ ] `curl -s <url> | grep "<title>"` returns the blueprint title tag
+- [ ] `curl -s <url> | grep "application/ld+json"` returns schema (NOT empty)
+- [ ] Canonical URL in the rendered HTML points to the production domain
+- [ ] `/sitemap.xml` returns 200 and lists every page
+- [ ] `/robots.txt` returns 200 and allows the AI bots per Phase 2 spec
+- [ ] [Google Rich Results Test](https://search.google.com/test/rich-results) passes on the homepage + one service page
+
+**Performance (lab data via [pagespeed.web.dev](https://pagespeed.web.dev) on the live URL):**
+- [ ] Mobile Performance ≥ 85
+- [ ] LCP < 2.5s on mobile (target < 1.5s)
+- [ ] CLS < 0.1
+- [ ] INP < 200ms (use field data if available, lab estimate otherwise)
+- [ ] No render-blocking resources flagged that are easily fixable
+
+**Search engine submission:**
+- [ ] Search Console domain property verified (DNS TXT)
+- [ ] `sitemap.xml` submitted in Search Console
+- [ ] URL Inspection → Request Indexing run on homepage + top 5 priority pages (web UI only)
+- [ ] `node src/seo/runIndexCheck.js <sitekey>` run and index-baseline saved — no unexpected "unknown to Google" pages (an orphaned/unlinked page will show this; fix by adding an internal link, not by re-submitting the sitemap)
+- [ ] GBP profile updated with the new domain URL
+
+**Functional smoke test:**
+- [ ] Submitted a real form on the live site (use a test contact you can delete from GHL afterward) — confirmed it landed in the CRM
+- [ ] Every nav link works
+- [ ] Every CTA leads where it should
+- [ ] Mobile viewport works at 375px width (no horizontal scroll, no overlapping text)
+
+## End-of-Phase Summary
+
+Write `phase-4-summary.md` in this folder before declaring the launch complete.
+
+Required sections:
+1. **Live URL + DNS state** — final domain, primary vs www, Cloudflare proxy state
+2. **Launch date + time** — for the project timeline
+3. **PageSpeed scores at launch** — mobile + desktop Performance, LCP, CLS, INP
+4. **GA4 Measurement ID + Property ID** — both needed for Phase 5
+5. **Search Console verification method + verification date**
+6. **What broke during deploy** — anything that surprised us (log for the next site)
+7. **Any deviations from the pre-cutover checklist** — what we shipped despite a failed check, with justification
+8. **Open issues for Phase 5** — perf wins still possible, schema gaps, missing OG variants
+9. **Punted items** — anything verification skipped, with justification
+10. **Recommended Phase 5 starting point** — usually "GBP API setup since rankings + reviews drive next 30 days"
 
 ---
 
