@@ -10964,59 +10964,90 @@ function createApp() {
         //   with prior cancelled/no-show rows folded into a
         //   `slotHistory[]` field exposed for The Slip.
         // Rules:
-        //   - Group by EXACT start_time within a staff's column.
-        //   - If a group has >=1 active row AND >=1 dimmed (cancelled/
-        //     canceled/noshow) row → the active row "absorbs" the
-        //     dimmed siblings as slotHistory. Dimmed siblings disappear
-        //     from the column.
-        //   - If a group has >=2 active rows → leave alone (a real
-        //     double-book — both should be visible). Vanishingly rare
-        //     given our pre-write guard, but not impossible.
-        //   - If a group has ONLY dimmed rows (no active replacement)
-        //     → leave them all on the grid so the desk still sees
-        //     the cancellation history.
+        //   - A dimmed (cancelled/canceled/noshow) row is absorbed by any
+        //     active row it OVERLAPS in time — not just one starting on
+        //     the same minute. It disappears from the column and rides
+        //     along as `slotHistory[]` for The Slip.
+        //   - Overlapping several active rows → the one sharing the most
+        //     minutes wins; ties go to the newest write, then id ASC.
+        //   - A dimmed row overlapping NOTHING active stays on the grid —
+        //     a cancellation with no replacement is real information.
+        //   - Two active rows are never collapsed into each other. That's
+        //     a genuine double-book and the grid renders it as a conflict
+        //     pair (both visible, side by side). Vanishingly rare given
+        //     the pre-write guard — 2 in the 30 days to 2026-07-30 — but
+        //     it is the one case the desk must never miss.
         //   - Blocks (isBlock) are independent of this collapse —
         //     they don't represent client bookings.
         const DIMMED = new Set(["cancelled", "canceled", "noshow"]);
+        // Widened 2026-07-30 from EXACT-start_time grouping to interval
+        // OVERLAP. The exact-tie rule only caught a rebook that landed on
+        // precisely the same minute; a client who cancelled 1:30–2:15 and
+        // was replaced by a 1:45 booking left both cards stacked on the
+        // grid, which is the same "cards hide each other" complaint the
+        // tie case was written to fix. Overlap is the honest predicate:
+        // if a dead row shares any minute with a live one, the live one
+        // owns the slot and the dead one is history.
+        const overlaps = (a, b) => {
+          const as = new Date(a.start_time).getTime();
+          const ae = new Date(a.end_time || a.start_time).getTime();
+          const bs = new Date(b.start_time).getTime();
+          const be = new Date(b.end_time || b.start_time).getTime();
+          if ([as, ae, bs, be].some(Number.isNaN)) return false;
+          return as < be && ae > bs;
+        };
+        /** Minutes of shared time — picks the best host when a dead row
+            overlaps more than one live booking. */
+        const overlapMs = (a, b) => {
+          const as = new Date(a.start_time).getTime();
+          const ae = new Date(a.end_time || a.start_time).getTime();
+          const bs = new Date(b.start_time).getTime();
+          const be = new Date(b.end_time || b.start_time).getTime();
+          return Math.max(0, Math.min(ae, be) - Math.max(as, bs));
+        };
+        const newerFirst = (x, y) => {
+          const tx = x.ghl_updated_at || x.updated_at || "";
+          const ty = y.ghl_updated_at || y.updated_at || "";
+          if (tx === ty) return (x.id || "").localeCompare(y.id || "");
+          return ty.localeCompare(tx);
+        };
         const collapseSlotHistory = (appts) => {
-          const groups = new Map();
-          for (const a of appts) {
-            // Skip blocks from grouping — they're not client bookings.
-            if (a.isBlock) continue;
-            const key = a.start_time || "";
-            if (!groups.has(key)) groups.set(key, []);
-            groups.get(key).push(a);
+          // Blocks are not client bookings — they never absorb and are
+          // never absorbed (Tier 1 renders them as a background band).
+          const bookings = appts.filter((a) => !a.isBlock);
+          const dimmedRows = bookings.filter((g) =>
+            DIMMED.has((g.status || "").toLowerCase())
+          );
+          const activeRows = bookings.filter(
+            (g) => !DIMMED.has((g.status || "").toLowerCase())
+          );
+
+          const toAbsorb = new Set(); // ids to drop from the main list
+          const absorbedBy = new Map(); // primary id → dead rows
+
+          for (const dead of dimmedRows) {
+            // Every live booking sharing any minute with this dead row.
+            const hosts = activeRows.filter((a) => overlaps(a, dead));
+            // No live replacement → leave it visible. A cancellation with
+            // nothing booked over it is real information for the desk.
+            if (!hosts.length) continue;
+            // Most-overlapping host wins; ties go to the newest write,
+            // then id ASC so the choice is deterministic across requests.
+            const primary = hosts.slice().sort((x, y) => {
+              const d = overlapMs(y, dead) - overlapMs(x, dead);
+              return d !== 0 ? d : newerFirst(x, y);
+            })[0];
+            if (!absorbedBy.has(primary.id)) absorbedBy.set(primary.id, []);
+            absorbedBy.get(primary.id).push(dead);
+            toAbsorb.add(dead.id);
           }
-          const toAbsorb = new Set(); // ids to drop from main list
-          for (const [, group] of groups) {
-            if (group.length < 2) continue;
-            const dimmed = group.filter((g) =>
-              DIMMED.has((g.status || "").toLowerCase())
-            );
-            const active = group.filter(
-              (g) => !DIMMED.has((g.status || "").toLowerCase())
-            );
-            // Need at least one active + one dimmed to collapse.
-            if (active.length === 0 || dimmed.length === 0) continue;
-            // Pick the "primary" active row to attach history to.
-            // If multiple actives, the newest by ghl_updated_at wins
-            // (most recent booking is what the desk most likely cares
-            // about); ties broken by id ASC for determinism.
-            const primary = active
+
+          for (const [primaryId, dead] of absorbedBy) {
+            const primary = activeRows.find((a) => a.id === primaryId);
+            if (!primary) continue;
+            primary.slotHistory = dead
               .slice()
-              .sort((x, y) => {
-                const tx = x.ghl_updated_at || x.updated_at || "";
-                const ty = y.ghl_updated_at || y.updated_at || "";
-                if (tx === ty) return (x.id || "").localeCompare(y.id || "");
-                return ty.localeCompare(tx);
-              })[0];
-            primary.slotHistory = dimmed
-              .slice()
-              .sort((x, y) => {
-                const tx = x.ghl_updated_at || x.updated_at || "";
-                const ty = y.ghl_updated_at || y.updated_at || "";
-                return ty.localeCompare(tx); // newest cancellation first
-              })
+              .sort((x, y) => newerFirst(x, y)) // newest cancellation first
               .map((d) => ({
                 id: d.id,
                 title: d.title,
@@ -11027,7 +11058,6 @@ function createApp() {
                 calendar_id: d.calendar_id,
                 ghl_updated_at: d.ghl_updated_at,
               }));
-            for (const d of dimmed) toAbsorb.add(d.id);
           }
           return appts.filter((a) => !toAbsorb.has(a.id));
         };
