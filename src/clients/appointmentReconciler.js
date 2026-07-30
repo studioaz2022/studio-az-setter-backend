@@ -113,6 +113,125 @@ function rowDiffers(incoming, existing) {
   return false;
 }
 
+/** GHL's composite id form for a recurring instance: `<baseId>_<epochMs>_<durationSec>`. */
+const COMPOSITE_ID_RE = /^([A-Za-z0-9]{15,})_\d{10,}_\d+$/;
+
+/** The dedicated GHL "break" calendar — these rows arrive on the EVENTS feed. */
+const BREAK_CALENDAR_ID = "lijQ2ubF4UcrHxDwfzyK";
+
+/**
+ * Delete cache block rows that GHL no longer has (front-desk bug found
+ * 2026-07-30).
+ *
+ * WHY THIS EXISTS. This module is deliberately additive — see the header:
+ * deletions are the appointment webhook's job. That is correct for
+ * bookings, but blocked slots are NOT appointments, so deleting a block
+ * in GHL fires no appointment webhook at all. Block deletions therefore
+ * had NO path into the cache and accumulated forever: Elle's recurring
+ * 1:30pm "Break" was removed from GHL on 2026-06-29 (GHL records this as
+ * an EXDATE on the parent RRULE, not a delete) and was still being drawn
+ * on the desk a month later, on top of a real 1:30 booking.
+ *
+ * WHY DELETING HERE IS SAFE, where it isn't for appointments:
+ *   - getBlockedSlots is fetched per-staff, per-window and returns the
+ *     COMPLETE set for that scope, so the delete scope can be made to
+ *     match the fetch scope exactly. There is no paging to gap.
+ *   - We only ever consider rows this fetch owns (calendar_id ===
+ *     "__block__", the sentinel the loop above writes). Break-calendar
+ *     rows arrive on the events feed and are deliberately left alone.
+ *   - Scoped by start_time INSIDE the window. GHL also returns blocks
+ *     that merely OVERLAP the window, so our candidate set is a strict
+ *     subset of what GHL answered for — never the other way round.
+ *   - Fail-CLOSED: `blockFetchOk` is only true after a successful
+ *     response. The fetch's catch is non-fatal, so without this guard a
+ *     transient GHL error would read as "no blocks exist" and wipe every
+ *     real block for that barber.
+ *
+ * Plus one narrow supersession case: GHL changed how it returns recurring
+ * break instances (bare `<baseId>` → composite `<baseId>_<epoch>_<dur>`),
+ * leaving orphaned bare-id twins in the cache that render as duplicate
+ * cards. We remove a bare row only when GHL has POSITIVELY returned a
+ * composite id derived from it — evidence of replacement, not an absence.
+ *
+ * @returns {Promise<number>} rows deleted
+ */
+async function reapDeletedBlocks({
+  locationId,
+  staffGhlUserId,
+  startTime,
+  endTime,
+  liveBlockIds,
+  liveEventIds,
+  blockFetchOk,
+  dryRun,
+}) {
+  // Fail-closed. Never infer "GHL has no blocks" from a failed fetch.
+  if (!blockFetchOk) return 0;
+
+  const winStart = new Date(startTime).toISOString();
+  const winEnd = new Date(endTime).toISOString();
+
+  const { data: cached, error } = await supabase
+    .from("appointments")
+    .select("id, title, start_time, calendar_id")
+    .eq("location_id", locationId)
+    .eq("assigned_user_id", staffGhlUserId)
+    .gte("start_time", winStart)
+    .lt("start_time", winEnd)
+    .in("calendar_id", ["__block__", BREAK_CALENDAR_ID]);
+
+  if (error) {
+    console.error(`[reconcile] block reap fetch failed:`, error.message);
+    return 0;
+  }
+
+  // Base ids GHL returned in composite form this pass, from EITHER feed.
+  const supersededBases = new Set();
+  for (const id of [...liveBlockIds, ...liveEventIds]) {
+    const m = COMPOSITE_ID_RE.exec(id);
+    if (m) supersededBases.add(m[1]);
+  }
+
+  const doomed = [];
+  for (const row of cached || []) {
+    if (row.calendar_id === "__block__") {
+      // Owned by the blocked-slots fetch — absence is authoritative.
+      if (!liveBlockIds.has(row.id)) doomed.push(row);
+    } else if (
+      // Break-calendar row: absence proves nothing (events feed can page).
+      // Only remove the bare-id twin of a composite GHL now returns.
+      !COMPOSITE_ID_RE.test(row.id) &&
+      !liveEventIds.has(row.id) &&
+      supersededBases.has(row.id)
+    ) {
+      doomed.push(row);
+    }
+  }
+
+  if (!doomed.length) return 0;
+
+  for (const d of doomed) {
+    console.log(
+      `[reconcile] ${dryRun ? "(dry) " : ""}REAP block ${d.id} ` +
+        `"${(d.title || "").trim() || "(untitled)"}" @ ${d.start_time}`
+    );
+  }
+  if (dryRun) return doomed.length;
+
+  const { error: delErr } = await supabase
+    .from("appointments")
+    .delete()
+    .in(
+      "id",
+      doomed.map((d) => d.id)
+    );
+  if (delErr) {
+    console.error(`[reconcile] block reap delete failed:`, delErr.message);
+    return 0;
+  }
+  return doomed.length;
+}
+
 /**
  * Reconcile ONE staff member's appointments against GHL truth.
  * GHL requires a userId per call (no location-wide fetch — see resolveLocation).
@@ -136,6 +255,7 @@ async function reconcileOneStaff({
     unchanged: 0,
     skipped: 0,
     errors: 0,
+    blocksReaped: 0,
     dryRun,
   };
 
@@ -158,6 +278,16 @@ async function reconcileOneStaff({
     return stats;
   }
 
+  // Live GHL ids seen this pass, used by reapDeletedBlocks below.
+  // `liveEventIds` covers the appointments/events feed (which is where
+  // break-calendar rows come from); `liveBlockIds` covers the separate
+  // blocked-slots feed. They are NOT interchangeable — a break-calendar
+  // row will never appear in the blocked-slots response and vice versa.
+  const liveEventIds = new Set();
+  for (const e of events) if (e?.id) liveEventIds.add(e.id);
+  const liveBlockIds = new Set();
+  let blockFetchOk = false;
+
   // ── Blocked slots (Phase 3.15e/16e) ─────────────────────────────
   // /calendars/blocked-slots is a SEPARATE endpoint from /events.
   // The "Add Block" UI on the GHL calendar page writes here; these
@@ -176,6 +306,12 @@ async function reconcileOneStaff({
       endTime: String(new Date(endTime).getTime()),
     });
     const blocks = blockedRes?.events || [];
+    // Record the authoritative live set for the reaper below. Only set
+    // the OK flag on a successful fetch — an empty array from a real
+    // response legitimately means "no blocks", but an exception must
+    // never be read as that (see the fail-closed note in reapDeletedBlocks).
+    blockFetchOk = true;
+    for (const b of blocks) liveBlockIds.add(b.id);
     for (const b of blocks) {
       // Normalize so eventToRow → mapGHLAppointmentToSupabase produces
       // a clean cache row. The cache's `calendar_id` AND `contact_id`
@@ -275,11 +411,30 @@ async function reconcileOneStaff({
     }
   }
 
+  // Blocks removed in GHL leave no webhook trail, so the only chance to
+  // notice they're gone is right here, against the fetch we just made.
+  try {
+    stats.blocksReaped = await reapDeletedBlocks({
+      locationId,
+      staffGhlUserId,
+      startTime,
+      endTime,
+      liveBlockIds,
+      liveEventIds,
+      blockFetchOk,
+      dryRun,
+    });
+  } catch (err) {
+    console.error(`[reconcile] block reap threw:`, err.message);
+    stats.errors++;
+  }
+
   console.log(
     `[reconcile] ${locationId}${staffGhlUserId ? "/" + staffGhlUserId : ""} ` +
       `${startTime}→${endTime}: scanned=${stats.scanned} ` +
       `ins=${stats.inserted} upd=${stats.updated} same=${stats.unchanged} ` +
-      `skip=${stats.skipped} err=${stats.errors}${dryRun ? " (DRY RUN)" : ""}`
+      `skip=${stats.skipped} reaped=${stats.blocksReaped} ` +
+      `err=${stats.errors}${dryRun ? " (DRY RUN)" : ""}`
   );
 
   return stats;
@@ -293,11 +448,13 @@ function accumulate(agg, s) {
   agg.unchanged += s.unchanged;
   agg.skipped += s.skipped;
   agg.errors += s.errors;
+  agg.blocksReaped += s.blocksReaped || 0;
   agg.perStaff.push({
     staffGhlUserId: s.staffGhlUserId,
     scanned: s.scanned,
     inserted: s.inserted,
     updated: s.updated,
+    blocksReaped: s.blocksReaped || 0,
     errors: s.errors,
   });
 }
@@ -360,6 +517,7 @@ async function reconcileAppointments({
     unchanged: 0,
     skipped: 0,
     errors: 0,
+    blocksReaped: 0,
     dryRun,
     perStaff: [],
   };
@@ -380,7 +538,7 @@ async function reconcileAppointments({
     `[reconcile] ${locationId} ROSTER (${roster.length} staff) ` +
       `${startTime}→${endTime}: scanned=${agg.scanned} ins=${agg.inserted} ` +
       `upd=${agg.updated} same=${agg.unchanged} skip=${agg.skipped} ` +
-      `err=${agg.errors}${dryRun ? " (DRY RUN)" : ""}`
+      `reaped=${agg.blocksReaped} err=${agg.errors}${dryRun ? " (DRY RUN)" : ""}`
   );
   // A completed sweep is the FIXED-CADENCE proof-of-life (advances the
   // heartbeat even on a zero-booking day — the whole point). Touch even
