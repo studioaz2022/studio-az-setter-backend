@@ -49,7 +49,25 @@ function formatShopTime(value) {
     timeZone: SHOP_TIMEZONE,
   });
 
-  return { iso: d.toISOString(), date, time, formatted: `${date} ${time}` };
+  // Compact form for the combined field: "Mon, Aug 10 2026 2:00 PM".
+  // Assembled from parts because en-US renders "Mon, Aug 10, 2026" — the comma
+  // before the year isn't wanted here.
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat('en-US', {
+      weekday: 'short',
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+      timeZone: SHOP_TIMEZONE,
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value])
+  );
+  const shortDate = `${parts.weekday}, ${parts.month} ${parts.day} ${parts.year}`;
+
+  // `date` stays long-form so previous_start_date / new_start_date keep working
+  // for anything already mapped against them.
+  return { iso: d.toISOString(), date, time, formatted: `${shortDate} ${time}` };
 }
 
 async function resolveContact(contactId) {
