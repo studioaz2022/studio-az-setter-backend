@@ -26,6 +26,15 @@ const cache = {
 };
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
+// In-flight refreshes, keyed like `cache`. Without this, two callers racing a
+// cold cache each fire their own getUserByLocation and the loser tends to time
+// out — which is how a rescheduled appointment's confirmation SMS lost the
+// barber's name and fell back to "your barber".
+const inFlight = {
+  tattoo: null,
+  barber: null,
+};
+
 async function getUsersForLocation(sdkInstance, locationId) {
   const response = await sdkInstance.users.getUserByLocation({
     locationId,
@@ -40,9 +49,21 @@ async function getCachedUsers(locationKey, sdkInstance, locationId) {
     return cached.users;
   }
 
-  const users = await getUsersForLocation(sdkInstance, locationId);
-  cache[locationKey] = { users, fetchedAt: now };
-  return users;
+  // Collapse concurrent refreshes onto a single request.
+  if (inFlight[locationKey]) return inFlight[locationKey];
+
+  const refresh = (async () => {
+    try {
+      const users = await getUsersForLocation(sdkInstance, locationId);
+      cache[locationKey] = { users, fetchedAt: Date.now() };
+      return users;
+    } finally {
+      inFlight[locationKey] = null;
+    }
+  })();
+
+  inFlight[locationKey] = refresh;
+  return refresh;
 }
 
 /**
