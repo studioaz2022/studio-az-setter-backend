@@ -10518,6 +10518,7 @@ function createApp() {
       const { supabase } = require("../clients/supabaseClient");
       const apnsService = require("../services/apnsService");
       const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
+      const { ensureOwnerIsCurrentBarber } = require("../services/contactOwnership");
 
       const isBarbershop = location === "barbershop";
       const sdkInstance = isBarbershop ? ghlBarber : undefined;
@@ -10594,15 +10595,38 @@ function createApp() {
         }
       }
 
-      // 2. Set custom field on the contact
+      // 2. Point the contact's OWNER at the barber they're actually here to see,
+      //    THEN write the check-in field.
+      //
+      //    Order is load-bearing: the GHL check-in workflow addresses its push to
+      //    the Assigned User, so if ownership is stale when "Here" lands, we page
+      //    whichever barber happened to book this client first — which is the bug
+      //    this whole path exists to fix. Gated on ok:true and deliberately NOT
+      //    inside the try/catch below, because a swallowed failure here is
+      //    indistinguishable from success in the workflow log.
       if (matchedContactId && isBarbershop) {
+        const ownership = await ensureOwnerIsCurrentBarber(matchedContactId, ghlUserId);
+        if (!ownership.ok) {
+          console.error(
+            `❌ [KIOSK] Ownership sync failed for ${matchedContactId} (${ownership.reason}): ` +
+            `${ownership.error} — refusing to write check-in field, would notify the wrong barber`
+          );
+          return res.status(502).json({
+            success: false,
+            error: "Could not confirm which barber to notify. Please try checking in again.",
+            stage: "ownership",
+          });
+        }
+
         try {
           if (type === "name_only") {
-            // Fallback flow — alert barber with walk-in service field
+            // Fallback flow — alert barber with walk-in service field.
+            // assignedTo is no longer set here: ensureOwnerIsCurrentBarber above
+            // already did it, and unlike this branch's old inline write it keeps
+            // the outgoing owner as a follower instead of discarding them.
             await ghlBarber.contacts.updateContact(
               { contactId: matchedContactId },
               {
-                assignedTo: ghlUserId,
                 customFields: [
                   { id: WALK_IN_SERVICE_FIELD_ID, field_value: "question. Check with them quick" },
                 ],
