@@ -22,6 +22,7 @@ const { getStageId } = require('../config/pipelineConfig');
 const { ghlBarber, getCachedUsers } = require('./ghlMultiLocationSdk');
 const { BARBER_LOCATION_ID } = require('../config/kioskConfig');
 const googleCalSync = require('./googleCalendarSync');
+const { sendRescheduleWebhookToGHL } = require('./ghlRescheduleWebhook');
 
 /** Mirror a shop appointment onto the assigned artist's personal Google
  *  Calendar (Phase 4 of the GCal two-way sync). No-op unless the artist has
@@ -345,6 +346,15 @@ async function handleAppointmentUpdated(payload) {
     const apptWithLocation = { ...rawAppointment, locationId: appointment.location_id || rawAppointment.locationId || payload.locationId };
     sendRescheduleConfirmationSMS(apptWithLocation)
       .catch(err => console.error('⚠️ Reschedule confirmation SMS failed (non-fatal):', err.message));
+
+    // Tell GHL a *real* reschedule happened so a LeadConnector workflow can
+    // notify the barber. Detection lives here because we compare against the
+    // previously persisted start_time; the GHL-side custom-field check can't,
+    // since that field is overwritten with the incoming appointment's own link.
+    sendRescheduleWebhookToGHL(apptWithLocation, {
+      previousStartTime: existing?.start_time,
+      rescheduleCount: appointment.reschedule_count,
+    }).catch(err => console.error('⚠️ Reschedule webhook failed (non-fatal):', err.message));
   }
 
   // Mirror change onto the artist's Google Calendar (handles cancel too —
