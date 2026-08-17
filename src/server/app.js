@@ -557,7 +557,7 @@ function createApp() {
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'x-owner-key', 'x-internal-key'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'x-owner-key', 'x-internal-key', 'x-apple-cash-secret'],
   }));
 
   // Use JSON body parsing for all routes except webhooks that need raw body for signature verification
@@ -6195,6 +6195,53 @@ function createApp() {
     }
   });
 
+  // GET /api/refund-request/square-status?refundId=...&paymentId=...
+  // Read-only production Square lookup for "did the client actually get the
+  // money?" questions. Needed because refundPayment() treats Square's PENDING
+  // as success and /square/webhook only handles `payment.updated`, so a refund
+  // that later goes FAILED is invisible to us — refund_requests can read
+  // refund_status='refunded' while no money ever moved.
+  //
+  // MUST stay registered above /api/refund-request/:token, or Express matches
+  // "square-status" as a token.
+  app.get("/api/refund-request/square-status", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    try {
+      const { refundId, paymentId } = req.query || {};
+      if (!refundId && !paymentId) {
+        return res
+          .status(400)
+          .json({ success: false, error: "refundId or paymentId is required" });
+      }
+
+      const { squareEnv } = require("../payments/squareClient");
+      const { baseUrl, token, label } = squareEnv(false);
+      const headers = {
+        Authorization: `Bearer ${token}`,
+        "Square-Version": "2025-01-23",
+      };
+
+      const get = async (path) => {
+        const r = await axios.get(`${baseUrl}${path}`, {
+          headers,
+          validateStatus: () => true,
+        });
+        return { httpStatus: r.status, data: r.data };
+      };
+
+      const out = { success: true, squareEnvironment: label };
+      if (refundId) out.refund = await get(`/v2/refunds/${refundId}`);
+      // The payment carries refund_ids, which catches a refund that exists but
+      // was never linked to the id we stored.
+      if (paymentId) out.payment = await get(`/v2/payments/${paymentId}`);
+
+      res.json(out);
+    } catch (err) {
+      console.error("❌ GET /api/refund-request/square-status error:", err);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   // GET /api/refund-request/:token — Public prefill for the web form.
   // Never exposes the raw drop_off_stage — only the boolean showConsultQuality.
   app.get("/api/refund-request/:token", async (req, res) => {
@@ -10368,6 +10415,29 @@ function createApp() {
     } catch (error) {
       console.error("❌ Venmo webhook error:", error);
       // Always return 200 so CloudMailin doesn't retry
+      return res.status(200).json({ ok: true, error: "internal-error" });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // RENT TRACKER — Apple Cash webhook (iOS Shortcuts)
+  // ═══════════════════════════════════════════════════════════════════════════
+  // Fee-free P2P capture. Shortcuts POSTs Wallet/Messages notification text.
+  // Auth: x-apple-cash-secret or x-owner-key (APPLE_CASH_WEBHOOK_SECRET, else OWNER_SETTLE_KEY).
+
+  app.post("/api/rent-tracker/apple-cash-webhook", async (req, res) => {
+    try {
+      const { isAuthorized, handleAppleCashWebhook } = require("../rentTracker/appleCashHandler");
+      console.log("\n📩 Apple Cash webhook received");
+
+      if (!isAuthorized(req)) {
+        return res.status(401).json({ ok: false, error: "unauthorized" });
+      }
+
+      const result = await handleAppleCashWebhook(req.body || {});
+      return res.status(200).json(result);
+    } catch (error) {
+      console.error("❌ Apple Cash webhook error:", error);
       return res.status(200).json({ ok: true, error: "internal-error" });
     }
   });
