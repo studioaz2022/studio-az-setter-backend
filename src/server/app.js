@@ -14827,6 +14827,9 @@ function createApp() {
   // ═══ GALLERY MARKETING ANALYTICS (future-marketing-platform-roadmap.md Phase 4) ═══
   app.use("/api/gallery", require("../barberGallery/galleryAnalyticsRoutes"));
 
+  // ═══ BARBER SELF-SERVICE HOURS (uploader dashboard → GHL Schedules API) ═══
+  app.use("/api/barber-hours", require("../barberHours/barberHoursRoutes"));
+
   // ═══ SEO TOOLKIT ROUTES ═══
   app.use("/api/seo", seoRoutes);
 
