@@ -12,10 +12,16 @@
 //   score      = (engagement + PRIOR·globalRate) / (impressions + PRIOR)
 // All counts are DISTINCT SESSIONS within a rolling 90-day window.
 //
-// RANKING_EPOCH (env, ISO timestamp — set at DNS cutover): events before it
-// never count, for the score OR the audition threshold. Unset = shadow mode
-// (all data counts; pre-launch verification). Fairness invariants: identical
-// prior for every photo, no per-barber terms anywhere, counts are rates.
+// LAUNCH IS AUTOMATIC — no Render step at DNS cutover. View events (impression
+// /flip/bio/book) count ONLY when their stored `origin` is a production origin
+// (minneapolisbarbershop.com), so the ranking clock starts by itself with the
+// first real-domain visitor, and bay/localhost testing is excluded forever.
+// Conversions have no browser origin (recorded server-side off a confirmed
+// booking) and always count — they're money-real, and test bookings get
+// cleaned up per house rule. RANKING_EPOCH (env, ISO) remains as an optional
+// EXTRA time gate on top (unset = origin gate alone). Fairness invariants:
+// identical prior for every photo, no per-barber terms anywhere, counts are
+// rates.
 
 const { supabase } = require("../clients/supabaseClient");
 
@@ -24,6 +30,12 @@ const GALLERY_REST = "https://bzojzrgoeknvijrmtdpe.supabase.co/rest/v1";
 const GALLERY_ANON_KEY = "sb_publishable_Rw3jFBeMVVGAP11KaQDUBA_CJuXLfqU";
 
 // Constants table in GALLERY_RANKING_PLAN.md — tune there, change here.
+// View events count only from these origins — the automatic launch gate.
+const PRODUCTION_ORIGINS = new Set([
+  "https://minneapolisbarbershop.com",
+  "https://www.minneapolisbarbershop.com",
+]);
+
 const WEIGHTS = { flip: 1, bio_click: 2, book_click: 5, conversion: 25 };
 const NEW_CLIENT_BONUS = 15;
 const PRIOR_IMPRESSIONS = 30;
@@ -69,7 +81,7 @@ async function runScoringOnce() {
 
   const { data: events, error } = await supabase
     .from("gallery_events")
-    .select("event_type, photo_id, session_id, contact_id, is_new_client, created_at")
+    .select("event_type, photo_id, session_id, contact_id, is_new_client, created_at, origin")
     .gte("created_at", fetchSince.toISOString())
     .neq("event_type", "filter")
     .limit(EVENT_FETCH_LIMIT);
@@ -82,6 +94,9 @@ async function runScoringOnce() {
   const perPhoto = new Map();
   for (const ev of events || []) {
     if (!ev.photo_id || !publishedSet.has(ev.photo_id)) continue;
+    // The automatic launch gate: browser-sent view events must come from the
+    // production site. Server-recorded conversions carry no origin and pass.
+    if (ev.event_type !== "conversion" && !PRODUCTION_ORIGINS.has(ev.origin)) continue;
     let p = perPhoto.get(ev.photo_id);
     if (!p) {
       p = { sinceEpochImpr: new Set(), windowed: {}, newClients: new Set() };

@@ -77,6 +77,9 @@ router.post("/events", async (req, res) => {
         utm_source: clip(utm?.source),
         utm_medium: clip(utm?.medium),
         utm_campaign: clip(utm?.campaign),
+        // Which site sent this — the scoring job only counts production
+        // origins, which is what makes the launch cutover automatic.
+        origin: clip(req.headers.origin) || null,
       };
       // filter taps carry a tag and no photo (GALLERY_RANKING_PLAN.md Phase 1);
       // keys stay uniform across the batch — PostgREST bulk insert requires it.
