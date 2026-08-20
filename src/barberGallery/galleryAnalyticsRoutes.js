@@ -174,7 +174,12 @@ router.get("/filter-demand", async (req, res) => {
     ]);
     const photos = photosRes.ok ? await photosRes.json() : [];
     const taxonomy = taxRes.ok ? await taxRes.json() : [];
-    const labelBySlug = new Map(taxonomy.map((t) => [t.slug, t.label]));
+    // Taxonomy labels are written for the tagging UI ("This is a Taper");
+    // demand rows need the plain word — same cleanup the website chips do.
+    const LABEL_OVERRIDES = { fade: "Fade", taper: "Taper", "burst-fade": "Burst Fade" };
+    const labelBySlug = new Map(
+      taxonomy.map((t) => [t.slug, LABEL_OVERRIDES[t.slug] || t.label])
+    );
 
     const photosByTag = new Map();
     for (const p of photos) {
