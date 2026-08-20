@@ -6,6 +6,8 @@
 //   Accepts application/json AND text/plain (navigator.sendBeacon sends
 //   text/plain to stay CORS-preflight-free on pagehide).
 //   Body: { sessionId, page, referrer, utm?, events: [{ type, photoId, barberSlug }] }
+//   Filter taps (GALLERY_RANKING_PLAN.md Phase 1) ride the same batch as
+//   { type: "filter", tag } — no photoId; stored with photo_id NULL.
 //
 // GET /api/gallery/stats?barber=<slug>&days=<n>   (per-image aggregates)
 //   Counts DISTINCT sessions per photo per event type, so duplicate beacons
@@ -21,7 +23,7 @@ const { supabase } = require("../clients/supabaseClient");
 
 const router = express.Router();
 
-const EVENT_TYPES = new Set(["impression", "flip", "book_click", "bio_click", "conversion"]);
+const EVENT_TYPES = new Set(["impression", "flip", "book_click", "bio_click", "conversion", "filter"]);
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const SLUG_RE = /^[a-z0-9-]{1,48}$/;
 const MAX_EVENTS_PER_BATCH = 40;
@@ -66,19 +68,25 @@ router.post("/events", async (req, res) => {
     const rows = [];
     for (const e of events) {
       if (!e || !EVENT_TYPES.has(e.type)) continue;
-      if (!UUID_RE.test(String(e.photoId || ""))) continue;
-      if (!SLUG_RE.test(String(e.barberSlug || ""))) continue;
-      rows.push({
+      const base = {
         event_type: e.type,
-        photo_id: e.photoId,
-        barber_slug: e.barberSlug,
         session_id: sessionId,
         page: clip(page),
         referrer: clip(referrer),
         utm_source: clip(utm?.source),
         utm_medium: clip(utm?.medium),
         utm_campaign: clip(utm?.campaign),
-      });
+      };
+      // filter taps carry a tag and no photo (GALLERY_RANKING_PLAN.md Phase 1);
+      // keys stay uniform across the batch — PostgREST bulk insert requires it.
+      if (e.type === "filter") {
+        if (!SLUG_RE.test(String(e.tag || ""))) continue;
+        rows.push({ ...base, photo_id: null, barber_slug: null, tag: e.tag });
+      } else {
+        if (!UUID_RE.test(String(e.photoId || ""))) continue;
+        if (!SLUG_RE.test(String(e.barberSlug || ""))) continue;
+        rows.push({ ...base, photo_id: e.photoId, barber_slug: e.barberSlug, tag: null });
+      }
     }
     if (rows.length === 0) {
       return res.status(400).json({ success: false, error: "No valid events in batch" });
@@ -122,6 +130,7 @@ router.get("/stats", async (req, res) => {
     // photo_id → { type → Set(session_id), newClients: Set(contact) }
     const byPhoto = new Map();
     for (const ev of events || []) {
+      if (!ev.photo_id) continue; // filter taps carry no photo — not per-photo stats
       let photo = byPhoto.get(ev.photo_id);
       if (!photo) {
         photo = { barberSlug: ev.barber_slug, sessions: {}, newClients: new Set() };
