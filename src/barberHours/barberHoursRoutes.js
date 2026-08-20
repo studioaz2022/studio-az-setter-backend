@@ -85,12 +85,15 @@ for (const barber of BARBER_DATA) {
 // groupId, eventType, notifications, buffers and appointment caps survive.
 const CALENDAR_PUT_STRIP = new Set([
   "id", "_id", "locationId", "createdAt", "updatedAt", "__v", "dateAdded", "dateUpdated",
-  "openHours", "availabilities",
-  // GHL RETURNS these on GET but 422s if you send them back ("property X
-  // should not exist"). Seeded from what we've actually hit; anything new is
-  // caught by the strip-and-retry below rather than failing the barber's save.
-  "formSubmitRedirectUrl",
+  "availabilities",
 ]);
+
+// GHL's calendar GET and PUT disagree on casing: the GET returns
+// `formSubmitRedirectUrl`, the PUT schema wants `formSubmitRedirectURL`.
+// Sending the GET spelling 422s with "should not exist"; dropping it instead
+// 422s with "formSubmitRedirectURL must be a string" on any calendar whose
+// formSubmitType is RedirectURL (Drew's Haircut + Beard). So rename, never strip.
+const CALENDAR_PUT_RENAME = { formSubmitRedirectUrl: "formSubmitRedirectURL" };
 
 /** Field names GHL named in a 422 "property X should not exist" response. */
 function rejectedProperties(err) {
@@ -119,11 +122,17 @@ function toMinutes(value, unit) {
  * Apply booking settings to one calendar, preserving every other field.
  * `patch` holds only the keys being changed (already in minutes).
  */
-async function patchCalendarBooking(calendarId, patch) {
+async function patchCalendarBooking(calendarId, patch, { scheduleOwnsAvailability }) {
   const current = await fetchCalendar(calendarId);
   const body = {};
   for (const [k, v] of Object.entries(current)) {
-    if (!CALENDAR_PUT_STRIP.has(k)) body[k] = v;
+    if (CALENDAR_PUT_STRIP.has(k)) continue;
+    // Dropping openHours is what keeps the Schedules-API schedule alive — but
+    // only a calendar that HAS a schedule can afford to lose it. Calendars
+    // still running on legacy openHours (Anna Kinkead's four, as of
+    // 2026-08-20) would lose all availability, so theirs is echoed back.
+    if (k === "openHours" && scheduleOwnsAvailability) continue;
+    body[CALENDAR_PUT_RENAME[k] || k] = v;
   }
   Object.assign(body, patch);
 
@@ -451,16 +460,23 @@ router.put("/schedules/:scheduleId/booking", makeRequireInternalKey(), async (re
       return res.status(400).json({ success: false, error: "No bookable calendar for that service" });
     }
 
+    const scheduleCalendars = new Set(target.calendarIds || []);
+
     // Website calendar carries both settings.
-    await patchCalendarBooking(websiteCalendarId, {
-      slotDuration, slotDurationUnit: "mins",
-      slotInterval, slotIntervalUnit: "mins",
-    });
+    await patchCalendarBooking(
+      websiteCalendarId,
+      { slotDuration, slotDurationUnit: "mins", slotInterval, slotIntervalUnit: "mins" },
+      { scheduleOwnsAvailability: scheduleCalendars.has(websiteCalendarId) },
+    );
 
     // Walk-in kiosk calendar: duration only. Its 5-minute slotInterval and
     // zero booking notice are what make instant walk-in booking work.
     if (walkInCalendarId) {
-      await patchCalendarBooking(walkInCalendarId, { slotDuration, slotDurationUnit: "mins" });
+      await patchCalendarBooking(
+        walkInCalendarId,
+        { slotDuration, slotDurationUnit: "mins" },
+        { scheduleOwnsAvailability: scheduleCalendars.has(walkInCalendarId) },
+      );
     }
 
     // Belt and braces: the PUT recipe above leaves schedules intact (verified),
