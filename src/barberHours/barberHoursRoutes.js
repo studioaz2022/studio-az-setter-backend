@@ -29,7 +29,7 @@
 const express = require("express");
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
 const { supabase } = require("../clients/supabaseClient");
-const { BARBER_DATA, BARBER_LOCATION_ID } = require("../config/kioskConfig");
+const { BARBER_DATA, BARBER_LOCATION_ID, WALK_IN_CALENDARS } = require("../config/kioskConfig");
 
 const router = express.Router();
 router.use(express.json({ limit: "128kb" }));
@@ -61,6 +61,61 @@ for (const barber of BARBER_DATA) {
   for (const [serviceKey, calId] of Object.entries(barber.calendars)) {
     CALENDAR_SERVICE[calId] = { serviceKey, ghlUserId: barber.ghlUserId };
   }
+}
+
+// ─── Calendar booking settings (slot duration / interval) ─────────────────
+//
+// ⚠️ PUT /calendars/{id} is a FULL REPLACE and it is genuinely destructive.
+// Verified live on the test calendar 2026-08-20:
+//   • Echoing the whole GET body back and INCLUDING `openHours` DELETES the
+//     associated Schedules-API schedule outright (not merely disassociated —
+//     it vanishes from /schedules/search, with no orphan to recover).
+//   • Echoing the same body but OMITTING `openHours` leaves the schedule
+//     completely intact (same id, same rules) and free-slots keep serving.
+// So `openHours` in the body is what flips the calendar back to legacy
+// availability mode and nukes the schedule. We therefore NEVER send it.
+// (The iOS app does the opposite — always sends openHours, then repairs the
+// wreckage via reassociateOrRecreateSchedule. This path avoids the damage.)
+//
+// `availabilities` is omitted for the same reason: legacy date overrides are
+// superseded by the schedule's `date` rules, and echoing the server's shape
+// (_id/ISO dates/__v) back is a needless risk.
+//
+// Every other field the GET returned is echoed verbatim, so widgetSlug,
+// groupId, eventType, notifications, buffers and appointment caps survive.
+const CALENDAR_PUT_STRIP = new Set([
+  "id", "_id", "locationId", "createdAt", "updatedAt", "__v", "dateAdded", "dateUpdated",
+  "openHours", "availabilities",
+]);
+
+const MIN_SLOT = 5;
+const MAX_SLOT = 480;
+
+async function fetchCalendar(calendarId) {
+  const r = await ghlBarber.calendars.getCalendar({ calendarId });
+  return r?.data?.calendar || r?.calendar || r?.data || r;
+}
+
+/** Minutes, whatever unit GHL stored it in. */
+function toMinutes(value, unit) {
+  if (typeof value !== "number") return null;
+  return unit === "hours" ? value * 60 : value;
+}
+
+/**
+ * Apply booking settings to one calendar, preserving every other field.
+ * `patch` holds only the keys being changed (already in minutes).
+ */
+async function patchCalendarBooking(calendarId, patch) {
+  const current = await fetchCalendar(calendarId);
+  const body = {};
+  for (const [k, v] of Object.entries(current)) {
+    if (!CALENDAR_PUT_STRIP.has(k)) body[k] = v;
+  }
+  Object.assign(body, patch);
+
+  await ghlBarber.getHttpClient().put(`/calendars/${calendarId}`, body, { headers: GHL_VERSION });
+  return current;
 }
 
 function makeRequireInternalKey() {
@@ -108,6 +163,39 @@ function shapeSchedule(schedule) {
     calendarIds: schedule.calendarIds || [],
     rules: schedule.rules || [],
     timezone: schedule.timezone || TIMEZONE,
+  };
+}
+
+/**
+ * Which calendars a service's booking settings apply to.
+ *
+ * A barber's website calendar and their walk-in kiosk calendar share one
+ * schedule, but they are NOT interchangeable:
+ *   • slotDuration must match on both — a 40-minute cut is 40 minutes whether
+ *     it was booked online or walked in; letting them drift double-books the chair.
+ *   • slotInterval must NOT be copied to the walk-in calendar. Those are
+ *     deliberately 5 min so the kiosk can offer the next 5-minute mark, which
+ *     is the entire point of the walk-in group.
+ */
+function calendarsForService(ghlUserId, serviceKey) {
+  const barber = findBarber(ghlUserId);
+  const websiteCalendarId = barber?.calendars?.[serviceKey] || null;
+  const walkInCandidate = (WALK_IN_CALENDARS[ghlUserId] || {})[serviceKey] || null;
+  // The test barber reuses one calendar for both roles — don't PUT it twice.
+  const walkInCalendarId = walkInCandidate && walkInCandidate !== websiteCalendarId ? walkInCandidate : null;
+  return { websiteCalendarId, walkInCalendarId };
+}
+
+/** Booking settings as the uploader shows them: always minutes. */
+async function readBookingSettings(ghlUserId, serviceKey) {
+  const { websiteCalendarId, walkInCalendarId } = calendarsForService(ghlUserId, serviceKey);
+  if (!websiteCalendarId) return null;
+  const cal = await fetchCalendar(websiteCalendarId);
+  return {
+    calendarId: websiteCalendarId,
+    walkInCalendarId,
+    slotDuration: toMinutes(cal.slotDuration, cal.slotDurationUnit) ?? 30,
+    slotInterval: toMinutes(cal.slotInterval, cal.slotIntervalUnit) ?? 30,
   };
 }
 
@@ -233,6 +321,18 @@ router.get("/schedules", makeRequireInternalKey(), async (req, res) => {
     const known = schedules.filter((s) => s.serviceKey);
     known.sort((a, b) => SERVICE_ORDER.indexOf(a.serviceKey) - SERVICE_ORDER.indexOf(b.serviceKey));
 
+    // Booking settings live on the calendar, not the schedule — fetch in parallel.
+    await Promise.all(
+      known.map(async (s) => {
+        try {
+          s.booking = await readBookingSettings(userId, s.serviceKey);
+        } catch (err) {
+          console.warn(`[barberHours] booking settings unavailable for ${s.serviceKey}: ${err.message}`);
+          s.booking = null;
+        }
+      }),
+    );
+
     return res.json({ success: true, schedules: known });
   } catch (err) {
     console.error(`[barberHours] GET /schedules failed: ${err.message}`);
@@ -281,6 +381,97 @@ router.put("/schedules/:scheduleId", makeRequireInternalKey(), async (req, res) 
   } catch (err) {
     console.error(`[barberHours] PUT /schedules failed: ${err.message}`);
     return res.status(502).json({ success: false, error: "Could not save schedule to GHL" });
+  }
+});
+
+// PUT /schedules/:scheduleId/booking   { userId, slotDuration, slotInterval }
+// Minutes only — the uploader never exposes GHL's mins/hours unit toggle.
+router.put("/schedules/:scheduleId/booking", makeRequireInternalKey(), async (req, res) => {
+  try {
+    const { scheduleId } = req.params;
+    const { userId, slotDuration, slotInterval } = req.body || {};
+
+    const barber = findBarber(String(userId || ""));
+    if (!barber) {
+      return res.status(404).json({ success: false, error: "Unknown barber" });
+    }
+
+    for (const [label, value] of [["Cut length", slotDuration], ["Start times", slotInterval]]) {
+      if (!Number.isInteger(value) || value < MIN_SLOT || value > MAX_SLOT) {
+        return res.status(400).json({
+          success: false,
+          error: `${label} must be between ${MIN_SLOT} and ${MAX_SLOT} minutes`,
+        });
+      }
+      if (value % MIN_SLOT !== 0) {
+        return res.status(400).json({ success: false, error: `${label} must be a multiple of ${MIN_SLOT} minutes` });
+      }
+    }
+
+    const owned = await searchSchedules(String(userId));
+    const target = owned.find((s) => (s._id || s.id) === scheduleId);
+    if (!target) {
+      return res.status(403).json({ success: false, error: "That schedule doesn't belong to you" });
+    }
+
+    const serviceKey = serviceForSchedule(target);
+    const { websiteCalendarId, walkInCalendarId } = calendarsForService(String(userId), serviceKey);
+    if (!websiteCalendarId) {
+      return res.status(400).json({ success: false, error: "No bookable calendar for that service" });
+    }
+
+    // Website calendar carries both settings.
+    await patchCalendarBooking(websiteCalendarId, {
+      slotDuration, slotDurationUnit: "mins",
+      slotInterval, slotIntervalUnit: "mins",
+    });
+
+    // Walk-in kiosk calendar: duration only. Its 5-minute slotInterval and
+    // zero booking notice are what make instant walk-in booking work.
+    if (walkInCalendarId) {
+      await patchCalendarBooking(walkInCalendarId, { slotDuration, slotDurationUnit: "mins" });
+    }
+
+    // Belt and braces: the PUT recipe above leaves schedules intact (verified),
+    // but a silently destroyed schedule means a barber with no availability, so
+    // confirm rather than assume — and rebuild from the pre-PUT snapshot if it
+    // ever does vanish.
+    const after = await searchSchedules(String(userId));
+    let live = after.find((s) => (s._id || s.id) === scheduleId);
+    if (!live) {
+      console.error(`[barberHours] schedule ${scheduleId} vanished after calendar PUT — rebuilding`);
+      const recreated = (
+        await ghlBarber.getHttpClient().post(
+          "/calendars/schedules",
+          {
+            name: target.name,
+            userId: String(userId),
+            locationId: BARBER_LOCATION_ID,
+            timezone: target.timezone || TIMEZONE,
+            rules: target.rules || [],
+          },
+          { headers: GHL_VERSION },
+        )
+      ).data;
+      live = recreated.schedule || recreated;
+      const newId = live._id || live.id;
+      for (const calId of target.calendarIds || []) {
+        await ghlBarber
+          .getHttpClient()
+          .put(`/calendars/schedules/${newId}/associations/${calId}`, {}, { headers: GHL_VERSION });
+      }
+      console.log(`[barberHours] rebuilt schedule as ${newId} across ${(target.calendarIds || []).length} calendars`);
+    }
+
+    const booking = await readBookingSettings(String(userId), serviceKey);
+    console.log(
+      `[barberHours] ${barber.name} set ${serviceKey} to ${slotDuration}min cut / ${slotInterval}min starts` +
+        (walkInCalendarId ? " (duration mirrored to walk-in)" : ""),
+    );
+    return res.json({ success: true, booking, scheduleId: live._id || live.id });
+  } catch (err) {
+    console.error(`[barberHours] PUT /booking failed: ${err.message}`);
+    return res.status(502).json({ success: false, error: "Could not save booking settings to GHL" });
   }
 });
 
