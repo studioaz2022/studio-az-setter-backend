@@ -86,7 +86,20 @@ for (const barber of BARBER_DATA) {
 const CALENDAR_PUT_STRIP = new Set([
   "id", "_id", "locationId", "createdAt", "updatedAt", "__v", "dateAdded", "dateUpdated",
   "openHours", "availabilities",
+  // GHL RETURNS these on GET but 422s if you send them back ("property X
+  // should not exist"). Seeded from what we've actually hit; anything new is
+  // caught by the strip-and-retry below rather than failing the barber's save.
+  "formSubmitRedirectUrl",
 ]);
+
+/** Field names GHL named in a 422 "property X should not exist" response. */
+function rejectedProperties(err) {
+  const messages = err?.response?.data?.message ?? err?.response?.message;
+  const list = Array.isArray(messages) ? messages : [messages].filter(Boolean);
+  return list
+    .map((m) => /property (\S+) should not exist/.exec(String(m))?.[1])
+    .filter(Boolean);
+}
 
 const MIN_SLOT = 5;
 const MAX_SLOT = 480;
@@ -114,8 +127,26 @@ async function patchCalendarBooking(calendarId, patch) {
   }
   Object.assign(body, patch);
 
-  await ghlBarber.getHttpClient().put(`/calendars/${calendarId}`, body, { headers: GHL_VERSION });
-  return current;
+  // GHL's calendar GET and PUT schemas are not symmetric: some fields come
+  // back on GET and are refused on PUT. The response names them, so drop
+  // exactly those and retry instead of failing the barber's save — different
+  // calendars carry different optional fields, and hardcoding the full list
+  // would break again on the next calendar that has one we haven't seen.
+  const http = ghlBarber.getHttpClient();
+  for (let attempt = 0; attempt < 6; attempt++) {
+    try {
+      await http.put(`/calendars/${calendarId}`, body, { headers: GHL_VERSION });
+      return current;
+    } catch (err) {
+      const rejected = rejectedProperties(err);
+      if (!rejected.length) throw err;
+      for (const prop of rejected) delete body[prop];
+      console.warn(
+        `[barberHours] calendar ${calendarId}: GHL refused ${rejected.join(", ")} on PUT — retrying without`,
+      );
+    }
+  }
+  throw new Error(`calendar ${calendarId}: PUT still rejected after stripping refused properties`);
 }
 
 function makeRequireInternalKey() {
