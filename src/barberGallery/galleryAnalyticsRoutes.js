@@ -20,6 +20,7 @@
 
 const express = require("express");
 const { supabase } = require("../clients/supabaseClient");
+const { readScores } = require("./galleryRanking");
 
 const router = express.Router();
 
@@ -99,6 +100,25 @@ router.post("/events", async (req, res) => {
   } catch (error) {
     console.error(`❌ [GalleryAnalytics] events insert failed: ${error.message?.slice(0, 200)}`);
     return res.status(500).json({ success: false, error: "Event ingest failed" });
+  }
+});
+
+// GET /api/gallery/scores — the ranking scores the website orders the wall
+// by (GALLERY_RANKING_PLAN.md Phase 2). Public + cacheable: recomputed every
+// 6h by galleryRanking.js, so 15 minutes of edge cache costs nothing.
+router.get("/scores", async (_req, res) => {
+  try {
+    const { scores, scoredAt } = await readScores();
+    res.set("Cache-Control", "public, max-age=900");
+    return res.json({
+      success: true,
+      scoredAt,
+      epoch: process.env.RANKING_EPOCH || null,
+      scores,
+    });
+  } catch (error) {
+    console.error(`❌ [GalleryAnalytics] scores read failed: ${error.message?.slice(0, 200)}`);
+    return res.status(500).json({ success: false, error: "Scores unavailable" });
   }
 });
 

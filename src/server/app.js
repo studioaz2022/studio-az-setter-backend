@@ -15331,6 +15331,16 @@ function createApp() {
     }
   }
 
+  // Gallery ranking scores — recompute every 6h from gallery_events
+  // (GALLERY_RANKING_PLAN.md Phase 2). Same opt-out as the loops above.
+  if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+    try {
+      require("../barberGallery/galleryRanking").startGalleryRankingLoop();
+    } catch (err) {
+      console.error("[app] failed to start gallery ranking loop:", err.message || err);
+    }
+  }
+
   // Meta / Instagram long-lived token refresh (barbershop IG feed). Ticks
   // every 6h and only refreshes a row with <14d of life left. See
   // src/services/metaTokenRefresh.js.
