@@ -20,7 +20,7 @@
 
 const express = require("express");
 const { supabase } = require("../clients/supabaseClient");
-const { readScores } = require("./galleryRanking");
+const { readScores, PRODUCTION_ORIGINS } = require("./galleryRanking");
 
 const router = express.Router();
 
@@ -122,6 +122,80 @@ router.get("/scores", async (_req, res) => {
   } catch (error) {
     console.error(`❌ [GalleryAnalytics] scores read failed: ${error.message?.slice(0, 200)}`);
     return res.status(500).json({ success: false, error: "Scores unavailable" });
+  }
+});
+
+// GET /api/gallery/filter-demand?days=30 — demand vs supply per tag
+// (GALLERY_RANKING_PLAN.md Phase 4). Demand = distinct sessions that tapped
+// the tag's chip on the PRODUCTION site (same origin gate as scoring, so the
+// coaching numbers describe real visitors); supply = live published photos
+// carrying the tag. The uploader /stats turns the gap into "post tapers."
+router.get("/filter-demand", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({ success: false, error: "Storage not configured" });
+    }
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const { data: taps, error } = await supabase
+      .from("gallery_events")
+      .select("tag, session_id, origin")
+      .eq("event_type", "filter")
+      .gte("created_at", since)
+      .limit(50000);
+    if (error) throw error;
+
+    const sessionsByTag = new Map();
+    for (const t of taps || []) {
+      if (!t.tag || !PRODUCTION_ORIGINS.has(t.origin)) continue;
+      let s = sessionsByTag.get(t.tag);
+      if (!s) {
+        s = new Set();
+        sessionsByTag.set(t.tag, s);
+      }
+      s.add(t.session_id);
+    }
+
+    // Supply + labels from the gallery project (public read).
+    const headers = {
+      apikey: GALLERY_ANON_KEY,
+      Authorization: `Bearer ${GALLERY_ANON_KEY}`,
+    };
+    const [photosRes, taxRes] = await Promise.all([
+      fetch(
+        `${GALLERY_REST}/gallery_photos?status=eq.published&select=cut_pillar,tags`,
+        { headers }
+      ),
+      fetch(
+        `${GALLERY_REST}/gallery_tag_taxonomy?active=eq.true&select=slug,label`,
+        { headers }
+      ),
+    ]);
+    const photos = photosRes.ok ? await photosRes.json() : [];
+    const taxonomy = taxRes.ok ? await taxRes.json() : [];
+    const labelBySlug = new Map(taxonomy.map((t) => [t.slug, t.label]));
+
+    const photosByTag = new Map();
+    for (const p of photos) {
+      const tags = new Set([p.cut_pillar, ...(p.tags || [])].filter(Boolean));
+      for (const tag of tags) photosByTag.set(tag, (photosByTag.get(tag) || 0) + 1);
+    }
+
+    const tags = [...sessionsByTag.entries()]
+      .map(([tag, sessions]) => ({
+        tag,
+        label: labelBySlug.get(tag) || tag,
+        sessions: sessions.size,
+        photos: photosByTag.get(tag) || 0,
+      }))
+      .sort((a, b) => b.sessions - a.sessions);
+
+    res.set("Cache-Control", "public, max-age=900");
+    return res.json({ success: true, days, tags });
+  } catch (error) {
+    console.error(`❌ [GalleryAnalytics] filter-demand failed: ${error.message?.slice(0, 200)}`);
+    return res.status(500).json({ success: false, error: "Demand unavailable" });
   }
 });
 

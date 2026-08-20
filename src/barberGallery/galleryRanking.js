@@ -215,4 +215,9 @@ function startGalleryRankingLoop() {
   console.log("[GalleryRanking] scoring loop started (6h interval)");
 }
 
-module.exports = { runScoringOnce, readScores, startGalleryRankingLoop };
+module.exports = {
+  runScoringOnce,
+  readScores,
+  startGalleryRankingLoop,
+  PRODUCTION_ORIGINS,
+};
