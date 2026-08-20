@@ -7,6 +7,12 @@ alter table gallery_events add column if not exists tag text;
 alter table gallery_events alter column photo_id drop not null;
 alter table gallery_events alter column barber_slug drop not null;
 
+-- the create-table migration pinned the allowed types inline — admit 'filter'
+alter table gallery_events drop constraint if exists gallery_events_event_type_check;
+alter table gallery_events add constraint gallery_events_event_type_check check (
+  event_type in ('impression','flip','book_click','bio_click','conversion','filter')
+);
+
 alter table gallery_events drop constraint if exists gallery_events_filter_shape;
 alter table gallery_events add constraint gallery_events_filter_shape check (
   (event_type = 'filter' and tag is not null and photo_id is null and barber_slug is null)
