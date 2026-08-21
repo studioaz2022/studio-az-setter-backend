@@ -135,6 +135,12 @@ router.get("/filter-demand", async (req, res) => {
     if (!supabase) {
       return res.status(503).json({ success: false, error: "Storage not configured" });
     }
+    // Optional ?barber=<slug>: adds a per-tag `mine` count (that barber's live
+    // plates carrying the tag) so clients can mark open lanes server-truthfully.
+    const barber = req.query.barber ? String(req.query.barber) : null;
+    if (barber && !SLUG_RE.test(barber)) {
+      return res.status(400).json({ success: false, error: "Invalid barber slug" });
+    }
     const days = Math.min(Math.max(parseInt(req.query.days, 10) || 30, 1), 365);
     const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
 
@@ -162,18 +168,24 @@ router.get("/filter-demand", async (req, res) => {
       apikey: GALLERY_ANON_KEY,
       Authorization: `Bearer ${GALLERY_ANON_KEY}`,
     };
-    const [photosRes, taxRes] = await Promise.all([
+    const [photosRes, taxRes, barbersRes] = await Promise.all([
       fetch(
-        `${GALLERY_REST}/gallery_photos?status=eq.published&select=cut_pillar,tags`,
+        `${GALLERY_REST}/gallery_photos?status=eq.published&select=barber_id,cut_pillar,tags`,
         { headers }
       ),
       fetch(
         `${GALLERY_REST}/gallery_tag_taxonomy?active=eq.true&select=slug,label`,
         { headers }
       ),
+      barber
+        ? fetch(`${GALLERY_REST}/barbers?slug=eq.${barber}&select=id`, { headers })
+        : Promise.resolve(null),
     ]);
     const photos = photosRes.ok ? await photosRes.json() : [];
     const taxonomy = taxRes.ok ? await taxRes.json() : [];
+    const barberIds = new Set(
+      barbersRes?.ok ? (await barbersRes.json()).map((b) => b.id) : []
+    );
     // Taxonomy labels are written for the tagging UI ("This is a Taper");
     // demand rows need the plain word — same cleanup the website chips do.
     const LABEL_OVERRIDES = { fade: "Fade", taper: "Taper", "burst-fade": "Burst Fade" };
@@ -182,9 +194,15 @@ router.get("/filter-demand", async (req, res) => {
     );
 
     const photosByTag = new Map();
+    const mineByTag = new Map();
     for (const p of photos) {
       const tags = new Set([p.cut_pillar, ...(p.tags || [])].filter(Boolean));
-      for (const tag of tags) photosByTag.set(tag, (photosByTag.get(tag) || 0) + 1);
+      for (const tag of tags) {
+        photosByTag.set(tag, (photosByTag.get(tag) || 0) + 1);
+        if (barberIds.has(p.barber_id)) {
+          mineByTag.set(tag, (mineByTag.get(tag) || 0) + 1);
+        }
+      }
     }
 
     const tags = [...sessionsByTag.entries()]
@@ -193,14 +211,54 @@ router.get("/filter-demand", async (req, res) => {
         label: labelBySlug.get(tag) || tag,
         sessions: sessions.size,
         photos: photosByTag.get(tag) || 0,
+        ...(barber ? { mine: mineByTag.get(tag) || 0 } : {}),
       }))
       .sort((a, b) => b.sessions - a.sessions);
 
     res.set("Cache-Control", "public, max-age=900");
-    return res.json({ success: true, days, tags });
+    return res.json({ success: true, days, ...(barber ? { barber } : {}), tags });
   } catch (error) {
     console.error(`❌ [GalleryAnalytics] filter-demand failed: ${error.message?.slice(0, 200)}`);
     return res.status(500).json({ success: false, error: "Demand unavailable" });
+  }
+});
+
+// GET /api/gallery/price-history?barber=<slug> — this barber's rows from the
+// barber_price_history ledger (GALLERY_RANKING_PLAN.md Phase 5/6). Public
+// read; prices are already public on the website. Baselines are internal
+// anchor rows, not price *moves* — callers get changes only.
+router.get("/price-history", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({ success: false, error: "Storage not configured" });
+    }
+    const barber = String(req.query.barber || "");
+    if (!SLUG_RE.test(barber)) {
+      return res.status(400).json({ success: false, error: "Invalid barber slug" });
+    }
+    const { data, error } = await supabase
+      .from("barber_price_history")
+      .select("service_type, old_price, new_price, effective_at, source")
+      .eq("barber_slug", barber)
+      .neq("source", "baseline")
+      .order("effective_at", { ascending: false })
+      .limit(100);
+    if (error) throw error;
+    res.set("Cache-Control", "public, max-age=900");
+    return res.json({
+      success: true,
+      barber,
+      events: (data || []).map((e) => ({
+        serviceType: e.service_type,
+        oldPrice: e.old_price === null ? null : Number(e.old_price),
+        newPrice: Number(e.new_price),
+        effectiveAt: e.effective_at,
+        source: e.source,
+      })),
+    });
+  } catch (error) {
+    console.error(`❌ [GalleryAnalytics] price-history failed: ${error.message?.slice(0, 200)}`);
+    return res.status(500).json({ success: false, error: "Price history unavailable" });
   }
 });
 
