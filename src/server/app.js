@@ -15341,6 +15341,17 @@ function createApp() {
     }
   }
 
+  // Barber price-change detector — snapshot-diffs barber_service_prices into
+  // the barber_price_history ledger every 6h (GALLERY_RANKING_PLAN.md
+  // Phase 5; the 4 price sources never cascade, so observe, don't trust).
+  if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
+    try {
+      require("../config/priceHistory").startPriceDetectorLoop();
+    } catch (err) {
+      console.error("[app] failed to start price detector loop:", err.message || err);
+    }
+  }
+
   // Meta / Instagram long-lived token refresh (barbershop IG feed). Ticks
   // every 6h and only refreshes a row with <14d of life left. See
   // src/services/metaTokenRefresh.js.
