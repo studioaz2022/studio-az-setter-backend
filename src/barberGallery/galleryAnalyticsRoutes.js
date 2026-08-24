@@ -223,6 +223,145 @@ router.get("/filter-demand", async (req, res) => {
   }
 });
 
+// GET /api/gallery/lane-leads?barber=<slug>&days=N — lane-attributed leads
+// (GALLERY_RANKING_PLAN.md Phase 7a). A lane lead = same session, in time
+// order: production-origin `filter` tap on tag T → conversion on one of this
+// barber's photos carrying T. Route proven per real person, not correlation.
+// The exposure multiplier separates strategy from routing: how much the lane
+// amplified this barber vs the open wall — (mine_lane/pool_lane) ÷
+// (mine_total/wall_total), computed on CURRENT pool counts (approximate,
+// labeled so). nicheWin only at >= 2x: a fade-lane lead on a fade-heavy wall
+// claims nothing. Counts, never rates — undercounting is the safe direction.
+const NICHE_WIN_MULTIPLIER = 2;
+
+router.get("/lane-leads", async (req, res) => {
+  try {
+    if (!supabase) {
+      return res.status(503).json({ success: false, error: "Storage not configured" });
+    }
+    const barber = String(req.query.barber || "");
+    if (!SLUG_RE.test(barber)) {
+      return res.status(400).json({ success: false, error: "Invalid barber slug" });
+    }
+    const days = Math.min(Math.max(parseInt(req.query.days, 10) || 90, 1), 365);
+    const since = new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+
+    const [{ data: conversions, error: cErr }, { data: taps, error: fErr }] =
+      await Promise.all([
+        supabase
+          .from("gallery_events")
+          .select("photo_id, session_id, contact_id, is_new_client, created_at")
+          .eq("event_type", "conversion")
+          .eq("barber_slug", barber)
+          .gte("created_at", since)
+          .limit(10000),
+        supabase
+          .from("gallery_events")
+          .select("tag, session_id, origin, created_at")
+          .eq("event_type", "filter")
+          .gte("created_at", since)
+          .limit(50000),
+      ]);
+    if (cErr) throw cErr;
+    if (fErr) throw fErr;
+
+    // session → [{tag, at}] — production-origin taps only.
+    const tapsBySession = new Map();
+    for (const t of taps || []) {
+      if (!t.tag || !PRODUCTION_ORIGINS.has(t.origin)) continue;
+      let arr = tapsBySession.get(t.session_id);
+      if (!arr) {
+        arr = [];
+        tapsBySession.set(t.session_id, arr);
+      }
+      arr.push({ tag: t.tag, at: t.created_at });
+    }
+
+    // Photo tags + pool counts from the gallery project (public read).
+    const headers = {
+      apikey: GALLERY_ANON_KEY,
+      Authorization: `Bearer ${GALLERY_ANON_KEY}`,
+    };
+    const [photosRes, taxRes, barbersRes] = await Promise.all([
+      fetch(
+        `${GALLERY_REST}/gallery_photos?status=eq.published&select=id,barber_id,cut_pillar,tags`,
+        { headers }
+      ),
+      fetch(`${GALLERY_REST}/gallery_tag_taxonomy?active=eq.true&select=slug,label`, { headers }),
+      fetch(`${GALLERY_REST}/barbers?slug=eq.${barber}&select=id`, { headers }),
+    ]);
+    const photos = photosRes.ok ? await photosRes.json() : [];
+    const taxonomy = taxRes.ok ? await taxRes.json() : [];
+    const barberIds = new Set(barbersRes.ok ? (await barbersRes.json()).map((b) => b.id) : []);
+    const LABELS = { fade: "Fade", taper: "Taper", "burst-fade": "Burst Fade" };
+    const labelBySlug = new Map(taxonomy.map((t) => [t.slug, LABELS[t.slug] || t.label]));
+
+    const tagsByPhoto = new Map();
+    const poolByTag = new Map();
+    const mineByTag = new Map();
+    let mineTotal = 0;
+    for (const p of photos) {
+      const tags = new Set([p.cut_pillar, ...(p.tags || [])].filter(Boolean));
+      tagsByPhoto.set(p.id, tags);
+      const mine = barberIds.has(p.barber_id);
+      if (mine) mineTotal++;
+      for (const tag of tags) {
+        poolByTag.set(tag, (poolByTag.get(tag) || 0) + 1);
+        if (mine) mineByTag.set(tag, (mineByTag.get(tag) || 0) + 1);
+      }
+    }
+    const wallTotal = photos.length;
+
+    // Attribute: for each conversion, lanes = tags tapped BEFORE it in the
+    // same session that the converted photo carries. A conversion crediting
+    // several matching tags credits each lane once (they're the same person,
+    // but lanes are judged independently).
+    const lanes = new Map(); // tag → { leads:Set(session), newFaces:Set }
+    for (const c of conversions || []) {
+      const photoTags = tagsByPhoto.get(c.photo_id);
+      if (!photoTags) continue;
+      const sessionTaps = tapsBySession.get(c.session_id) || [];
+      for (const tap of sessionTaps) {
+        if (tap.at >= c.created_at) continue; // filter must precede conversion
+        if (!photoTags.has(tap.tag)) continue;
+        let lane = lanes.get(tap.tag);
+        if (!lane) {
+          lane = { leads: new Set(), newFaces: new Set() };
+          lanes.set(tap.tag, lane);
+        }
+        lane.leads.add(c.session_id);
+        if (c.is_new_client === true) lane.newFaces.add(c.contact_id || c.session_id);
+      }
+    }
+
+    const results = [...lanes.entries()]
+      .map(([tag, lane]) => {
+        const mineLane = mineByTag.get(tag) || 0;
+        const poolLane = poolByTag.get(tag) || 0;
+        const laneShare = poolLane > 0 ? mineLane / poolLane : 0;
+        const wallShare = wallTotal > 0 ? mineTotal / wallTotal : 0;
+        const multiplier = wallShare > 0 ? laneShare / wallShare : 0;
+        return {
+          tag,
+          label: labelBySlug.get(tag) || tag,
+          leads: lane.leads.size,
+          newFaces: lane.newFaces.size,
+          minePlates: mineLane,
+          lanePlates: poolLane,
+          multiplier: Math.round(multiplier * 10) / 10,
+          nicheWin: multiplier >= NICHE_WIN_MULTIPLIER,
+        };
+      })
+      .sort((a, b) => b.leads - a.leads);
+
+    res.set("Cache-Control", "public, max-age=900");
+    return res.json({ success: true, barber, days, lanes: results });
+  } catch (error) {
+    console.error(`❌ [GalleryAnalytics] lane-leads failed: ${error.message?.slice(0, 200)}`);
+    return res.status(500).json({ success: false, error: "Lane leads unavailable" });
+  }
+});
+
 // GET /api/gallery/price-history?barber=<slug> — this barber's rows from the
 // barber_price_history ledger (GALLERY_RANKING_PLAN.md Phase 5/6). Public
 // read; prices are already public on the website. Baselines are internal
