@@ -5,6 +5,7 @@
 
 const crypto = require('crypto');
 const { supabase } = require('./supabaseClient');
+const { sendPushToGhlUser, markTaskPushLedger } = require('../services/taskNotifications');
 
 // Command Center Task Types (must match iOS TaskType enum - uses snake_case)
 const TASK_TYPES = {
@@ -24,6 +25,25 @@ const TASK_TYPES = {
   ARTIST_RESPONSE: 'artist_response',
   // Post-consultation quote verification
   QUOTE_VERIFICATION: 'quote_verification',
+};
+
+// Human-readable task labels for push copy, EN/ES (tattoo side requires Spanish).
+// Keyed by the same snake_case type strings as TASK_TYPES.
+const TASK_TYPE_LABELS = {
+  [TASK_TYPES.SEND_DESIGN_SKETCH]: { en: 'Send design sketch', es: 'Enviar boceto del diseño' },
+  [TASK_TYPES.QUOTE_LEAD]: { en: 'Quote this lead', es: 'Cotizar este lead' },
+  [TASK_TYPES.SCHEDULE_APPOINTMENT]: { en: 'Schedule appointment', es: 'Agendar cita' },
+  [TASK_TYPES.REPLY_TO_CLIENT]: { en: 'Reply to client', es: 'Responder al cliente' },
+  [TASK_TYPES.PRE_CONSULTATION_NOTES]: { en: 'Pre-consultation notes', es: 'Notas de pre-consulta' },
+  [TASK_TYPES.POST_CONSULTATION_FOLLOWUP]: { en: 'Post-consultation follow-up', es: 'Seguimiento post-consulta' },
+  [TASK_TYPES.DESIGN_CHANGE_REQUEST]: { en: 'Design change request', es: 'Solicitud de cambio de diseño' },
+  [TASK_TYPES.ARTIST_INTRODUCTION]: { en: 'Introduce yourself to the client', es: 'Preséntate con el cliente' },
+  [TASK_TYPES.FINAL_CHECKLIST]: { en: 'Final checklist', es: 'Lista final' },
+  [TASK_TYPES.CUSTOM_FOLLOWUP]: { en: 'Follow-up', es: 'Seguimiento' },
+  [TASK_TYPES.QUOTE_CONFIRMATION]: { en: 'Confirm quote', es: 'Confirmar cotización' },
+  [TASK_TYPES.ADMIN_UPDATE]: { en: 'Update from the front desk', es: 'Actualización de recepción' },
+  [TASK_TYPES.ARTIST_RESPONSE]: { en: 'Artist response', es: 'Respuesta del artista' },
+  [TASK_TYPES.QUOTE_VERIFICATION]: { en: 'Verify quote', es: 'Verificar cotización' },
 };
 
 // Task due intervals in hours
@@ -96,6 +116,42 @@ async function createCommandCenterTask(taskData) {
   }
 
   console.log(`✅ Command Center task created: ${type} for ${contactName}`);
+
+  // ── Push the task to each assignee's phone ──────────────────────────────
+  // This is the ONLY delivery path for backend-created tasks. The DB trigger
+  // on command_center_tasks writes a notification_queue row per assignee, but
+  // nothing has ever drained that queue — for months every AI-setter task
+  // (reply_to_client, quote_lead, send_design_sketch, …) reached artists only
+  // if they happened to open the app. iOS-created tasks push themselves via
+  // /api/notifications/task-assigned; consent tasks push directly from
+  // consentAutomationService — neither goes through here, so this cannot
+  // double-send.
+  //
+  // Push failures never fail task creation: the task row is already committed,
+  // and the app still shows it — a missed push must not roll back real work.
+  // Each attempt is recorded on the trigger's queue row (sent/failed), which
+  // turns the dead queue into the delivery ledger.
+  for (const assigneeId of task.assigned_to || []) {
+    try {
+      const result = await sendPushToGhlUser(assigneeId, (language) => {
+        const isSpanish = language === 'es';
+        const label = TASK_TYPE_LABELS[type]?.[isSpanish ? 'es' : 'en']
+          || type.replace(/_/g, ' ');
+        return {
+          // 'task_assigned' — the type iOS already deep-links to the task/contact
+          type: 'task_assigned',
+          title: isSpanish ? `Nueva tarea: ${label}` : `New task: ${label}`,
+          body: isSpanish ? `Para ${contactName}` : `For ${contactName}`,
+          contactId: contactId || null,
+          taskId: task.id,
+        };
+      });
+      await markTaskPushLedger(task.id, assigneeId, result);
+    } catch (pushErr) {
+      console.error(`⚠️ Task push to ${assigneeId} failed (task ${task.id} still created):`, pushErr.message);
+    }
+  }
+
   return task;
 }
 

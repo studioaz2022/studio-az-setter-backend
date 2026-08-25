@@ -252,6 +252,10 @@ async function handleDepositPaid(contactId, data) {
   // Create notification record
   const notification = {
     contact_id: contactId,
+    // Route the feed row to the artist's inbox — rows without target_user_id
+    // are invisible to any per-user filter (all 110 historical rows were NULL).
+    // Column is a profiles UUID, so the GHL user id must be resolved first.
+    target_user_id: await resolveProfileId(artistId),
     notification_type: 'deposit_paid',
     title: 'Deposit Received',
     body: `${name} has paid their $${amount ? (amount / 100).toFixed(2) : '0.00'} deposit`,
@@ -638,6 +642,20 @@ async function handlePhaseChanged(contactId, data) {
   console.log(`Lead ${contactId} moved from ${previousPhase} to ${newPhase} (temp: ${leadTemperature})`);
 }
 
+/**
+ * GHL user id -> profiles.id (UUID), or null. notifications.target_user_id is
+ * a profiles UUID; writing a GHL id would fail the whole insert.
+ */
+async function resolveProfileId(ghlUserId) {
+  if (!ghlUserId) return null;
+  const { data } = await supabase
+    .from('profiles')
+    .select('id')
+    .eq('ghl_user_id', ghlUserId)
+    .single();
+  return data?.id || null;
+}
+
 async function handleLeadAssigned(contactId, data) {
   console.log('👤 Processing lead_assigned event for contact:', contactId);
   const { artistId, artistName } = data || {};
@@ -651,6 +669,7 @@ async function handleHumanHandoff(contactId, data) {
 
   const notification = {
     contact_id: contactId,
+    target_user_id: await resolveProfileId(assignedTo),
     notification_type: 'human_handoff',
     title: 'Human Attention Needed',
     body: reason || 'AI Setter has requested human assistance',

@@ -20,7 +20,7 @@ const { supabase } = require("../clients/supabaseClient");
 const { getContact, updateContact } = require("../clients/ghlClient");
 const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 const { sendConsentForm, GHL_FIELD_IDS } = require("./consentFormService");
-const { sendPushToGhlUser } = require("../services/taskNotifications");
+const { sendPushToGhlUser, markTaskPushLedger } = require("../services/taskNotifications");
 const {
   TATTOO_CALENDARS,
   ARTIST_ASSIGNED_USER_IDS,
@@ -339,7 +339,7 @@ async function createFieldsNeededTask({
     completedBy: "automation",
   });
 
-  await sendPushToGhlUser(artistUserId, (language) => {
+  const pushResult = await sendPushToGhlUser(artistUserId, (language) => {
     const isSpanish = language === "es";
     return {
       type: "task_assigned",
@@ -351,6 +351,8 @@ async function createFieldsNeededTask({
       taskId,
     };
   });
+  // Record the outcome on the DB trigger's notification_queue row (delivery ledger).
+  await markTaskPushLedger(taskId, artistUserId, pushResult);
 
   return taskId;
 }

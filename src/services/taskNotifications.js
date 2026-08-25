@@ -110,7 +110,46 @@ async function sendTaskAssignedNotification({ assigneeGhlUserId, creatorGhlUserI
     };
   };
 
-  return sendPushToGhlUser(assigneeGhlUserId, notification);
+  const result = await sendPushToGhlUser(assigneeGhlUserId, notification);
+  // Record the outcome on the DB trigger's notification_queue row so the
+  // ledger stays honest for iOS-created tasks too (they push via this
+  // endpoint, not via createCommandCenterTask).
+  if (taskId) await markTaskPushLedger(taskId, assigneeGhlUserId, result);
+  return result;
+}
+
+/**
+ * Mark the notification_queue row that the command_center_tasks DB trigger
+ * wrote for (taskId, assignee) with the real APNs outcome. The queue was
+ * designed as a push pipeline but nothing ever drained it — every row sat
+ * 'pending' forever while pushes (when they happened at all) went out through
+ * other paths. Delivery now happens at task creation; the queue survives
+ * purely as the delivery LEDGER, and this is the only writer that moves rows
+ * out of 'pending'.
+ *
+ * Notes:
+ *  - queue user_id holds the GHL user ID (not a profile UUID) — that mismatch
+ *    is why the old /api/notifications/pending join could never find tokens.
+ *  - iOS sends uppercase UUIDs (Swift uuidString), the trigger stores
+ *    lowercase — ilike (no wildcards) gives case-insensitive equality.
+ *  - Best-effort: a ledger write must never break a push path.
+ */
+async function markTaskPushLedger(taskId, assigneeGhlUserId, result) {
+  try {
+    const delivered = result && result.sent > 0;
+    const update = delivered
+      ? { status: 'sent', sent_at: new Date().toISOString(), attempts: 1 }
+      : { status: 'failed', attempts: 1, error_message: 'no profile / no active push tokens / APNs send failed' };
+
+    await supabase
+      .from('notification_queue')
+      .update(update)
+      .eq('user_id', assigneeGhlUserId)
+      .eq('status', 'pending')
+      .ilike('data->>taskId', String(taskId));
+  } catch (err) {
+    console.error(`⚠️ [TASK APN] Ledger update failed for task ${taskId}:`, err.message);
+  }
 }
 
 /**
@@ -182,6 +221,7 @@ async function sendTaskUrgentNotification({ assigneeGhlUserId, contactName, cont
 
 module.exports = {
   sendPushToGhlUser,
+  markTaskPushLedger,
   sendTaskAssignedNotification,
   sendTaskCompletedNotification,
   sendTaskOverdueNotification,
