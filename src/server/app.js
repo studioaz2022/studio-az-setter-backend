@@ -15321,6 +15321,18 @@ function createApp() {
     }
   }
 
+  // 30-min pre-consultation reminder push to the assigned artist. Debounced
+  // via appointments.consult_reminder_sent_at (claim-before-send). Gated by
+  // backgroundLoopsAllowed so a laptop dev server can never push artists.
+  if (backgroundLoopsAllowed && process.env.DISABLE_CONSULT_REMINDER_LOOP !== "1") {
+    try {
+      const { startConsultReminderLoop } = require("../services/consultReminderLoop");
+      startConsultReminderLoop();
+    } catch (err) {
+      console.error("[app] failed to start consult reminder loop:", err.message || err);
+    }
+  }
+
   // Google Calendar watch-channel renewal (re-registers channels expiring
   // within 24h; also a sync safety net). Same opt-out as the loop above.
   if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
