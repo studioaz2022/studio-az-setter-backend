@@ -15433,6 +15433,19 @@ function createApp() {
     }
   }
 
+  // Relays the GHL "Login security code" email into Discord so a barber at
+  // the front desk can finish a login without opening the owner's inbox.
+  // Claim-before-post via a Gmail label, so a redeploy can't double-post.
+  // Set DISABLE_LOGIN_CODE_RELAY=1 to opt out.
+  if (backgroundLoopsAllowed && process.env.DISABLE_LOGIN_CODE_RELAY !== "1") {
+    try {
+      const { startLoginCodeRelay } = require("../services/ghlLoginCodeRelay");
+      startLoginCodeRelay();
+    } catch (err) {
+      console.error("[app] failed to start login code relay:", err.message || err);
+    }
+  }
+
   // Google Calendar watch-channel renewal (re-registers channels expiring
   // within 24h; also a sync safety net). Same opt-out as the loop above.
   if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
