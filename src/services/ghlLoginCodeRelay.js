@@ -28,7 +28,7 @@
 //   GMAIL_WORK_CLIENT_SECRET   OAuth client secret (required)
 //   GMAIL_WORK_REFRESH_TOKEN   refresh token       (required)
 //   DISCORD_LOGIN_CODE_WEBHOOK_URL  Discord channel webhook (required)
-//   GHL_CODE_SENDER            override sender match (optional)
+//   GHL_CODE_SENDERS           comma-separated sender override (optional)
 //   DISABLE_LOGIN_CODE_RELAY=1 opt out entirely
 
 require("dotenv").config({ quiet: true });
@@ -39,8 +39,24 @@ const STARTUP_GRACE_MS = 15 * 1000; // don't collide with deploy boot
 const RELAY_MAX_AGE_MS = 10 * 60 * 1000; // older than this = claim, don't post
 const RELAY_LABEL = "Relayed to Discord";
 
-const SENDER =
-  process.env.GHL_CODE_SENDER || "noreply@notif.onthebusinesscrm.com";
+// GHL has sent this same email from TWO addresses: the white-labeled domain
+// (current, since ~Jul 2026) and GHL's default mailbox domain (used through
+// Jun 2026, and still the fallback if white-label delivery ever fails).
+// Matching only the white-label one means a silent miss — the barber gets
+// nothing and no error is logged. Match both.
+const DEFAULT_SENDERS = [
+  "noreply@notif.onthebusinesscrm.com",
+  "noreply@mailbox.gohighlevel.com",
+];
+const SENDERS = (process.env.GHL_CODE_SENDERS || process.env.GHL_CODE_SENDER)
+  ? (process.env.GHL_CODE_SENDERS || process.env.GHL_CODE_SENDER)
+      .split(",")
+      .map((s) => s.trim())
+      .filter(Boolean)
+  : DEFAULT_SENDERS;
+
+// Subject match matters: the same senders also emit "OTP for email id change"
+// and "OTP for Phone Number change", which are NOT front-desk login codes.
 const SUBJECT = "Login security code";
 
 const CLIENT_ID = process.env.GMAIL_WORK_CLIENT_ID;
@@ -155,7 +171,13 @@ function extractBody(payload) {
  * anchor on "is <code>" first and only fall back to a bare 6-digit match.
  */
 function parseCode(body) {
-  const anchored = body.match(/\bis\s+(\d{6})\b/);
+  // Two known templates:
+  //   white-label : "... logging into app.<domain> [link] is 818327."
+  //   ghl default : "Your login security code: 467589"
+  // Anchor on both. The bare-6-digit fallback stays last because the
+  // white-label body embeds a tracking link full of digit runs.
+  const anchored =
+    body.match(/\bcode:\s*(\d{6})\b/i) || body.match(/\bis\s+(\d{6})\b/);
   const code = anchored
     ? anchored[1]
     : (body.match(/(?:^|\s)(\d{6})(?=\s|\.|$)/) || [])[1] || null;
@@ -207,7 +229,7 @@ async function pollOnce({ dryRun = false } = {}) {
   const labelId = await ensureLabelId(token);
 
   const query = [
-    `from:${SENDER}`,
+    `from:(${SENDERS.join(" OR ")})`,
     `subject:"${SUBJECT}"`,
     "newer_than:1d",
     `-label:"${RELAY_LABEL}"`,
