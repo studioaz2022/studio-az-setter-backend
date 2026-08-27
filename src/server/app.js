@@ -14989,6 +14989,9 @@ function createApp() {
   // ═══ LEADS COMMAND CENTER ROUTES ═══
   app.use("/api/leads", leadsRoutes);
 
+  // ═══ ADS TRANSPARENCY ROUTES (per-artist Meta ad metrics) ═══
+  app.use("/api/ads", require("../ads/adsRoutes"));
+
   // ═══ GOOGLE REVIEWS (Places API) ═══
   // Public endpoint — barbershop-website pulls live Google reviews here.
   // No auth required (it's just rendering already-public reviews).
