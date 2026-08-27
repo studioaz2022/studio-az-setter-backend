@@ -105,4 +105,7 @@ async function sendPaymentReceivedNotification({ artistGhlUserId, contactName, a
 
 module.exports = {
   sendPaymentReceivedNotification,
+  // Exported for other owner-facing pushes (deposit refund approvals) that need
+  // the same GHL user → profile → push_tokens resolution.
+  sendPushToGhlUser,
 };

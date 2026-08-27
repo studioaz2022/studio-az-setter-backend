@@ -482,6 +482,52 @@ async function refundPayment({
 }
 
 /**
+ * Read one payment, primarily for its processing fee.
+ *
+ * `processing_fee` is only populated once Square SETTLES the payment — usually
+ * the next business day. A payment taken and cancelled the same day will come
+ * back with the field absent, which is not an error and must not be treated as
+ * a zero fee. Callers get `feeCents: null` and decide whether to estimate.
+ *
+ * Returns null when the payment can't be read at all.
+ */
+async function getPayment(paymentId) {
+  if (!paymentId) return null;
+  try {
+    const res = await axios.get(`${SQUARE_BASE_URL}/v2/payments/${paymentId}`, {
+      headers: {
+        Authorization: `Bearer ${SQUARE_ACCESS_TOKEN}`,
+        "Content-Type": "application/json",
+      },
+    });
+    const payment = res.data?.payment;
+    if (!payment) return null;
+
+    // processing_fee is an ARRAY (Square can split a fee across effective
+    // dates). Sum it rather than reading [0], or a split fee under-reports.
+    const fees = Array.isArray(payment.processing_fee) ? payment.processing_fee : [];
+    const feeCents = fees.length
+      ? fees.reduce((sum, f) => sum + (f?.amount_money?.amount || 0), 0)
+      : null;
+
+    return {
+      id: payment.id,
+      status: payment.status,
+      amountCents: payment.amount_money?.amount ?? null,
+      refundedCents: payment.refunded_money?.amount ?? 0,
+      feeCents,
+      raw: payment,
+    };
+  } catch (err) {
+    console.error(
+      `[Square] Failed to read payment ${paymentId}:`,
+      err.response?.data ? JSON.stringify(err.response.data) : err.message
+    );
+    return null;
+  }
+}
+
+/**
  * Given an orderId from a webhook, fetch the order and return the contactId
  * from reference_id.
  */
@@ -569,6 +615,7 @@ module.exports = {
   getCheckoutSession,
   processCheckoutPayment,
   refundPayment,
+  getPayment,
   getContactIdFromOrder,
   getOrderMetadata,
   squareEnv, // exported for tests

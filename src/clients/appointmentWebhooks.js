@@ -357,9 +357,43 @@ async function handleAppointmentUpdated(payload) {
     }).catch(err => console.error('⚠️ Reschedule webhook failed (non-fatal):', err.message));
   }
 
+  // Queue a deposit refund decision for Lionel when a deposit booking is
+  // cancelled. Gated on isCancelled specifically, NOT on the time changing: a
+  // reschedule carries the deposit to the new date and must never queue a
+  // refund, and both arrive through this same handler. No-shows are a distinct
+  // status, so they never satisfy isCancelled.
+  if (isCancelled) {
+    queueDepositRefundSafe({
+      appointmentId: appointment.id,
+      calendarId: appointment.calendar_id,
+      contactId: appointment.contact_id,
+      contactName: rawAppointment.contactName || null,
+      appointmentStart: appointment.start_time,
+      serviceLabel: appointment.title,
+    });
+  }
+
   // Mirror change onto the artist's Google Calendar (handles cancel too —
   // mirrorAppointmentToGoogle removes the event when status is cancelled)
   mirrorToGoogleSafe(rawAppointment);
+}
+
+/**
+ * Queue a barbershop deposit refund request. Fire-and-forget: a cancellation
+ * webhook must never fail because the refund queue had a bad day, and the vast
+ * majority of cancellations aren't deposit bookings and skip out immediately.
+ */
+function queueDepositRefundSafe(args) {
+  try {
+    const { createRequestForCancellation } = require('../booking/depositRefund');
+    createRequestForCancellation(args)
+      .then((res) => {
+        if (res?.created) console.log(`💸 Deposit refund request queued for ${args.appointmentId}`);
+      })
+      .catch((e) => console.error('⚠️ Deposit refund queue failed (non-fatal):', e.message));
+  } catch (e) {
+    console.error('⚠️ Deposit refund module unavailable (non-fatal):', e.message);
+  }
 }
 
 /**
@@ -370,6 +404,21 @@ async function handleAppointmentDeleted(payload) {
 
   const appointmentId = payload.appointment?.id || payload.appointmentId;
   const rawAppointment = payload.appointment || payload;
+
+  // Read the row BEFORE deleting it. A delete payload often omits startTime and
+  // calendarId, and those two are exactly what the refund band is computed from
+  // — once the row is gone there is nothing left to derive them from.
+  let deletedRow = null;
+  try {
+    const { data } = await supabase
+      .from('appointments')
+      .select('id, calendar_id, contact_id, start_time, title')
+      .eq('id', appointmentId)
+      .maybeSingle();
+    deletedRow = data || null;
+  } catch (e) {
+    console.error('⚠️ Could not snapshot appointment before delete:', e.message);
+  }
 
   const { error } = await supabase
     .from('appointments')
@@ -387,6 +436,19 @@ async function handleAppointmentDeleted(payload) {
 
   // Notify the mentor when an apprentice's tattoo is deleted (treated as cancelled)
   await notifyMentorOfApprenticeTattoo(rawAppointment, 'cancelled');
+
+  // A deleted deposit booking is a cancellation as far as the client's money is
+  // concerned — same refund path, fed from the pre-delete snapshot.
+  if (deletedRow) {
+    queueDepositRefundSafe({
+      appointmentId: deletedRow.id,
+      calendarId: deletedRow.calendar_id,
+      contactId: deletedRow.contact_id,
+      contactName: rawAppointment.contactName || null,
+      appointmentStart: deletedRow.start_time,
+      serviceLabel: deletedRow.title,
+    });
+  }
 
   // Remove the mirror event from the artist's Google Calendar (if any)
   googleCalSync

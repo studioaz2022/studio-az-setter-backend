@@ -508,6 +508,11 @@ function createApp() {
         'https://studio-az-check-in.onrender.com', // Kiosk check-in app
         'https://studio-az-checkin.vercel.app', // Kiosk check-in (Vercel)
         'https://studio-az-checkin-test.vercel.app', // Kiosk check-in TEST site (stable preview alias)
+        // Vercel's auto-generated production aliases for the "check-in" project.
+        // Listed explicitly rather than by regex: `check-in-*.vercel.app` is a
+        // globally claimable namespace, and these endpoints are unauthenticated.
+        'https://check-in-seven-eosin.vercel.app',
+        'https://check-in-studioaz2022-studioaz2022s-projects.vercel.app',
         'https://consent.studioaztattoo.com', // Consent form web app
         'https://refund.studioaztattoo.com', // Refund request form (Phase 6)
         'http://localhost:3003', // Refund form dev (Phase 6)
@@ -3708,6 +3713,90 @@ function createApp() {
     }
     return true;
   }
+
+  // ═══ BARBERSHOP DEPOSIT REFUNDS — owner approval (BARBER_REFUND_APPROVAL_PLAN.md) ═══
+  //
+  // Backs the Refunds card in the iOS Tools tab. Owner-gated because these move
+  // real money; the same x-owner-key the settle endpoints already use.
+  // Nothing here ever refunds without an explicit approve call.
+
+  app.get("/api/barber-refunds", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { listRequests } = require("../booking/depositRefund");
+      const requests = await listRequests({
+        status: req.query.status || undefined,
+        limit: Math.min(Number(req.query.limit) || 50, 200),
+      });
+      res.json({
+        success: true,
+        requests,
+        pendingCount: requests.filter((r) => r.status === "pending").length,
+      });
+    } catch (err) {
+      console.error("❌ /api/barber-refunds:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.get("/api/barber-refunds/:id", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { getRequest } = require("../booking/depositRefund");
+      const request = await getRequest(req.params.id);
+      if (!request) {
+        return res.status(404).json({ success: false, error: "Refund request not found" });
+      }
+      res.json({ success: true, request });
+    } catch (err) {
+      console.error("❌ /api/barber-refunds/:id:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  // Issue the refund. Body: { amountCents } — must be one of the three amounts
+  // the request offers (full / minus fee / zero); the service re-validates and
+  // rejects anything else rather than trusting the client's arithmetic.
+  app.post("/api/barber-refunds/:id/approve", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { approveRequest } = require("../booking/depositRefund");
+      const { amountCents } = req.body || {};
+      if (amountCents == null) {
+        return res.status(400).json({ success: false, error: "amountCents is required" });
+      }
+
+      const result = await approveRequest({ requestId: req.params.id, amountCents });
+
+      if (!result.ok) {
+        // 409 for state conflicts (already refunded, another tap in flight),
+        // 400 for a bad amount, 404 for a request that isn't there.
+        const status =
+          result.code === "not_found" ? 404 :
+          result.code === "invalid_amount" ? 400 :
+          result.code === "square_failed" ? 502 : 409;
+        return res.status(status).json({ success: false, ...result });
+      }
+
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("❌ /api/barber-refunds/:id/approve:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
+  app.post("/api/barber-refunds/:id/decline", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { declineRequest } = require("../booking/depositRefund");
+      const result = await declineRequest({ requestId: req.params.id });
+      if (!result.ok) return res.status(409).json({ success: false, ...result });
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("❌ /api/barber-refunds/:id/decline:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
 
   app.post("/api/reconciliations/:reconciliationId/settle", async (req, res) => {
     if (!requireOwnerKey(req, res)) return;
@@ -13795,6 +13884,17 @@ function createApp() {
       }
     });
   }
+
+  /**
+   * GET /api/kiosk/ping
+   * Reachability probe for the kiosk's offline guard. Deliberately does no I/O
+   * (no GHL, no Supabase) so the iPad can poll it cheaply every few seconds
+   * while the shop WiFi is flapping. A successful response also proves CORS is
+   * working for the caller's origin, which is the other way the kiosk goes dark.
+   */
+  app.get("/api/kiosk/ping", (_req, res) => {
+    res.json({ success: true, ok: true });
+  });
 
   /**
    * GET /api/kiosk/barber-appointments?ghlUserId=X
