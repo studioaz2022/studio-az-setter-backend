@@ -29,6 +29,9 @@
 //   GMAIL_WORK_REFRESH_TOKEN   refresh token       (required)
 //   DISCORD_LOGIN_CODE_WEBHOOK_URL  Discord channel webhook (required)
 //   GHL_CODE_SENDERS           comma-separated sender override (optional)
+//   GHL_CODE_RECIPIENT         mailbox that must be the recipient (default
+//                              support@studioaz.us) — guards against relaying
+//                              the owner's personal admin codes
 //   DISABLE_LOGIN_CODE_RELAY=1 opt out entirely
 
 require("dotenv").config({ quiet: true });
@@ -58,6 +61,19 @@ const SENDERS = (process.env.GHL_CODE_SENDERS || process.env.GHL_CODE_SENDER)
 // Subject match matters: the same senders also emit "OTP for email id change"
 // and "OTP for Phone Number change", which are NOT front-desk login codes.
 const SUBJECT = "Login security code";
+
+// DEFENCE IN DEPTH. The owner's PERSONAL inbox (chavezctz@gmail.com) receives
+// the byte-identical email — same sender, same subject — for ADMIN-level GHL
+// logins. Sender/subject matching cannot tell the two apart; today the only
+// thing separating them is which refresh token this service holds.
+//
+// That is one config mistake away from posting an admin code to a barbers-only
+// channel. So verify the delivered-to recipient on every message and refuse
+// anything not addressed to the work mailbox, even if the token is swapped or
+// someone later adds a forwarding rule.
+const EXPECTED_RECIPIENT = (
+  process.env.GHL_CODE_RECIPIENT || "support@studioaz.us"
+).toLowerCase();
 
 const CLIENT_ID = process.env.GMAIL_WORK_CLIENT_ID;
 const CLIENT_SECRET = process.env.GMAIL_WORK_CLIENT_SECRET;
@@ -186,6 +202,26 @@ function parseCode(body) {
   return { code, context: ctx ? ctx[1].trim() : null };
 }
 
+/**
+ * True only if the message was actually delivered to the work mailbox.
+ * Checks Delivered-To first (set by the receiving server, harder to spoof
+ * than To:), then falls back to To/Cc.
+ */
+function isForWorkMailbox(payload) {
+  const headers = payload?.headers || [];
+  const want = EXPECTED_RECIPIENT;
+
+  const pick = (name) =>
+    headers
+      .filter((h) => h.name.toLowerCase() === name)
+      .map((h) => (h.value || "").toLowerCase());
+
+  const delivered = pick("delivered-to");
+  if (delivered.length) return delivered.some((v) => v.includes(want));
+
+  return [...pick("to"), ...pick("cc")].some((v) => v.includes(want));
+}
+
 /* --------------------------------------------------------------- discord */
 
 async function postToDiscord({ code, context, receivedAt }) {
@@ -259,6 +295,14 @@ async function pollOnce({ dryRun = false } = {}) {
     }
 
     const isFresh = Date.now() - receivedAt <= RELAY_MAX_AGE_MS;
+    const isOurs = isForWorkMailbox(full.data.payload);
+
+    if (!isOurs) {
+      console.error(
+        `[loginCodeRelay] 🚨 REFUSING ${id} — not addressed to ${EXPECTED_RECIPIENT}. ` +
+          "This may be an admin-level code from another mailbox. Not posting."
+      );
+    }
 
     if (dryRun) {
       console.log(
@@ -275,10 +319,10 @@ async function pollOnce({ dryRun = false } = {}) {
       auth(token)
     );
 
-    if (!code || !isFresh) {
+    if (!code || !isFresh || !isOurs) {
       console.log(
         `[loginCodeRelay] claimed ${id} without posting (${
-          !code ? "unparseable" : "stale"
+          !isOurs ? "wrong recipient" : !code ? "unparseable" : "stale"
         })`
       );
       continue;
@@ -356,4 +400,5 @@ module.exports = {
   // Exported for tests.
   parseCode,
   extractBody,
+  isForWorkMailbox,
 };
