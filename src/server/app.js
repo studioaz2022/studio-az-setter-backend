@@ -3785,6 +3785,59 @@ function createApp() {
     }
   });
 
+  // Queue a refund request for an ALREADY-cancelled appointment.
+  //
+  // The normal path is the cancellation webhook. This covers appointments that
+  // were cancelled before the feature existed, and it must run on the server
+  // because only Render holds the production Square token that can read a real
+  // settled `processing_fee` — the same call from a laptop hits sandbox and
+  // silently falls back to the estimate.
+  //
+  // `cancelledAt` defaults to the appointment row's updated_at (when the
+  // cancellation actually landed), NOT now() — using now() would compute the
+  // notice from today and could hand someone a refund band they never earned.
+  app.post("/api/barber-refunds/backfill", async (req, res) => {
+    if (!requireOwnerKey(req, res)) return;
+    try {
+      const { appointmentId, cancelledAt } = req.body || {};
+      if (!appointmentId) {
+        return res.status(400).json({ success: false, error: "appointmentId is required" });
+      }
+
+      const { data: appt, error } = await supabase
+        .from("appointments")
+        .select("id, calendar_id, contact_id, start_time, title, status, updated_at")
+        .eq("id", appointmentId)
+        .maybeSingle();
+
+      if (error) return res.status(500).json({ success: false, error: error.message });
+      if (!appt) return res.status(404).json({ success: false, error: "Appointment not found" });
+
+      const status = String(appt.status || "").toLowerCase();
+      if (!["cancelled", "canceled"].includes(status)) {
+        return res.status(409).json({
+          success: false,
+          error: `Appointment status is "${appt.status}", not cancelled — refusing to queue a refund for it.`,
+        });
+      }
+
+      const { createRequestForCancellation } = require("../booking/depositRefund");
+      const result = await createRequestForCancellation({
+        appointmentId: appt.id,
+        calendarId: appt.calendar_id,
+        contactId: appt.contact_id,
+        appointmentStart: appt.start_time,
+        serviceLabel: appt.title,
+        cancelledAt: cancelledAt ? new Date(cancelledAt) : new Date(appt.updated_at),
+      });
+
+      res.json({ success: true, ...result });
+    } catch (err) {
+      console.error("❌ /api/barber-refunds/backfill:", err.message);
+      res.status(500).json({ success: false, error: err.message });
+    }
+  });
+
   app.post("/api/barber-refunds/:id/decline", async (req, res) => {
     if (!requireOwnerKey(req, res)) return;
     try {
