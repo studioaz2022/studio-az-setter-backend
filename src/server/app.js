@@ -12725,6 +12725,8 @@ function createApp() {
     /**
      * GET /api/frontdesk/availability
      *   ?location=&staffGhlUserId=&calendarId=&date=YYYY-MM-DD&durationMinutes=
+     *   [&stepMinutes=]   optional finer cadence (5-240) for a custom-time
+     *                     booking; defaults to the calendar's slotInterval
      *
      * Open-slot finder for ONE staff member on ONE day. Reads the
      * Supabase cache for that staff's existing appointments + blocks
@@ -12848,7 +12850,20 @@ function createApp() {
           fdGetCalendarMeta(sdk, calendarId),
           fdGetSchedulesForStaff(sdk, resolved.locationId, staffId),
         ]);
-        const stepMinutes = Math.max(5, calMeta.intervalMinutes || 15);
+        // The calendar's own interval is the default cadence. The desk
+        // can ask for a finer one (?stepMinutes=5) to place a booking
+        // at an arbitrary time — David 2026-08-28 asking for "a custom
+        // appointment ... literally every 5 minute interval", for the
+        // walk-in neck trim / brow wax cases the fixed service grid
+        // cannot express. Opt-in per request, so the calendar's
+        // configured interval still governs every normal booking and
+        // the public widget's cadence is untouched.
+        const calStep = Math.max(5, calMeta.intervalMinutes || 15);
+        const askedStep = parseInt(req.query.stepMinutes, 10);
+        const stepMinutes =
+          Number.isFinite(askedStep) && askedStep >= 5 && askedStep <= 240
+            ? askedStep
+            : calStep;
         const stepMs = stepMinutes * 60 * 1000;
         const dur = durationMinutes * 60 * 1000;
         const nowMs = Date.now();
@@ -12885,15 +12900,44 @@ function createApp() {
         const anyWindowStart = minToMs(9 * 60);
         const anyWindowEnd = minToMs(21 * 60);
 
-        // Slot generation: step by calendar.slotInterval (Item 4). A
-        // slot starting at t with `duration` mins is OPEN if it does
-        // not overlap any active busy interval, ends inside the day,
-        // and is not in the past.
+        // Slot generation: step by calendar.slotInterval (Item 4), PLUS
+        // an anchor at the end of every existing appointment.
+        //
+        // The step grid alone is anchored to an arbitrary window origin,
+        // which strands time. Reported by David 2026-08-28 and
+        // reproduced exactly: his haircut calendar has a 40-minute
+        // interval, Spencer Milkert ran 1:20–2:00pm, and the earliest
+        // slot the desk was offered was 2:20pm — the 9:00am grid
+        // (9:00, 9:40, 10:20 … 1:40, 2:20) simply has no 2:00 point.
+        // 20 minutes of David's chair went unbookable, and the desk
+        // could not override it: he had a client and the barber's
+        // approval, and still had to book it from the barber's phone.
+        //
+        // So a booking may also start exactly when the previous one
+        // ends. Those anchors are what make back-to-back possible; the
+        // grid keeps the familiar cadence for everything else. This is
+        // the STAFF endpoint, not the public widget, so a non-grid
+        // start here never leaks into the online booking rhythm.
         function generateSlots(rangeStart, rangeEnd) {
+          const latestStart = rangeEnd - dur;
+          const candidates = [];
+          // 1. The regular cadence, anchored to the window start.
+          for (let t = rangeStart; t <= latestStart; t += stepMs) {
+            candidates.push(t);
+          }
+          // 2. The moment each existing appointment ends — clamped into
+          //    this range so a busy block that spills past the window
+          //    doesn't invent an out-of-range start.
+          for (const b of busy) {
+            if (b.end >= rangeStart && b.end <= latestStart) {
+              candidates.push(b.end);
+            }
+          }
+          const seen = new Set();
           const out = [];
-          // Anchor the first slot to the rangeStart (so a 9:00 open
-          // window with a 20-min step yields 9:00, 9:20, 9:40…).
-          for (let t = rangeStart; t + dur <= rangeEnd; t += stepMs) {
+          for (const t of candidates.sort((a, z) => a - z)) {
+            if (seen.has(t)) continue;
+            seen.add(t);
             if (t < nowMs) continue;
             const endT = t + dur;
             const overlaps = busy.some(
@@ -12939,8 +12983,12 @@ function createApp() {
           staffGhlUserId: staffId,
           calendarId,
           durationMinutes,
-          // Item 4: chip step driven by GHL's calendar.slotInterval.
+          // Item 4: chip step driven by GHL's calendar.slotInterval,
+          // unless the caller asked for a finer custom grid.
           stepMinutes,
+          // The calendar's configured cadence, regardless of any
+          // ?stepMinutes override — lets the FE show "custom" state.
+          calendarStepMinutes: calStep,
           // Item 3: per-day open intervals (ISO timestamps for FE
           // visualization — knowing if a chip is in or out of hours).
           openIntervals: openIntervalsMs.map((iv) => ({
