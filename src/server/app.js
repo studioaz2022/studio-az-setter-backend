@@ -613,6 +613,33 @@ function createApp() {
     },
   });
 
+  // Multer rejects the ENTIRE multipart request when a client exceeds either
+  // limit — not just the offending file. Left unhandled, that error escapes to
+  // Express's default handler as an opaque 500 with an HTML body, and a caller
+  // that doesn't check response.ok reads it as success while the whole payload
+  // (reference photos AND every form field alongside them) is silently dropped.
+  // Answer with a specific, machine-readable status instead.
+  const uploadRefImages = (req, res, next) =>
+    upload.array("files", 3)(req, res, (err) => {
+      if (!err) return next();
+      if (err instanceof multer.MulterError) {
+        const tooBig = err.code === "LIMIT_FILE_SIZE";
+        // LIMIT_FILE_COUNT = more than `files` in one field; LIMIT_UNEXPECTED_FILE
+        // = a file on a field we don't accept. Both read as "too many" to a client.
+        const tooMany =
+          err.code === "LIMIT_FILE_COUNT" || err.code === "LIMIT_UNEXPECTED_FILE";
+        const error = tooBig
+          ? "Image too large — 10MB max per file."
+          : tooMany
+            ? "Too many files — 3 images max."
+            : "Upload rejected.";
+        console.error(`❌ [UPLOAD] ${req.path} rejected: ${err.code} — ${err.message}`);
+        return res.status(tooBig ? 413 : 400).json({ ok: false, error, code: err.code });
+      }
+      console.error(`❌ [UPLOAD] ${req.path} failed:`, err.message || err);
+      return res.status(400).json({ ok: false, error: "Upload failed." });
+    });
+
   // Lead endpoints for widget form submissions
   app.post("/lead/partial", async (req, res) => {
     try {
@@ -709,7 +736,7 @@ function createApp() {
     }
   });
 
-  app.post("/lead/final", upload.array("files", 3), async (req, res) => {
+  app.post("/lead/final", uploadRefImages, async (req, res) => {
     try {
       console.log("\n📝 ════════════════════════════════════════════════════════");
       console.log("📝 LEAD FINAL SUBMISSION");
@@ -6593,7 +6620,7 @@ function createApp() {
   // POST /api/tattoo/inquiry — Form submission from artist bio link landing pages
   // Creates/upserts GHL contact, assigns artist as owner, posts inbound SMS
   // Accepts JSON or multipart/form-data (with `data` JSON field + `files` images)
-  app.post("/api/tattoo/inquiry", upload.array("files", 3), async (req, res) => {
+  app.post("/api/tattoo/inquiry", uploadRefImages, async (req, res) => {
     try {
       let payload = {};
       if (req.body && typeof req.body.data === "string") {
@@ -7190,7 +7217,7 @@ function createApp() {
   // bubble onto a real GHL field — for now we just log + return ok.
   app.post(
     "/api/tattoo/fill/:token",
-    upload.array("files", 3),
+    uploadRefImages,
     async (req, res) => {
       // Step 1: lock the token first. If the token is invalid we never touch GHL.
       let tokenContext;
