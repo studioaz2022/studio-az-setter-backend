@@ -13,12 +13,8 @@
   "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.78.0",
-    "@cocal/google-calendar-mcp": "^2.6.2",
     "@gohighlevel/api-client": "^2.2.2",
-    "@gongrzhe/server-gmail-autoauth-mcp": "^1.1.11",
     "@instantdb/admin": "^0.22.148",
-    "@isaacphi/mcp-gdrive": "^0.2.0",
-    "@modelcontextprotocol/sdk": "^1.30.0",
     "@supabase/supabase-js": "^2.48.1",
     "axios": "^1.13.2",
     "cors": "^2.8.5",

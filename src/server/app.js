@@ -15067,13 +15067,6 @@ function createApp() {
   // ═══ ADS TRANSPARENCY ROUTES (per-artist Meta ad metrics) ═══
   app.use("/api/ads", require("../ads/adsRoutes"));
 
-  // ═══ GOOGLE MCP GATEWAY (read-only Gmail/Drive/Calendar over MCP) ═══
-  // Lets MCP clients with no routing rules of their own (Cowork, Claude
-  // Desktop) reach both Google accounts — the account is in every tool name.
-  // Lazy-init and fully self-contained: if it can't start, it 503s on its own
-  // route and never affects anything else in this process.
-  app.use("/google-mcp", require("../googleMcp/googleMcpRoutes"));
-
   // ═══ GOOGLE REVIEWS (Places API) ═══
   // Public endpoint — barbershop-website pulls live Google reviews here.
   // No auth required (it's just rendering already-public reviews).
