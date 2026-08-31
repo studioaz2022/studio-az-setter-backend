@@ -94,4 +94,69 @@ router.get("/overview", async (req, res) => {
   }
 });
 
+// ─── Ledger (Phase 4) ───────────────────────────────────────────────────────
+
+const { getLedger, postCredit, accrueForPeriod } = require("./ledgerService");
+
+// GET /api/ads/artist/:ghlUserId/ledger — statement + balance (self or owner)
+router.get("/artist/:ghlUserId/ledger", async (req, res) => {
+  try {
+    const requester = await resolveRequester(req);
+    if (!requester) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+    const { ghlUserId } = req.params;
+    if (!canSeeLane(requester, ghlUserId)) {
+      return res.status(403).json({ success: false, error: "Forbidden — not your lane" });
+    }
+    const ledger = await getLedger(ghlUserId);
+    return res.json({ success: true, ghlUserId, ...ledger });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status === 500) console.error("❌ GET /api/ads ledger error:", err.message || err);
+    return res.status(status).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/ads/artist/:ghlUserId/ledger/credit — owner/internal only.
+// Body: { amount, source?, externalRef?, note? }. Artists cannot credit themselves.
+router.post("/artist/:ghlUserId/ledger/credit", async (req, res) => {
+  try {
+    const requester = await resolveRequester(req);
+    if (!requester) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+    if (!canSeeAllLanes(requester)) {
+      return res.status(403).json({ success: false, error: "Owner only" });
+    }
+    const entry = await postCredit(req.params.ghlUserId, req.body || {});
+    return res.json({ success: true, entry });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status === 500) console.error("❌ POST /api/ads credit error:", err.message || err);
+    return res.status(status).json({ success: false, error: err.message });
+  }
+});
+
+// POST /api/ads/accrue — owner/internal only. Body: { since, until } (YYYY-MM-DD).
+// Pulls real Meta spend for the period and writes idempotent debits per lane.
+router.post("/accrue", async (req, res) => {
+  try {
+    const requester = await resolveRequester(req);
+    if (!requester) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+    if (!canSeeAllLanes(requester)) {
+      return res.status(403).json({ success: false, error: "Owner only" });
+    }
+    const { since, until } = req.body || {};
+    const outcome = await accrueForPeriod({ since, until });
+    return res.json({ success: true, ...outcome });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status === 500) console.error("❌ POST /api/ads/accrue error:", err.message || err);
+    return res.status(status).json({ success: false, error: err.message });
+  }
+});
+
 module.exports = router;
