@@ -56,7 +56,16 @@ async function recordPartialLead({ contactId, contactName, phone, email, locatio
   }
 }
 
-/** Mark the form finished so the loop leaves this contact alone. */
+/**
+ * Mark the form finished so the loop leaves this contact alone, and retire any
+ * nudge task already raised for them.
+ *
+ * The second half matters: the nudge fires at 20 minutes, but people do come
+ * back and finish afterwards — the first one live did, four minutes later. Left
+ * alone, the front desk is holding a task telling them to chase someone who has
+ * already converted, which is worse than no task at all. Dismissed rather than
+ * completed: nobody did the work, the reason for it went away.
+ */
 async function resolvePartialLead(contactId) {
   if (!supabase || !contactId) return;
   try {
@@ -67,6 +76,23 @@ async function resolvePartialLead(contactId) {
       .is("completed_at", null);
   } catch (err) {
     console.error(`⚠️ [PARTIAL NUDGE] resolve failed for ${contactId}:`, err.message || err);
+  }
+
+  try {
+    const { data: retired } = await supabase
+      .from("command_center_tasks")
+      .update({ status: "dismissed" })
+      .eq("contact_id", contactId)
+      .eq("type", TASK_TYPES.PARTIAL_LEAD_FOLLOWUP)
+      .in("status", ["pending", "overdue", "urgent"])
+      .select("id");
+    if (retired?.length) {
+      console.log(
+        `🪝 [PARTIAL NUDGE] ${contactId} finished the form — retired ${retired.length} stale task(s)`
+      );
+    }
+  } catch (err) {
+    console.error(`⚠️ [PARTIAL NUDGE] task retire failed for ${contactId}:`, err.message || err);
   }
 }
 

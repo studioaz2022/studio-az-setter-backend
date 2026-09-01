@@ -50,6 +50,21 @@ const TASK_TYPE_LABELS = {
 };
 
 // Task due intervals in hours
+// Per-type push copy, for types the generic format doesn't serve.
+//
+// The default title is "New task: <label>". Those ten characters buy nothing —
+// the notification is self-evidently a new task — and they cost the end of the
+// title on a lock screen: "New task: Unfinished form…" truncated away the part
+// that said what to do. A type listed here owns its whole title and body.
+const TASK_PUSH_OVERRIDES = {
+  [TASK_TYPES.PARTIAL_LEAD_FOLLOWUP]: (contactName, isSpanish) => ({
+    title: isSpanish ? 'Formulario sin terminar' : 'Unfinished form',
+    body: isSpanish
+      ? `${contactName} empezó una consulta y no la terminó`
+      : `${contactName} started a consultation and stopped`,
+  }),
+};
+
 const TASK_DUE_INTERVALS = {
   [TASK_TYPES.SEND_DESIGN_SKETCH]: 24,
   [TASK_TYPES.QUOTE_LEAD]: 24,
@@ -142,11 +157,14 @@ async function createCommandCenterTask(taskData) {
         const isSpanish = language === 'es';
         const label = TASK_TYPE_LABELS[type]?.[isSpanish ? 'es' : 'en']
           || type.replace(/_/g, ' ');
+        const custom = TASK_PUSH_OVERRIDES[type]?.(contactName, isSpanish);
         return {
           // 'task_assigned' — the type iOS already deep-links to the task/contact
           type: 'task_assigned',
-          title: isSpanish ? `Nueva tarea: ${label}` : `New task: ${label}`,
-          body: isSpanish ? `Para ${contactName}` : `For ${contactName}`,
+          title: custom?.title
+            || (isSpanish ? `Nueva tarea: ${label}` : `New task: ${label}`),
+          body: custom?.body
+            || (isSpanish ? `Para ${contactName}` : `For ${contactName}`),
           contactId: contactId || null,
           taskId: task.id,
         };
