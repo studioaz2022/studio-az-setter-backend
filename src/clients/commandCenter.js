@@ -25,6 +25,8 @@ const TASK_TYPES = {
   ARTIST_RESPONSE: 'artist_response',
   // Post-consultation quote verification
   QUOTE_VERIFICATION: 'quote_verification',
+  // Consultation form abandoned after we already had their contact details
+  PARTIAL_LEAD_FOLLOWUP: 'partial_lead_followup',
 };
 
 // Human-readable task labels for push copy, EN/ES (tattoo side requires Spanish).
@@ -43,6 +45,7 @@ const TASK_TYPE_LABELS = {
   [TASK_TYPES.QUOTE_CONFIRMATION]: { en: 'Confirm quote', es: 'Confirmar cotización' },
   [TASK_TYPES.ADMIN_UPDATE]: { en: 'Update from the front desk', es: 'Actualización de recepción' },
   [TASK_TYPES.ARTIST_RESPONSE]: { en: 'Artist response', es: 'Respuesta del artista' },
+  [TASK_TYPES.PARTIAL_LEAD_FOLLOWUP]: { en: 'Unfinished form — reach out', es: 'Formulario sin terminar — contactar' },
   [TASK_TYPES.QUOTE_VERIFICATION]: { en: 'Verify quote', es: 'Verificar cotización' },
 };
 
@@ -62,6 +65,8 @@ const TASK_DUE_INTERVALS = {
   [TASK_TYPES.ADMIN_UPDATE]: 6,
   [TASK_TYPES.ARTIST_RESPONSE]: 2,
   [TASK_TYPES.QUOTE_VERIFICATION]: 2,
+  // Same-day: a half-filled form goes cold fast.
+  [TASK_TYPES.PARTIAL_LEAD_FOLLOWUP]: 4,
 };
 
 /**

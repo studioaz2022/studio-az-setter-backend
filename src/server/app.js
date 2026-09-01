@@ -724,6 +724,20 @@ function createApp() {
       }
 
       console.log("📝 ════════════════════════════════════════════════════════\n");
+      // Open a nudge-ledger row. If they never reach /lead/final, the
+      // partial-lead loop raises a front-desk task ~20 min from now — before
+      // this, a lead who handed over a phone number and quit was invisible.
+      if (contactId) {
+        const { recordPartialLead } = require("../services/partialLeadNudgeLoop");
+        await recordPartialLead({
+          contactId,
+          contactName: [payload.firstName, payload.lastName].filter(Boolean).join(" ") || null,
+          phone: payload.phone || null,
+          email: payload.email || null,
+          locationId: process.env.GHL_LOCATION_ID,
+        });
+      }
+
       return res.status(200).json({
         ok: true,
         contactId,
@@ -820,6 +834,14 @@ function createApp() {
       }
 
       const contactId = result.contactId;
+
+      // They finished the form — stand the partial-lead nudge down.
+      try {
+        const { resolvePartialLead } = require("../services/partialLeadNudgeLoop");
+        await resolvePartialLead(contactId);
+      } catch (nudgeErr) {
+        console.warn("⚠️ Partial-lead resolve failed (non-fatal):", nudgeErr.message);
+      }
 
       // Upload files if any
       if (req.files && req.files.length > 0) {
@@ -5199,9 +5221,41 @@ function createApp() {
         throw error;
       }
 
+      // Newest deposit link that is still sitting unpaid. Without this the
+      // profile can only say "paid" or "no deposit", so a link sent a week ago
+      // and ignored reads identically to one that was never sent — the exact
+      // state the front desk needs to chase. Returned alongside (not inside)
+      // `financials`, which is null for anyone who has never paid a cent.
+      //
+      // checkout_sessions is the live table. (square_checkout_links looks like
+      // the right one by name but nothing has written to it since April.)
+      let pendingDepositLink = null;
+      try {
+        const { data: link } = await supabase
+          .from('checkout_sessions')
+          .select('created_at, amount_cents')
+          .eq('contact_id', contactId)
+          .eq('payment_type', 'deposit')
+          .eq('business', 'tattoo')
+          .eq('status', 'pending')
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
+        if (link) {
+          pendingDepositLink = {
+            sent_at: link.created_at,
+            amount_cents: link.amount_cents,
+          };
+        }
+      } catch (linkErr) {
+        // Non-fatal: the strip just falls back to its paid/none states.
+        console.warn(`[API] Pending deposit link lookup failed for ${contactId}: ${linkErr.message}`);
+      }
+
       res.json({
         success: true,
-        financials: data || null
+        financials: data || null,
+        pendingDepositLink
       });
 
     } catch (error) {
@@ -15561,6 +15615,19 @@ function createApp() {
       startConsultReminderLoop();
     } catch (err) {
       console.error("[app] failed to start consult reminder loop:", err.message || err);
+    }
+  }
+
+  // Front-desk task when someone gives us contact details on the consultation
+  // form and never finishes it. Debounced via partial_lead_nudges.nudged_at
+  // (claim-before-send). Same backgroundLoopsAllowed gate — a dev server must
+  // never raise real tasks.
+  if (backgroundLoopsAllowed && process.env.DISABLE_PARTIAL_LEAD_NUDGE_LOOP !== "1") {
+    try {
+      const { startPartialLeadNudgeLoop } = require("../services/partialLeadNudgeLoop");
+      startPartialLeadNudgeLoop();
+    } catch (err) {
+      console.error("[app] failed to start partial lead nudge loop:", err.message || err);
     }
   }
 
