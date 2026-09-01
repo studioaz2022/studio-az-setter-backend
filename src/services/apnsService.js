@@ -287,6 +287,14 @@ class APNsService {
     if (notification.locationId) {
       payload.locationId = notification.locationId;
     }
+    // iOS reads userInfo["taskId"] to deep-link a tapped task straight into its
+    // own action sheet. Every task push (createCommandCenterTask and the consent
+    // automation) has always SET this field, and this function has always
+    // dropped it — so that branch could never fire and every task notification
+    // fell through to the generic contact-profile fallback instead.
+    if (notification.taskId) {
+      payload.taskId = notification.taskId;
+    }
     if (notification.appointmentStart) {
       payload.appointmentStart = notification.appointmentStart;
     }

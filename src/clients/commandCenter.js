@@ -167,6 +167,12 @@ async function createCommandCenterTask(taskData) {
             || (isSpanish ? `Para ${contactName}` : `For ${contactName}`),
           contactId: contactId || null,
           taskId: task.id,
+          // Both the Command Center and Messages are scoped to the ACTIVE brand
+          // (BrandManager.locationId). Without this a dual-brand user tapping a
+          // tattoo task while the app sits on barbershop lands nowhere. Carried
+          // here so iOS can switch brand before deep-linking, the way the
+          // new_message tap already does. Older builds ignore the field.
+          locationId: locationId || null,
         };
       });
       await markTaskPushLedger(task.id, assigneeId, result);
