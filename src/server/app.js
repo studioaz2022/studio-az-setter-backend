@@ -114,6 +114,7 @@ const {
   getTranscript,
   formatTranscriptText,
   batchDeleteTranscripts,
+  firefliesQuery,
 } = require("../clients/firefliesClient");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
 const {
@@ -6068,6 +6069,81 @@ function createApp() {
     } catch (err) {
       console.error("🔥 Reprocess error:", err);
       return res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES DIAGNOSTICS (read-only)
+  // Reports plan capability before we decide what to archive vs delete:
+  // how many meetings Fireflies actually holds, how many minutes they burn,
+  // and whether audio/video/analytics are reachable on the current plan
+  // (they are gated to Pro+, so each probe is run separately — one
+  // unauthorized field would otherwise fail the whole GraphQL query).
+  // Internal-only (x-internal-key). Writes nothing, deletes nothing.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.get("/api/fireflies/diagnostics", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+
+    const probe = async (label, query, variables) => {
+      try {
+        const data = await firefliesQuery(query, variables);
+        return { label, ok: true, data };
+      } catch (err) {
+        return { label, ok: false, error: err.message };
+      }
+    };
+
+    try {
+      const out = {};
+
+      // 1. Account usage — the authoritative storage numbers.
+      out.user = await probe(
+        "user",
+        `{ user { name email num_transcripts minutes_consumed is_admin } }`
+      );
+
+      // 2. Full inventory with durations. Catches meetings that never reached
+      //    our webhook and so are absent from fireflies_transcripts.
+      out.inventory = await probe(
+        "transcripts",
+        `{ transcripts { id title date duration } }`
+      );
+
+      // Pick a real transcript id to probe the plan-gated fields against.
+      let sampleId = null;
+      if (out.inventory.ok) {
+        const list = out.inventory.data.transcripts || [];
+        if (list.length) sampleId = list[0].id;
+      }
+      out.sampleId = sampleId;
+
+      if (sampleId) {
+        out.audio = await probe(
+          "audio_url",
+          `query T($id: String!) { transcript(id: $id) { id audio_url } }`,
+          { id: sampleId }
+        );
+        out.video = await probe(
+          "video_url",
+          `query T($id: String!) { transcript(id: $id) { id video_url } }`,
+          { id: sampleId }
+        );
+        out.analytics = await probe(
+          "analytics",
+          `query T($id: String!) { transcript(id: $id) { id analytics { sentiments { positive_pourcentage neutral_pourcentage negative_pourcentage } speakers { name duration word_count filler_words questions } } } }`,
+          { id: sampleId }
+        );
+        out.summary = await probe(
+          "summary",
+          `query T($id: String!) { transcript(id: $id) { id summary { overview action_items keywords outline } } }`,
+          { id: sampleId }
+        );
+      }
+
+      res.json({ success: true, ...out });
+    } catch (err) {
+      res.status(500).json({ error: err.message });
     }
   });
 
