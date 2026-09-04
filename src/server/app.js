@@ -5654,6 +5654,13 @@ function createApp() {
   // ═══════════════════════════════════════════════════════════════════════════
   // FIREFLIES.AI WEBHOOK
   // Receives notifications when Fireflies finishes transcribing a meeting.
+  //
+  // ⚠️  RATE LIMIT: the Fireflies account allows only 50 GraphQL requests per
+  // DAY across everything (see src/clients/firefliesClient.js header). The
+  // getTranscript() call below spends one. If the quota is already gone, that
+  // call throws and this handler returns WITHOUT writing a fireflies_transcripts
+  // row — the consultation then exists nowhere: no GHL field, no Supabase row.
+  // Never spend the daily budget on polling or diagnostics during business hours.
   // Acts as a backup when Google Meet/Gemini artifacts are unavailable.
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -5934,6 +5941,8 @@ function createApp() {
 
   // ═══════════════════════════════════════════════════════════════════════════
   // FIREFLIES REPROCESS UNMATCHED TRANSCRIPTS
+  // ⚠️  Fetches one transcript per unmatched row — each costs one of the 50
+  // GraphQL requests/day. Batch carefully. See firefliesClient.js header.
   // Retries matching for unmatched transcripts using GHL contact name search
   // ═══════════════════════════════════════════════════════════════════════════
 
@@ -6166,7 +6175,17 @@ function createApp() {
   // ═══════════════════════════════════════════════════════════════════════════
   // FIREFLIES CLEANUP ENDPOINT
   // Deletes processed transcripts from Fireflies to stay within free plan
-  // storage limits. Call weekly via cron or manually.
+  // storage limits (400 min/seat, pooled, total cap — not monthly).
+  //
+  // ⚠️  Counts against the 50 GraphQL requests/day account cap, though
+  // cheaply: deletes are batched 10-per-request, so clearing 50 transcripts
+  // costs 5 of the 50. See src/clients/firefliesClient.js header.
+  //
+  // ⚠️  Only deletes transcript_ids present in fireflies_transcripts. Meetings
+  // that never reached the webhook are invisible here and survive — as of
+  // 2026-09-04 that was 17 meetings / 183 min, several of them real client
+  // consults whose ONLY copy is in Fireflies. Back those up before widening
+  // this query to delete by anything other than our own tracked rows.
   // ═══════════════════════════════════════════════════════════════════════════
 
   app.post("/api/fireflies/cleanup", async (req, res) => {

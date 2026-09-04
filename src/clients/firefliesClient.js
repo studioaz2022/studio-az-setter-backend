@@ -1,7 +1,49 @@
 // firefliesClient.js
 // Fireflies.ai GraphQL API client for fetching and managing transcripts.
 // Used as a backup transcription source when Google Meet/Gemini artifacts
-// are unavailable (e.g., host joined from mobile).
+// are unavailable (e.g., host joined from mobile). In practice it is the
+// ONLY source — the Google Meet recording/Gemini path has never produced a
+// single artifact (verified 2026-09-04 across all 32 consult contacts).
+//
+// ─────────────────────────────────────────────────────────────────────────
+// ⚠️  HARD RATE LIMIT: 50 GRAPHQL REQUESTS PER DAY (Free/Pro plans)
+// ─────────────────────────────────────────────────────────────────────────
+// This is a DAILY cap on the whole account, not per-endpoint and not
+// per-caller. Business/Enterprise get 60/min instead; we are not on those.
+//
+// Everything shares that one budget: the /fireflies/webhook transcript
+// fetch, the reprocess-unmatched backfill, the cleanup deletes, and any
+// ad-hoc diagnostics. Blowing it through one of them silently breaks the
+// others for the rest of the UTC day.
+//
+// Over the cap, EVERY query returns:
+//   "Too many requests. Please retry after <date> (UTC)"
+// The quota resets at 00:00 UTC, not on a rolling window.
+//
+// Why this matters more than it looks: the webhook handler bails out and
+// returns when getTranscript() throws, WITHOUT writing a row to
+// fireflies_transcripts. A consultation burned by the rate limit leaves no
+// trace anywhere — no GHL field, no Supabase row, no unmatched record. It
+// just silently never existed.
+//
+// So before adding ANY new Fireflies call, budget it against 50/day. Never
+// poll this API in a loop. (Learned the hard way on 2026-09-04: a deploy
+// poll loop hitting a diagnostics endpoint consumed the day's entire quota.)
+//
+// ─────────────────────────────────────────────────────────────────────────
+// PLAN-GATED FIELDS (confirmed against the live account, 2026-09-04)
+// ─────────────────────────────────────────────────────────────────────────
+// Requesting these on our plan fails with "You need to be subscribed to a
+// paid plan to perform this action" — and because one unauthorized field
+// fails the WHOLE query, never mix them into a query you need to succeed:
+//   • audio_url    — BLOCKED (Pro+)
+//   • video_url    — BLOCKED (Pro+)
+//   • analytics    — believed Pro+ per docs; not confirmed
+// Available to us: sentences, title, date, duration, summary, speakers.
+//
+// Storage is capped in MINUTES of stored recordings (400/seat, pooled),
+// not by transcript count, and it does not reset monthly — it is a total
+// cap. Deleting old transcripts is the only way to reclaim it on Free.
 
 require("dotenv").config({ quiet: true });
 const axios = require("axios");
@@ -14,6 +56,13 @@ const FIREFLIES_API_KEY = process.env.FIREFLIES_API_KEY;
 // Base GraphQL executor
 // ---------------------------------------------------------------------------
 
+/**
+ * Execute a GraphQL query against Fireflies.
+ *
+ * ⚠️  Every call spends one of the account's 50 requests per DAY. See the
+ * file header before adding callers. Over the cap this throws
+ * "Fireflies GraphQL error: Too many requests. Please retry after ...".
+ */
 async function firefliesQuery(query, variables = {}) {
   if (!FIREFLIES_API_KEY) {
     throw new Error("FIREFLIES_API_KEY not set");
@@ -129,7 +178,9 @@ async function batchDeleteTranscripts(ids) {
 
   let totalDeleted = 0;
 
-  // Process in chunks of 10
+  // Process in chunks of 10. Each chunk is ONE aliased GraphQL request, so
+  // it costs 1 against the 50/day account cap (see header) — the 60s sleep
+  // below is for the separate 10-deletes-per-minute limit, not the daily one.
   for (let i = 0; i < ids.length; i += 10) {
     const chunk = ids.slice(i, i + 10);
 
