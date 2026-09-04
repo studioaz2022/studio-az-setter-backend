@@ -85,6 +85,38 @@ function tierFor(rawValue) {
 
 const BOOKING_HOST = "https://mn.studioaz.us";
 
+// ── Announcement ──
+// A GHL location Custom Value, so Lionel edits it in Settings → Custom
+// Values, in the tool he is in every day, and it takes effect without a
+// deploy. Empty means no banner at all — the portal shows nothing rather
+// than an empty frame or a stale "we're open as usual".
+//
+// Cached briefly: long enough that a burst of sign-ins doesn't re-query
+// GHL per person, short enough that an edit made because he is leaving
+// tomorrow is live before the next client looks.
+const ANNOUNCEMENT_CV_ID = "S9S7hLDdLRP2vWakt8yN";
+const ANNOUNCEMENT_TTL_MS = 2 * 60 * 1000;
+let announcementCache = { at: 0, text: "" };
+
+async function fetchAnnouncement() {
+  if (Date.now() - announcementCache.at < ANNOUNCEMENT_TTL_MS) {
+    return announcementCache.text;
+  }
+  try {
+    const r = await ghlBarber.locations.getCustomValues({
+      locationId: BARBER_LOCATION_ID,
+    });
+    const hit = (r?.customValues || []).find((v) => v.id === ANNOUNCEMENT_CV_ID);
+    const text = String(hit?.value ?? "").trim();
+    announcementCache = { at: Date.now(), text };
+    return text;
+  } catch (err) {
+    // An announcement is a nicety; never let it take the sign-in down.
+    console.warn("[ff] announcement fetch failed:", err.message);
+    return announcementCache.text;
+  }
+}
+
 // ── Rate limiting ──
 // Per-IP, in memory. Resets on deploy, which is acceptable: the window is
 // minutes and a redeploy is not something an attacker can trigger.
@@ -227,12 +259,14 @@ function registerFriendsFamilyRoutes(app) {
 
       rateLimitReset(ip);
 
+      const announcement = await fetchAnnouncement();
       const firstName = (match.firstNameRaw || match.firstName || "").trim();
       return res.json({
         ok: true,
         firstName: firstName ? firstName.replace(/\b\w/g, (m) => m.toUpperCase()) : "",
         tier: tier.key,
         tierLabel: tier.label,
+        announcement,
         options: tier.options.map((o) => ({
           key: o.key,
           label: o.label,
