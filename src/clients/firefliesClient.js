@@ -103,6 +103,7 @@ async function getTranscript(id) {
         id
         title
         date
+        duration
         sentences {
           text
           speaker_name
@@ -115,6 +116,52 @@ async function getTranscript(id) {
 
   const data = await firefliesQuery(query, { id });
   return data.transcript;
+}
+
+// ---------------------------------------------------------------------------
+// getTranscriptSummary
+// ---------------------------------------------------------------------------
+
+/**
+ * Fetch Fireflies' own AI summary for a transcript.
+ *
+ * Deliberately a SEPARATE request from getTranscript rather than extra fields
+ * on it. A single failing field fails an entire GraphQL query, and losing the
+ * sentences — the only thing we cannot regenerate — to a summary-shape change
+ * or a plan gate would be the expensive failure. The summary is a nice-to-have
+ * archived because it is free to us today and destroyed on delete; the words
+ * are the asset. Costs one extra request/day against the 50/day cap (see
+ * header), which at ~2 consults/day is affordable.
+ *
+ * Never throws — returns null so callers can archive without it.
+ *
+ * @param {string} id
+ * @returns {Promise<object|null>}
+ */
+async function getTranscriptSummary(id) {
+  const query = `
+    query TranscriptSummary($id: String!) {
+      transcript(id: $id) {
+        id
+        summary {
+          overview
+          action_items
+          keywords
+          outline
+          bullet_gist
+          short_summary
+        }
+      }
+    }
+  `;
+
+  try {
+    const data = await firefliesQuery(query, { id });
+    return data?.transcript?.summary || null;
+  } catch (err) {
+    console.warn(`${TAG} Summary fetch failed for ${id} (non-fatal): ${err.message}`);
+    return null;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +295,7 @@ function formatTimestamp(seconds) {
 module.exports = {
   firefliesQuery,
   getTranscript,
+  getTranscriptSummary,
   listTranscripts,
   deleteTranscript,
   batchDeleteTranscripts,

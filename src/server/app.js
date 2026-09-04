@@ -112,10 +112,13 @@ const {
 } = require("../clients/workspaceEvents");
 const {
   getTranscript,
+  getTranscriptSummary,
+  listTranscripts,
   formatTranscriptText,
-  batchDeleteTranscripts,
   firefliesQuery,
 } = require("../clients/firefliesClient");
+const { archiveConsultation } = require("../services/firefliesArchive");
+const { runCleanupSweep } = require("../services/firefliesCleanup");
 const { summarizeConsultation } = require("../ai/consultationSummarizer");
 const {
   determineArtist,
@@ -5853,37 +5856,32 @@ function createApp() {
 
         if (!contactId) {
           console.warn("🔥 Could not match transcript to any contact — storing as unmatched");
-          if (supabase) {
-            await supabase.from("fireflies_transcripts").upsert(
-              {
-                transcript_id: meetingId,
-                meeting_title: transcriptTitle,
-                meeting_date: transcriptDate.toISOString(),
-                status: "unmatched",
-              },
-              { onConflict: "transcript_id" }
-            );
-          }
+          // Archive the words anyway. An unmatched transcript is still a real
+          // client conversation, and Fireflies storage pressure means it may be
+          // deleted upstream before anyone reconciles it by hand.
+          await archiveConsultation({
+            transcript,
+            rawText: formatTranscriptText(transcript.sentences),
+            status: "unmatched",
+          });
           return;
         }
 
         // 3. Check if Google/Gemini artifacts already exist (priority check)
         const googleExists = await checkGoogleArtifactsExist(contactId);
         if (googleExists) {
-          console.log("🔥 Google/Gemini artifacts already exist — skipping Fireflies backup");
-          if (supabase) {
-            await supabase.from("fireflies_transcripts").upsert(
-              {
-                transcript_id: meetingId,
-                contact_id: contactId,
-                meeting_title: transcriptTitle,
-                meeting_date: transcriptDate.toISOString(),
-                status: "skipped_google_exists",
-                processed_at: new Date().toISOString(),
-              },
-              { onConflict: "transcript_id" }
-            );
-          }
+          console.log("🔥 Google/Gemini artifacts already exist — skipping Fireflies GHL write");
+          // Still archive to Supabase. "Google has it too" is a reason not to
+          // overwrite the GHL fields, not a reason to let the only Fireflies
+          // copy be deleted unarchived by the cleanup sweep.
+          await archiveConsultation({
+            transcript,
+            rawText: formatTranscriptText(transcript.sentences),
+            contactId,
+            clientName,
+            status: "skipped_google_exists",
+            updateFields: false,
+          });
           return;
         }
 
@@ -5891,7 +5889,7 @@ function createApp() {
         const rawText = formatTranscriptText(transcript.sentences);
         console.log(`🔥 Formatted transcript: ${rawText.length} chars`);
 
-        // 5. Generate ChatGPT summary
+        // 5. Generate our own summary
         let summaryText = "";
         try {
           summaryText = await summarizeConsultation(rawText, {
@@ -5902,34 +5900,27 @@ function createApp() {
           summaryText = "Summary generation failed. See raw transcript.";
         }
 
-        // 6. Save to GHL custom fields
-        const customField = {
-          Tj9WuXbE1hWtxfTgCMGM: rawText,         // fireflies_transcript_text
-          EU4U5jeDJxXHQ8Jh8gfT: summaryText,     // fireflies_chatgpt_summary
-          LUASmxIwwPBr3SsZEHd9: meetingId,       // fireflies_transcript_id
-          HORoQH6waBo9xSabFbyM: new Date().toISOString(), // fireflies_processed_at
-        };
+        // 6. Fireflies' own AI summary. Free-plan accessible today and
+        //    destroyed when we delete the meeting to reclaim storage, so it is
+        //    worth one extra request to keep. Never fatal.
+        const firefliesSummary = await getTranscriptSummary(meetingId);
 
-        try {
-          await updateContact(contactId, { customField });
-          console.log(`🔥 ✅ Saved Fireflies data to contact ${contactId}`);
-        } catch (err) {
-          console.error("🔥 Failed to update GHL contact:", err.message);
-        }
+        // 7. Archive everywhere: Supabase (canonical), a per-consult GHL note
+        //    (never overwrites), and the "latest consult" custom fields.
+        const archived = await archiveConsultation({
+          transcript,
+          rawText,
+          summaryText,
+          firefliesSummary,
+          contactId,
+          clientName,
+          status: "processed",
+        });
 
-        // 7. Track for cleanup
-        if (supabase) {
-          await supabase.from("fireflies_transcripts").upsert(
-            {
-              transcript_id: meetingId,
-              contact_id: contactId,
-              meeting_title: transcriptTitle,
-              meeting_date: transcriptDate.toISOString(),
-              status: "processed",
-              processed_at: new Date().toISOString(),
-            },
-            { onConflict: "transcript_id" }
-          );
+        if (archived.errors.length) {
+          console.error(`🔥 Archive completed with errors: ${archived.errors.join(" | ")}`);
+        } else {
+          console.log(`🔥 ✅ Archived ${meetingId} for contact ${contactId}`);
         }
 
         console.log("🔥 ════════════════════════════════════════════════════════\n");
@@ -6173,69 +6164,197 @@ function createApp() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
-  // FIREFLIES CLEANUP ENDPOINT
-  // Deletes processed transcripts from Fireflies to stay within free plan
-  // storage limits (400 min/seat, pooled, total cap — not monthly).
+  // FIREFLIES BACKFILL — rescue meetings that never reached the webhook
   //
-  // ⚠️  Counts against the 50 GraphQL requests/day account cap, though
-  // cheaply: deletes are batched 10-per-request, so clearing 50 transcripts
-  // costs 5 of the 50. See src/clients/firefliesClient.js header.
+  // As of 2026-09-04 Fireflies held 50 transcripts while our pipeline tracked
+  // only 33. The other 17 never fired the webhook (or failed before writing a
+  // row), so they exist NOWHERE else — no GHL field, no note, no Supabase row.
+  // Seven are real client consults. The cleanup sweep deletes only IDs it finds
+  // in Supabase, so these survive it, but they are also completely unprotected.
   //
-  // ⚠️  Only deletes transcript_ids present in fireflies_transcripts. Meetings
-  // that never reached the webhook are invisible here and survive — as of
-  // 2026-09-04 that was 17 meetings / 183 min, several of them real client
-  // consults whose ONLY copy is in Fireflies. Back those up before widening
-  // this query to delete by anything other than our own tracked rows.
+  // Reconciles Fireflies against our archive and pulls down anything missing.
+  //
+  // ⚠️  RATE LIMIT: 1 request to list, then 2 per transcript (transcript +
+  // summary), against a 50/day account cap. Hence ?budget= — default 20, which
+  // is ~10 meetings. Run it across several days rather than raising it and
+  // starving the live webhook. See src/clients/firefliesClient.js header.
+  //
+  // Internal-only (x-internal-key). Never deletes.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/fireflies/backfill", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+
+    const budget = Math.max(2, Math.min(Number(req.query.budget) || 20, 48));
+    const dryRun = req.query.dryRun === "true";
+
+    try {
+      if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+      // 1 request: what does Fireflies actually hold?
+      const inventory = await listTranscripts();
+      let spent = 1;
+
+      // What do we already hold the words for?
+      const { data: rows } = await supabase
+        .from("fireflies_transcripts")
+        .select("transcript_id, transcript_text");
+      const archived = new Set(
+        (rows || []).filter((r) => r.transcript_text).map((r) => r.transcript_id)
+      );
+
+      const missing = inventory.filter((t) => !archived.has(t.id));
+      missing.sort((a, b) => (a.date || 0) - (b.date || 0)); // oldest first — most at risk
+
+      if (dryRun) {
+        return res.json({
+          success: true,
+          dryRun: true,
+          firefliesTotal: inventory.length,
+          alreadyArchived: archived.size,
+          missing: missing.length,
+          wouldProcess: Math.floor((budget - spent) / 2),
+          items: missing.map((t) => ({
+            id: t.id,
+            title: t.title,
+            date: t.date ? new Date(t.date).toISOString().slice(0, 10) : null,
+          })),
+        });
+      }
+
+      const results = [];
+      for (const item of missing) {
+        if (spent + 2 > budget) {
+          console.log(`🔁 Backfill stopping — request budget ${budget} reached`);
+          break;
+        }
+
+        let transcript;
+        try {
+          transcript = await getTranscript(item.id);
+          spent++;
+        } catch (err) {
+          // A rate-limit rejection here means the day is done; stop rather than
+          // burning the remainder of the budget on calls that cannot succeed.
+          results.push({ id: item.id, title: item.title, ok: false, error: err.message });
+          if (/Too many requests/i.test(err.message)) {
+            console.error("🔁 Backfill halted — Fireflies daily quota exhausted");
+            break;
+          }
+          continue;
+        }
+
+        if (!transcript || !transcript.sentences || !transcript.sentences.length) {
+          results.push({ id: item.id, title: item.title, ok: false, error: "empty transcript" });
+          continue;
+        }
+
+        const rawText = formatTranscriptText(transcript.sentences);
+        const firefliesSummary = await getTranscriptSummary(item.id);
+        spent++;
+
+        // Match to a contact by name, same convention as the live webhook.
+        let contactId = null;
+        let clientName = extractNameFromTitle(transcript.title || "");
+        if (clientName) {
+          try {
+            const { ghl } = require("../clients/ghlSdk");
+            const found = await ghl.contacts.getContacts({
+              locationId: process.env.GHL_LOCATION_ID || "mUemx2jG4wly4kJWBkI4",
+              query: clientName,
+              limit: 5,
+            });
+            const contacts = found?.contacts || [];
+            const exact = contacts.find(
+              (c) =>
+                `${c.firstName || ""} ${c.lastName || ""}`.trim().toLowerCase() ===
+                clientName.toLowerCase()
+            );
+            const match = exact || contacts[0];
+            if (match) contactId = match.id || match._id;
+          } catch (err) {
+            console.warn(`🔁 Contact search failed for "${clientName}":`, err.message);
+          }
+        }
+
+        // Our own summary only when it will be read by someone — skip the LLM
+        // call for unmatched test recordings.
+        let summaryText = "";
+        if (contactId) {
+          try {
+            summaryText = await summarizeConsultation(rawText, {
+              clientName: clientName || "Client",
+            });
+          } catch (err) {
+            summaryText = "";
+          }
+        }
+
+        // updateFields:false — a backfilled six-month-old consult must never
+        // displace a client's current one in the "latest consult" fields.
+        const archiveResult = await archiveConsultation({
+          transcript,
+          rawText,
+          summaryText,
+          firefliesSummary,
+          contactId,
+          clientName,
+          status: contactId ? "processed" : "unmatched",
+          updateFields: false,
+        });
+
+        results.push({
+          id: item.id,
+          title: item.title,
+          date: transcript.date ? new Date(transcript.date).toISOString().slice(0, 10) : null,
+          chars: rawText.length,
+          contactId,
+          noteId: archiveResult.note,
+          ok: archiveResult.supabase,
+          errors: archiveResult.errors,
+        });
+        console.log(`🔁 Backfilled ${item.id} (${rawText.length} chars) → contact ${contactId || "UNMATCHED"}`);
+      }
+
+      const done = results.filter((r) => r.ok).length;
+      res.json({
+        success: true,
+        firefliesTotal: inventory.length,
+        missingBefore: missing.length,
+        processed: results.length,
+        archived: done,
+        remaining: missing.length - done,
+        requestsSpent: spent,
+        results,
+      });
+    } catch (err) {
+      console.error("🔁 Backfill error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES CLEANUP — manual trigger for the sweep the daily cron runs.
+  //
+  // Logic lives in src/services/firefliesCleanup.js so the cron can call it
+  // directly instead of self-issuing an HTTP request. See that file for the
+  // retention window and the archived-only invariant.
+  //
+  // ?dryRun=true reports what would go without deleting; ?retainDays=N
+  // overrides the 60-day window.
+  //
+  // Internal-only (x-internal-key) — this used to be publicly callable and
+  // destructive.
   // ═══════════════════════════════════════════════════════════════════════════
 
   app.post("/api/fireflies/cleanup", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
     try {
-      console.log("🧹 Starting Fireflies transcript cleanup...");
-
-      if (!supabase) {
-        return res.status(500).json({ error: "Supabase not configured" });
-      }
-
-      // Find transcripts older than 7 days that are processed or skipped
-      const cutoffDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-
-      const { data: toDelete, error: queryErr } = await supabase
-        .from("fireflies_transcripts")
-        .select("transcript_id")
-        .in("status", ["processed", "skipped_google_exists"])
-        .lt("created_at", cutoffDate);
-
-      if (queryErr) {
-        console.error("🧹 Error querying transcripts:", queryErr);
-        return res.status(500).json({ error: queryErr.message });
-      }
-
-      if (!toDelete || toDelete.length === 0) {
-        console.log("🧹 No transcripts to clean up");
-        return res.json({ success: true, deleted: 0, message: "No transcripts to clean up" });
-      }
-
-      const ids = toDelete.map((r) => r.transcript_id);
-      console.log(`🧹 Found ${ids.length} transcripts to delete from Fireflies`);
-
-      // Delete from Fireflies API
-      const deletedCount = await batchDeleteTranscripts(ids);
-
-      // Mark as deleted in Supabase
-      const { error: updateErr } = await supabase
-        .from("fireflies_transcripts")
-        .update({
-          status: "deleted",
-          deleted_at: new Date().toISOString(),
-        })
-        .in("transcript_id", ids);
-
-      if (updateErr) {
-        console.error("🧹 Error updating deletion status:", updateErr);
-      }
-
-      console.log(`🧹 Cleanup complete: ${deletedCount}/${ids.length} deleted`);
-      res.json({ success: true, deleted: deletedCount, total: ids.length });
+      const result = await runCleanupSweep({
+        retainDays: req.query.retainDays,
+        dryRun: req.query.dryRun === "true",
+      });
+      res.json(result);
     } catch (err) {
       console.error("🧹 Cleanup error:", err.message);
       res.status(500).json({ error: err.message });
@@ -15617,6 +15736,9 @@ function createApp() {
   // ═══ CONSENT FORM 24H AUTOMATION SWEEP ═══
   const { startConsentAutomationCron } = require("../consentForm/consentAutomationCron");
   startConsentAutomationCron();
+
+  const { startFirefliesCleanupCron } = require("../services/firefliesCleanupCron");
+  startFirefliesCleanupCron();
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();
