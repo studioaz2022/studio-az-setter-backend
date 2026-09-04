@@ -16007,6 +16007,21 @@ function createApp() {
     }
   }
 
+  // Building-manager announcements (Union Plaza) -> Discord. Posts Bcc'd
+  // building-wide broadcasts automatically; anything addressed directly to
+  // the owner is refused unless he applies the "Post to Discord" label.
+  // Set DISABLE_BUILDING_NOTICE_RELAY=1 to opt out.
+  if (backgroundLoopsAllowed && process.env.DISABLE_BUILDING_NOTICE_RELAY !== "1") {
+    try {
+      const {
+        startBuildingNoticeRelay,
+      } = require("../services/buildingNoticeRelay");
+      startBuildingNoticeRelay();
+    } catch (err) {
+      console.error("[app] failed to start building notice relay:", err.message || err);
+    }
+  }
+
   // Google Calendar watch-channel renewal (re-registers channels expiring
   // within 24h; also a sync safety net). Same opt-out as the loop above.
   if (backgroundLoopsAllowed && process.env.DISABLE_CACHE_RECONCILE_LOOP !== "1") {
