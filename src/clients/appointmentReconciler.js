@@ -80,6 +80,34 @@ function eventToRow(event) {
   return mapGHLAppointmentToSupabase(patched);
 }
 
+/**
+ * Did GHL actually change this appointment after `sinceMs`?
+ *
+ * The sweep writing a row does NOT by itself mean a webhook was missed. The
+ * window is relative (pastDays → futureDays), so at every Central midnight the
+ * far edge slides forward a day and every appointment already booked on that
+ * newly-included day gets inserted for the first time — nothing was missed,
+ * the horizon just moved.
+ *
+ * That is what fired the false "webhooks are not being received" SMS at
+ * 2026-09-03 00:07 Central: seven inserts, all starting 2026-09-17 (= that
+ * day + 14), whose GHL timestamps were from May, June and August. A genuinely
+ * missed event, by contrast, carries a GHL timestamp from during the silence —
+ * rows written by real webhooks show dateUpdated seconds before they land.
+ *
+ * So: recency of GHL's own timestamp is the evidence, not the write itself.
+ * Missing timestamps count as evidence (fail toward alerting — a real outage
+ * that goes unreported is worse than one extra text).
+ */
+function missedSinceEvidence(incoming, sinceMs) {
+  if (!sinceMs) return false;
+  const stamp = incoming.ghl_updated_at || incoming.ghl_created_at;
+  if (!stamp) return true;
+  const t = new Date(stamp).getTime();
+  if (Number.isNaN(t)) return true;
+  return t > sinceMs;
+}
+
 /** Fields that actually matter for the dashboard — compare only these. */
 const COMPARE_FIELDS = [
   "title",
@@ -244,6 +272,7 @@ async function reconcileOneStaff({
   startTime,
   endTime,
   dryRun,
+  evidenceSince = null,
 }) {
   const stats = {
     location: locationId,
@@ -256,8 +285,13 @@ async function reconcileOneStaff({
     skipped: 0,
     errors: 0,
     blocksReaped: 0,
+    // Of the inserts/updates below, how many were for appointments GHL
+    // actually changed since `evidenceSince`. See missedSinceEvidence().
+    missedEvidence: 0,
     dryRun,
   };
+
+  const evidenceSinceMs = evidenceSince ? new Date(evidenceSince).getTime() : null;
 
   let events;
   try {
@@ -360,7 +394,10 @@ async function reconcileOneStaff({
       }
 
       if (!existing) {
-        // Missing from cache — a webhook we never received. Insert it.
+        // Missing from cache. Usually a webhook we never received — but also
+        // every appointment on the day that just entered the sweep window, so
+        // the alert evidence is counted separately (missedSinceEvidence).
+        if (missedSinceEvidence(incoming, evidenceSinceMs)) stats.missedEvidence++;
         if (dryRun) {
           console.log(`[reconcile] (dry) INSERT ${incoming.id} ${incoming.start_time}`);
         } else {
@@ -384,6 +421,7 @@ async function reconcileOneStaff({
       } else if (rowDiffers(incoming, existing)) {
         // Drifted — GHL is truth. Update only the fields we track; do NOT
         // touch reschedule_history/original_* (webhook owns that logic).
+        if (missedSinceEvidence(incoming, evidenceSinceMs)) stats.missedEvidence++;
         if (dryRun) {
           console.log(`[reconcile] (dry) UPDATE ${incoming.id}`);
         } else {
@@ -449,6 +487,7 @@ function accumulate(agg, s) {
   agg.skipped += s.skipped;
   agg.errors += s.errors;
   agg.blocksReaped += s.blocksReaped || 0;
+  agg.missedEvidence += s.missedEvidence || 0;
   agg.perStaff.push({
     staffGhlUserId: s.staffGhlUserId,
     scanned: s.scanned,
@@ -481,6 +520,7 @@ async function reconcileAppointments({
   fromDate,
   toDate,
   dryRun = false,
+  evidenceSince = null,
 }) {
   if (!supabase) {
     throw new Error("reconcileAppointments: Supabase client not configured");
@@ -498,6 +538,7 @@ async function reconcileAppointments({
       startTime,
       endTime,
       dryRun,
+      evidenceSince,
     });
     // A completed real reconcile proves the GHL→cache path works → heartbeat.
     if (!dryRun && s.errors === 0) {
@@ -518,6 +559,7 @@ async function reconcileAppointments({
     skipped: 0,
     errors: 0,
     blocksReaped: 0,
+    missedEvidence: 0,
     dryRun,
     perStaff: [],
   };
@@ -530,6 +572,7 @@ async function reconcileAppointments({
       startTime,
       endTime,
       dryRun,
+      evidenceSince,
     });
     accumulate(agg, s);
   }
@@ -559,6 +602,7 @@ async function reconcileAllLocations({
   pastDays = 1,
   futureDays = 60,
   dryRun = false,
+  evidenceSince = null,
 } = {}) {
   const fromDate = Date.now() - pastDays * MS_PER_DAY;
   const toDate = Date.now() + futureDays * MS_PER_DAY;
@@ -569,6 +613,7 @@ async function reconcileAllLocations({
       fromDate,
       toDate,
       dryRun,
+      evidenceSince,
     });
   }
   return out;

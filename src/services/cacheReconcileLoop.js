@@ -111,10 +111,15 @@ async function runSweep() {
   sweepInFlight = true;
   const startMs = Date.now();
   try {
+    // Pass the freshness mark so the reconciler can tell "GHL changed this
+    // during the webhook silence" (real evidence) from "this row is new to
+    // us only because the sweep window slid forward" (not evidence).
+    const evidenceSinceMs = lastAppointmentWebhookAt;
     const agg = await reconcileAllLocations({
       pastDays: PAST_DAYS,
       futureDays: FUTURE_DAYS,
       dryRun: false,
+      evidenceSince: evidenceSinceMs,
     });
     const dt = ((Date.now() - startMs) / 1000).toFixed(1);
     const totalIns =
@@ -123,8 +128,10 @@ async function runSweep() {
       (agg.barbershop?.updated || 0) + (agg.tattoo?.updated || 0);
     const totalErr =
       (agg.barbershop?.errors || 0) + (agg.tattoo?.errors || 0);
+    const totalMissed =
+      (agg.barbershop?.missedEvidence || 0) + (agg.tattoo?.missedEvidence || 0);
     console.log(
-      `[cacheReconcileLoop] sweep done in ${dt}s — ins=${totalIns} upd=${totalUpd} err=${totalErr}`
+      `[cacheReconcileLoop] sweep done in ${dt}s — ins=${totalIns} upd=${totalUpd} err=${totalErr} missed=${totalMissed}`
     );
 
     // Webhook staleness check — only AFTER a successful sweep so we
@@ -134,13 +141,22 @@ async function runSweep() {
     // shop closed) legitimately produces zero webhooks for hours — that
     // used to trip a 2:27am false alarm. The reconciler already holds
     // GHL truth, so we only alarm when THIS sweep actually caught events
-    // the webhook should have delivered but didn't (ins/upd > 0). That
-    // combination — webhook silent past threshold AND the sweep is
-    // pulling in changes the webhook missed — is the real outage
-    // signature, and it fires within one sweep of the day's first missed
-    // booking instead of on a fixed 2h timer regardless of activity.
+    // the webhook should have delivered but didn't. That combination —
+    // webhook silent past threshold AND the sweep pulling in changes the
+    // webhook missed — is the real outage signature, and it fires within
+    // one sweep of the day's first missed booking instead of on a fixed
+    // 2h timer regardless of activity.
+    //
+    // The evidence is `missedEvidence`, NOT raw ins/upd. Raw counts
+    // false-alarmed at 2026-09-03 00:07 Central: the sweep window is
+    // relative, so at Central midnight its far edge slid from +13d to
+    // +14d and swallowed seven appointments that had been on the books
+    // for months (all starting 2026-09-17, GHL timestamps from May/June/
+    // August). Seven inserts, zero missed webhooks — the webhook was
+    // healthy and resumed normally at 07:28 Central. missedEvidence only
+    // counts rows GHL actually touched since the last webhook landed.
     const gapMs = Date.now() - lastAppointmentWebhookAt;
-    const sweepCaughtMissedEvents = totalIns + totalUpd > 0;
+    const sweepCaughtMissedEvents = totalMissed > 0;
     if (gapMs > WEBHOOK_STALE_THRESHOLD_MS && sweepCaughtMissedEvents) {
       // Don't spam: only one SMS per outage. Cleared the moment a
       // real webhook lands again (markAppointmentWebhookReceived).
