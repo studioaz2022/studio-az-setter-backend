@@ -113,10 +113,20 @@ function familyFriendsValue(contact) {
   return String(hit.value ?? "").trim();
 }
 
-/** "1" is the flag the old site checked. Accept the number 1 too. */
+/**
+ * "1" is the flag the old site checked, and it is what 230 of the 231
+ * flagged contacts actually hold. One holds "True" — Lionel's own test
+ * contact — which is enough to show the field is edited by hand and will
+ * eventually be filled in by whoever is at the desk that day. A client
+ * turned away because someone typed the wrong true is a bad outcome for a
+ * field whose entire meaning is a yes/no, so accept the obvious spellings
+ * of yes and nothing else. "0", "" and absent all remain a no.
+ */
+const TRUTHY = new Set(["1", "1.0", "true", "yes", "y"]);
+
 function isOnTheList(contact) {
   const v = familyFriendsValue(contact);
-  return v === "1" || v === "1.0";
+  return v !== null && TRUTHY.has(v.toLowerCase());
 }
 
 function registerFriendsFamilyRoutes(app) {
