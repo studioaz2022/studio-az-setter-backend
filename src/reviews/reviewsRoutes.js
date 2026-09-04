@@ -21,6 +21,23 @@ const BARBERSHOP_GBP_LOCATION = "locations/3193954697909267343";
 const mentionsCache = new Map(); // name -> { at, payload }
 const MENTIONS_TTL_MS = 24 * 60 * 60 * 1000;
 
+// Word-boundary match, not substring.
+//
+// `.includes(name)` read as obviously correct and was quietly
+// catastrophic: "elle" lives inside "exc-elle-nt", so Elle's feed filled
+// with reviews praising Joshua, David, Drew and Logan. Publishing those
+// under her name would be inventing attribution. Same trap waits in
+// "anna" inside "Hannah"/"Savannah" and "drew" inside "Andrew".
+//
+// Lookarounds rather than \b so a trailing possessive still counts —
+// "Elle's chair" and "Drews chill" are both real mentions — while a
+// letter on either side is not. \p{L} (with the u flag) keeps accented
+// names from reading as word boundaries.
+function mentionRegex(name) {
+  const esc = name.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}])${esc}(?:['\u2019]s|s)?(?![\\p{L}])`, "iu");
+}
+
 function registerReviewsRoutes(app) {
   app.get("/api/reviews/barbershop", async (req, res) => {
     const placeId = process.env.BARBERSHOP_PLACE_ID;
@@ -77,12 +94,22 @@ function registerReviewsRoutes(app) {
     }
 
     try {
-      const { reviews, totalReviewCount, averageRating } = await listReviews(
-        BARBERSHOP_GBP_ACCOUNT,
-        BARBERSHOP_GBP_LOCATION
-      );
+      // GBP for the full review history, Places for the true totals.
+      // listReviews reports `totalReviewCount: out.length`, which is a
+      // pagination artifact — it caps at 10 pages x 50 and so reports 500
+      // however many reviews the shop actually has. Places is authoritative
+      // and already 24h-cached, so it costs nothing here.
+      const [{ reviews, totalReviewCount, averageRating }, place] =
+        await Promise.all([
+          listReviews(BARBERSHOP_GBP_ACCOUNT, BARBERSHOP_GBP_LOCATION),
+          process.env.BARBERSHOP_PLACE_ID
+            ? fetchPlaceDetails(process.env.BARBERSHOP_PLACE_ID).catch(() => null)
+            : Promise.resolve(null),
+        ]);
+
+      const re = mentionRegex(name);
       const matches = reviews
-        .filter((r) => (r.comment || "").toLowerCase().includes(name))
+        .filter((r) => re.test(r.comment || ""))
         .map((r) => ({
           author: r.reviewer?.displayName || "Google user",
           rating: STAR_TO_NUMBER[r.starRating] ?? null,
@@ -95,8 +122,8 @@ function registerReviewsRoutes(app) {
         name: req.query.name,
         matches,
         matchCount: matches.length,
-        shopRating: averageRating ?? null,
-        shopReviewCount: totalReviewCount ?? null,
+        shopRating: place?.rating ?? averageRating ?? null,
+        shopReviewCount: place?.reviewCount ?? totalReviewCount ?? null,
         lastUpdated: new Date().toISOString(),
       };
       mentionsCache.set(name, { at: Date.now(), payload });
