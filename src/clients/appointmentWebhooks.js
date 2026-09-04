@@ -59,6 +59,17 @@ const APPRENTICE_TATTOO_MENTOR = {
   [TATTOO_CALENDARS.MEGAN_TATTOO]: { mentorGhlId: GHL_USER_IDS.ANDREW, apprenticeName: 'Meg' },
 };
 
+/** Postgres unique_violation — the row is already in the cache. */
+const DUPLICATE_KEY = '23505';
+
+/**
+ * How recently GHL must have created an appointment for a duplicate-key
+ * insert to count as "the sweep beat us" rather than "GHL replayed an old
+ * event". The reconcile sweep runs every 15 min, so a genuine race-loser is
+ * minutes old at worst; the replays we've seen are ~71 hours old.
+ */
+const REPLAY_GRACE_MS = 30 * 60 * 1000;
+
 /**
  * Handle appointment created event
  */
@@ -77,12 +88,51 @@ async function handleAppointmentCreated(payload) {
     .from('appointments')
     .insert([appointment]);
 
-  if (error) {
+  if (error && error.code === DUPLICATE_KEY) {
+    // The row is already cached. Two very different causes, and they need
+    // opposite handling — which is why this isn't just an upsert:
+    //
+    //  1. GHL REPLAYS appointment.created for an old booking. Observed
+    //     2026-09-04: three replays in one hour, every one for an
+    //     appointment created ~71h earlier whose ghl_updated_at still
+    //     equalled ghl_created_at (i.e. untouched since booking). Re-running
+    //     the work below would push a "new appointment" alert for a 3-day-old
+    //     booking, mint a SECOND Google Meet + Fireflies bot for a
+    //     consultation, and re-drive the opportunity pipeline.
+    //
+    //  2. A genuinely new booking whose row the 15-minute reconcile sweep
+    //     happened to insert first. That one is new to the artist and still
+    //     needs its push, Meet link and pipeline move.
+    //
+    // GHL's own creation stamp separates them: a race-loser is seconds old,
+    // a replay is hours or days old. Unknown/unparseable stamps are treated
+    // as replays — a missed push is recoverable (the booking is still on the
+    // dashboard), a duplicate Meet link and Fireflies bot is not.
+    const createdMs = appointment.ghl_created_at
+      ? new Date(appointment.ghl_created_at).getTime()
+      : NaN;
+    const ageMs = Date.now() - createdMs;
+    const isRaceLoser = Number.isFinite(createdMs) && ageMs >= 0 && ageMs < REPLAY_GRACE_MS;
+
+    if (!isRaceLoser) {
+      const age = Number.isFinite(createdMs)
+        ? `${(ageMs / 3600000).toFixed(1)}h old`
+        : 'no dateAdded';
+      console.log(
+        `↩️ appointment.created replay for ${appointment.id} (${age}) — already cached, skipping`
+      );
+      return;
+    }
+
+    console.log(
+      `ℹ️ ${appointment.id} was already cached by the reconcile sweep — continuing with notifications`
+    );
+  } else if (error) {
     console.error('❌ Error inserting appointment:', error);
     throw error;
+  } else {
+    console.log('✅ Appointment created in Supabase:', appointment.id);
   }
-
-  console.log('✅ Appointment created in Supabase:', appointment.id);
 
   // Send push notification to assigned artist
   await sendAppointmentPushNotification(payload.appointment || payload, 'created');
