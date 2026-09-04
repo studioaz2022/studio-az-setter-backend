@@ -6212,10 +6212,26 @@ function createApp() {
           continue;
         }
 
-        const cf = contact?.customField || contact?.customFields || [];
+        // getContact() normalizes to BOTH shapes: customField as an object keyed
+        // by field id, and customFields as an array of {id, value}. The common
+        // `customField || customFields` idiom therefore always yields the
+        // OBJECT, so an array-only reader silently returns nothing for every
+        // field — which is exactly how this first read reported all 33 contacts
+        // as having no transcript when all 33 do. Handle both, object first.
+        const cfObj =
+          contact?.customField && !Array.isArray(contact.customField)
+            ? contact.customField
+            : null;
+        const cfArr = Array.isArray(contact?.customFields)
+          ? contact.customFields
+          : Array.isArray(contact?.customField)
+            ? contact.customField
+            : [];
         const val = (id) => {
-          const f = Array.isArray(cf) ? cf.find((x) => x.id === id) : null;
-          return f && typeof f.value === "string" ? f.value : "";
+          const raw = cfObj
+            ? cfObj[id]
+            : (cfArr.find((x) => x.id === id) || {}).value;
+          return typeof raw === "string" ? raw : "";
         };
 
         const storedId = val("LUASmxIwwPBr3SsZEHd9");
