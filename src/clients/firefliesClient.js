@@ -218,12 +218,17 @@ async function deleteTranscript(id) {
  * Delete multiple transcripts using GraphQL aliased mutations.
  * Up to 10 per request to stay within rate limits.
  * @param {string[]} ids
- * @returns {Promise<number>} Number of successfully deleted transcripts
+ * @returns {Promise<string[]>} Ids CONFIRMED deleted upstream — never assume
+ *   a failed chunk succeeded; the caller marks the ledger from this list.
  */
 async function batchDeleteTranscripts(ids) {
   if (!ids || ids.length === 0) return 0;
 
-  let totalDeleted = 0;
+  // Return the ids we actually confirmed gone, not a count. Callers mark rows
+  // as deleted in Supabase, and marking a row deleted when the API call failed
+  // corrupts the ledger into claiming we reclaimed storage we did not — which
+  // then hides those meetings from a later, real sweep.
+  const deletedIds = [];
 
   // Process in chunks of 10. Each chunk is ONE aliased GraphQL request, so
   // it costs 1 against the 50/day account cap (see header) — the 60s sleep
@@ -240,15 +245,23 @@ async function batchDeleteTranscripts(ids) {
 
     try {
       await firefliesQuery(query);
-      totalDeleted += chunk.length;
+      deletedIds.push(...chunk);
       console.log(
-        `${TAG} Batch deleted ${chunk.length} transcripts (${totalDeleted}/${ids.length})`
+        `${TAG} Batch deleted ${chunk.length} transcripts (${deletedIds.length}/${ids.length})`
       );
     } catch (err) {
       console.error(
         `${TAG} Batch delete error (chunk starting at ${i}):`,
         err.message
       );
+      // A daily-quota rejection applies to every remaining chunk too. Stop
+      // instead of sleeping 60s between chunks that cannot possibly succeed —
+      // the original code ground through the whole list that way, taking
+      // minutes to accomplish nothing.
+      if (/Too many requests/i.test(err.message)) {
+        console.error(`${TAG} Daily quota exhausted — abandoning remaining chunks`);
+        break;
+      }
     }
 
     // Respect rate limit: 10 deletes/minute
@@ -257,7 +270,7 @@ async function batchDeleteTranscripts(ids) {
     }
   }
 
-  return totalDeleted;
+  return deletedIds;
 }
 
 // ---------------------------------------------------------------------------

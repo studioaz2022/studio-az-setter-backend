@@ -114,24 +114,39 @@ async function runCleanupSweep({ retainDays = DEFAULT_RETAIN_DAYS, dryRun = fals
   const ids = eligible.map((r) => r.transcript_id);
   console.log(`${TAG} Deleting ${ids.length} archived transcripts (~${Math.round(minutes)} min)`);
 
-  const deletedCount = await batchDeleteTranscripts(ids);
+  // Mark ONLY what the API confirmed gone. Marking every requested id would
+  // record a delete that never happened — the ledger would claim reclaimed
+  // storage that is still full, and hide those meetings from the next sweep.
+  // This is not hypothetical: on 2026-09-04 a run hit the daily quota, every
+  // chunk failed, and 32 rows were still marked deleted.
+  const deletedIds = await batchDeleteTranscripts(ids);
 
-  const { error: updateErr } = await sb
-    .from("fireflies_transcripts")
-    .update({ status: "deleted", deleted_at: new Date().toISOString() })
-    .in("transcript_id", ids);
+  if (deletedIds.length > 0) {
+    const { error: updateErr } = await sb
+      .from("fireflies_transcripts")
+      .update({ status: "deleted", deleted_at: new Date().toISOString() })
+      .in("transcript_id", deletedIds);
 
-  if (updateErr) console.error(`${TAG} Status update failed:`, updateErr.message);
+    if (updateErr) console.error(`${TAG} Status update failed:`, updateErr.message);
+  }
+
+  const failed = ids.length - deletedIds.length;
+  const deletedSet = new Set(deletedIds);
+  const minutesReclaimed = eligible
+    .filter((r) => deletedSet.has(r.transcript_id))
+    .reduce((a, r) => a + (Number(r.duration_minutes) || 0), 0);
 
   console.log(
-    `${TAG} Done: ${deletedCount}/${ids.length} deleted, ~${Math.round(minutes)} min reclaimed`
+    `${TAG} Done: ${deletedIds.length}/${ids.length} deleted, ~${Math.round(minutesReclaimed)} min reclaimed` +
+      (failed ? ` — ${failed} FAILED upstream and were left untouched in the ledger` : "")
   );
 
   return {
     success: true,
-    deleted: deletedCount,
+    deleted: deletedIds.length,
+    failed,
     eligible: ids.length,
-    minutesReclaimed: Math.round(minutes),
+    minutesReclaimed: Math.round(minutesReclaimed),
     skippedUnarchived: skippedUnarchived || 0,
   };
 }

@@ -17,6 +17,13 @@ const { runCleanupSweep } = require("./firefliesCleanup");
 const TICK_MS = 24 * 60 * 60 * 1000; // 1 day — well under the setInterval 24.8-day clamp
 const WARMUP_MS = 5 * 60 * 1000; // let the process boot before the first pass
 
+// Deleting is irreversible and the archive is not yet complete, so the cron
+// reports rather than deletes until this is explicitly set to "true". On
+// 2026-09-04 an unauthenticated probe triggered a real delete of 32 transcripts
+// — it failed only because the daily quota happened to already be exhausted.
+// An armed irreversible sweep should be a deliberate act, not a default.
+const DELETE_ENABLED = process.env.FIREFLIES_CLEANUP_ENABLED === "true";
+
 let inFlight = false;
 
 async function tick() {
@@ -26,7 +33,15 @@ async function tick() {
   }
   inFlight = true;
   try {
-    const result = await runCleanupSweep();
+    const result = await runCleanupSweep({ dryRun: !DELETE_ENABLED });
+
+    if (!DELETE_ENABLED && result.eligible > 0) {
+      console.log(
+        `🧹 [Fireflies Cleanup] REPORT ONLY — ${result.eligible} transcript(s) ` +
+          `(~${result.minutesReclaimable} min) are eligible. ` +
+          `Set FIREFLIES_CLEANUP_ENABLED=true to actually reclaim them.`
+      );
+    }
     // Surface a stalled backfill rather than letting the sweep quietly do less
     // each week: these are meetings past the retention window that we cannot
     // delete because we do not hold a copy of them.
@@ -44,7 +59,10 @@ async function tick() {
 }
 
 function startFirefliesCleanupCron() {
-  console.log("🧹 Fireflies cleanup cron: daily sweep armed (60-day retention, archived-only)");
+  console.log(
+    `🧹 Fireflies cleanup cron: daily sweep armed (60-day retention, archived-only, ` +
+      `${DELETE_ENABLED ? "DELETES ENABLED" : "report-only — set FIREFLIES_CLEANUP_ENABLED=true to delete"})`
+  );
   setTimeout(tick, WARMUP_MS);
   setInterval(tick, TICK_MS);
 }

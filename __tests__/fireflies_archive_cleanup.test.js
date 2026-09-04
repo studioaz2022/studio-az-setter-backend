@@ -11,11 +11,15 @@
 // that distinction is worth a test rather than a comment.
 
 const mockDeleted = [];
+// When set, batchDeleteTranscripts confirms only these ids — simulating an
+// upstream failure (e.g. the daily quota) that deletes nothing.
+let mockConfirmOnly = null;
 
 jest.mock("../src/clients/firefliesClient", () => ({
   batchDeleteTranscripts: jest.fn(async (ids) => {
-    mockDeleted.push(...ids);
-    return ids.length;
+    const confirmed = mockConfirmOnly === null ? ids : mockConfirmOnly;
+    mockDeleted.push(...confirmed);
+    return confirmed;
   }),
 }));
 
@@ -85,6 +89,7 @@ describe("Fireflies cleanup — archived-only invariant", () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = "test-key";
     mockDeleted.length = 0;
     mockUpdates = [];
+    mockConfirmOnly = null;
     ({ runCleanupSweep } = require("../src/services/firefliesCleanup"));
   });
 
@@ -171,6 +176,40 @@ describe("Fireflies cleanup — archived-only invariant", () => {
 
     expect(mockDeleted.sort()).toEqual(["safe-1", "safe-2"]);
     expect(result.skippedUnarchived).toBe(1);
+  });
+
+  test("a failed upstream delete must NOT be recorded as deleted", async () => {
+    // 2026-09-04: a sweep hit the Fireflies daily quota, every chunk threw, and
+    // 32 rows were still marked deleted — a ledger claiming reclaimed storage
+    // that was in fact still full, and hiding those meetings from later sweeps.
+    mockConfirmOnly = []; // nothing actually deleted upstream
+    mockRows = [
+      { transcript_id: "a", status: "processed", meeting_date: OLD, transcript_text: "w", duration_minutes: 5 },
+      { transcript_id: "b", status: "processed", meeting_date: OLD, transcript_text: "w", duration_minutes: 5 },
+    ];
+
+    const result = await runCleanupSweep();
+
+    expect(result.deleted).toBe(0);
+    expect(result.failed).toBe(2);
+    expect(result.minutesReclaimed).toBe(0);
+    expect(mockUpdates).toHaveLength(0); // ledger untouched
+  });
+
+  test("a partial delete records only the ids actually confirmed gone", async () => {
+    mockConfirmOnly = ["a"];
+    mockRows = [
+      { transcript_id: "a", status: "processed", meeting_date: OLD, transcript_text: "w", duration_minutes: 7 },
+      { transcript_id: "b", status: "processed", meeting_date: OLD, transcript_text: "w", duration_minutes: 9 },
+    ];
+
+    const result = await runCleanupSweep();
+
+    expect(result.deleted).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.minutesReclaimed).toBe(7); // only a's minutes, not a+b
+    expect(mockUpdates).toHaveLength(1);
+    expect(mockUpdates[0].ids).toEqual(["a"]);
   });
 
   test("marks deleted rows rather than dropping them", async () => {
