@@ -128,6 +128,7 @@ const analyticsRoutes = require("../analytics/analyticsRoutes");
 const seoRoutes = require("../seo/seoRoutes");
 const leadsRoutes = require("../leads/leadsRoutes");
 const { registerReviewsRoutes } = require("../reviews/reviewsRoutes");
+const { registerFriendsFamilyRoutes } = require("../friendsFamily/friendsFamilyRoutes");
 const { registerAvailabilityRoutes } = require("../availability/availabilityRoutes");
 const { registerBookingRoutes } = require("../booking/bookingRoutes");
 const { registerMetaIgRoutes } = require("../integrations/metaIgRoutes");
@@ -532,6 +533,7 @@ function createApp() {
         'http://localhost:3001',
         'http://localhost:3002', // Front-desk dashboard (dev)
         'http://localhost:3098', // Front-desk dashboard (local prod-test)
+        'http://localhost:3300', // Barbershop website (local prod-test)
         'http://localhost:8080',
         'http://localhost:8888',
         'http://127.0.0.1:5500', // Common local dev server port
@@ -15482,6 +15484,7 @@ function createApp() {
   // Public endpoint — barbershop-website pulls live Google reviews here.
   // No auth required (it's just rendering already-public reviews).
   registerReviewsRoutes(app);
+  registerFriendsFamilyRoutes(app);
 
   // ═══ BARBER AVAILABILITY (GHL getSlots) ═══
   // Public endpoint — barbershop-website pulls per-barber next-available
