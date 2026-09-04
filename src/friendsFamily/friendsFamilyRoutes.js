@@ -27,25 +27,61 @@ const BARBER_LOCATION_ID =
 // fieldKey: a customField read by key silently returns undefined.
 const FAMILY_FRIENDS_FIELD_ID = "WSqr9F1EUslbzwBjW2li";
 
-// Lionel's two Friends & Family calendars, on the GHL-hosted booking
-// widget. Deliberately NOT routed through the site's own booking widget:
-// the F&F calendars are excluded from barberDirectory, the deposit config
-// and the refund flow on purpose, and quietly wiring them in here would
-// put appointments through a pricing path none of those know about.
-const FF_OPTIONS = [
-  {
-    key: "haircut",
-    label: "Haircut",
-    price: 65,
-    calendarId: "9a66xeZi2pEJWQpxiMjy",
+// "Family Friends" is a TIER, not a yes/no. Today only tier 1 exists, but
+// Lionel is adding 2 for clients grandfathered onto an older price before
+// the next increase — so the value has to select a rate card rather than
+// merely open the door. Keeping that shape now means the second tier is a
+// data change here, and means a contact marked 2 before it is configured
+// gets a logged, diagnosable denial instead of being quietly told they
+// are not on the list.
+//
+// Calendars are on the GHL-hosted booking widget, deliberately NOT the
+// site's own: these calendars are excluded from barberDirectory, the
+// deposit config and the refund flow on purpose, and quietly wiring them
+// in here would put appointments through a pricing path none of those
+// know about.
+const TIERS = {
+  "1": {
+    label: "friends & family",
+    options: [
+      {
+        key: "haircut",
+        label: "Haircut",
+        price: 65,
+        calendarId: "9a66xeZi2pEJWQpxiMjy",
+      },
+      {
+        key: "haircut-beard",
+        label: "Haircut + Beard",
+        price: 80,
+        calendarId: "0qOmPMcP7L4qz58fxmu4",
+      },
+    ],
   },
-  {
-    key: "haircut-beard",
-    label: "Haircut + Beard",
-    price: 80,
-    calendarId: "0qOmPMcP7L4qz58fxmu4",
-  },
-];
+  // "2": grandfathered rate — awaiting its calendars and prices. Until it
+  // is filled in, a contact marked 2 is denied and logged (see below).
+};
+
+// Hand-typed spellings of "yes" that predate the tier scheme, all meaning
+// tier 1. The data was normalised to "1" on 2026-09-04 (230 of 231 already
+// were); this is a hedge against the next person typing True at the desk,
+// not a supported vocabulary. Numbers are the vocabulary.
+const LEGACY_TIER_1 = new Set(["1.0", "true", "yes", "y"]);
+
+// Spellings of "no". These deny like an empty field does — silently. An
+// explicit no is not the same as an unrecognised tier, and warning about
+// it would bury the warning that matters.
+const EXPLICIT_NO = new Set(["0", "no", "false", "n"]);
+
+function tierFor(rawValue) {
+  if (rawValue === null) return null;
+  const v = String(rawValue).trim();
+  if (!v) return null;
+  if (EXPLICIT_NO.has(v.toLowerCase())) return null;
+  if (TIERS[v]) return { key: v, ...TIERS[v] };
+  if (LEGACY_TIER_1.has(v.toLowerCase())) return { key: "1", ...TIERS["1"] };
+  return { key: v, unconfigured: true };
+}
 
 const BOOKING_HOST = "https://mn.studioaz.us";
 
@@ -113,20 +149,9 @@ function familyFriendsValue(contact) {
   return String(hit.value ?? "").trim();
 }
 
-/**
- * "1" is the flag the old site checked, and it is what 230 of the 231
- * flagged contacts actually hold. One holds "True" — Lionel's own test
- * contact — which is enough to show the field is edited by hand and will
- * eventually be filled in by whoever is at the desk that day. A client
- * turned away because someone typed the wrong true is a bad outcome for a
- * field whose entire meaning is a yes/no, so accept the obvious spellings
- * of yes and nothing else. "0", "" and absent all remain a no.
- */
-const TRUTHY = new Set(["1", "1.0", "true", "yes", "y"]);
-
 function isOnTheList(contact) {
-  const v = familyFriendsValue(contact);
-  return v !== null && TRUTHY.has(v.toLowerCase());
+  const t = tierFor(familyFriendsValue(contact));
+  return Boolean(t && !t.unconfigured);
 }
 
 function registerFriendsFamilyRoutes(app) {
@@ -183,7 +208,20 @@ function registerFriendsFamilyRoutes(app) {
       // getContacts is a fuzzy search — match the phone exactly rather
       // than trusting the first row back.
       const match = contacts.find((c) => toE164(c?.phone) === phone);
-      if (!match || !isOnTheList(match)) {
+      if (!match) return res.status(401).json(DENY);
+
+      const tier = tierFor(familyFriendsValue(match));
+      if (!tier) return res.status(401).json(DENY);
+
+      // Marked with a tier nobody has configured yet. The client is still
+      // turned away — there is no rate card to show them — but say so in
+      // the log, because the alternative is Lionel flagging someone and
+      // watching the door not open with no explanation anywhere.
+      if (tier.unconfigured) {
+        console.warn(
+          `[ff] contact ${match.id} has Family Friends = ${JSON.stringify(tier.key)}, ` +
+            `which has no tier configured in TIERS. Denied.`
+        );
         return res.status(401).json(DENY);
       }
 
@@ -193,7 +231,9 @@ function registerFriendsFamilyRoutes(app) {
       return res.json({
         ok: true,
         firstName: firstName ? firstName.replace(/\b\w/g, (m) => m.toUpperCase()) : "",
-        options: FF_OPTIONS.map((o) => ({
+        tier: tier.key,
+        tierLabel: tier.label,
+        options: tier.options.map((o) => ({
           key: o.key,
           label: o.label,
           price: o.price,
@@ -209,4 +249,4 @@ function registerFriendsFamilyRoutes(app) {
   });
 }
 
-module.exports = { registerFriendsFamilyRoutes, toE164, isOnTheList };
+module.exports = { registerFriendsFamilyRoutes, toE164, isOnTheList, tierFor };
