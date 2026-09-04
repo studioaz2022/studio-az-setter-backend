@@ -174,6 +174,50 @@ function toE164(raw) {
   return null;
 }
 
+// ── Next available slot, per F&F calendar ──
+// The portal must quote the calendar the client will actually book on.
+// Lionel's REGULAR calendar is the one /api/availability reports, and it
+// is a different calendar with different hours — quoting it here would
+// promise a time the F&F calendar may not have.
+const SLOT_TTL_MS = 10 * 60 * 1000;
+const SLOT_LOOKAHEAD_DAYS = 30;
+const slotCache = new Map(); // calendarId -> { at, iso }
+
+async function nextSlotFor(calendarId) {
+  const cached = slotCache.get(calendarId);
+  if (cached && Date.now() - cached.at < SLOT_TTL_MS) {
+    // Re-check on serve: a cached slot can fall into the past while it
+    // still counts as fresh.
+    if (!cached.iso || Date.parse(cached.iso) > Date.now()) return cached.iso;
+  }
+  try {
+    const now = Date.now();
+    const data = await ghlBarber.calendars.getSlots({
+      calendarId,
+      startDate: now,
+      endDate: now + SLOT_LOOKAHEAD_DAYS * 24 * 60 * 60 * 1000,
+    });
+    let earliest = null;
+    let earliestMs = Infinity;
+    for (const [key, val] of Object.entries(data || {})) {
+      if (key === "traceId") continue;
+      for (const iso of val?.slots || []) {
+        const ms = Date.parse(iso);
+        if (Number.isNaN(ms) || ms <= now || ms >= earliestMs) continue;
+        earliestMs = ms;
+        earliest = iso;
+      }
+    }
+    slotCache.set(calendarId, { at: Date.now(), iso: earliest });
+    return earliest;
+  } catch (err) {
+    // Never let a slot lookup take the sign-in down — the calendar embed
+    // below it still works, it just opens without a headline time.
+    console.warn(`[ff] slots ${calendarId} failed:`, err.message);
+    return cached?.iso ?? null;
+  }
+}
+
 function familyFriendsValue(contact) {
   const fields = Array.isArray(contact?.customFields) ? contact.customFields : [];
   const hit = fields.find((f) => f?.id === FAMILY_FRIENDS_FIELD_ID);
@@ -187,6 +231,64 @@ function isOnTheList(contact) {
 }
 
 function registerFriendsFamilyRoutes(app) {
+  /**
+   * GET  /api/barbershop/friends-family/announcement
+   * PUT  /api/barbershop/friends-family/announcement   body: { text }
+   *
+   * The iOS Tools tab reads and writes the notice here rather than talking
+   * to GHL directly, so the app never carries a GHL token and the field id
+   * lives in exactly one place.
+   *
+   * Gated by x-owner-key, the same header the refund approvals use. The
+   * app additionally hides the screen from everyone but Lionel, but that
+   * is a UI courtesy — this header is the actual gate.
+   */
+  function ownerOnly(req, res) {
+    const key = req.headers["x-owner-key"];
+    if (!process.env.OWNER_SETTLE_KEY || key !== process.env.OWNER_SETTLE_KEY) {
+      res.status(401).json({ ok: false, error: "Unauthorized" });
+      return false;
+    }
+    return true;
+  }
+
+  app.get("/api/barbershop/friends-family/announcement", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!ownerOnly(req, res)) return;
+    if (!ghlBarber) return res.status(503).json({ ok: false, error: "GHL unavailable" });
+    try {
+      const r = await ghlBarber.locations.getCustomValues({ locationId: BARBER_LOCATION_ID });
+      const hit = (r?.customValues || []).find((v) => v.id === ANNOUNCEMENT_CV_ID);
+      return res.json({ ok: true, text: String(hit?.value ?? "") });
+    } catch (err) {
+      console.error("[ff] announcement read failed:", err.message);
+      return res.status(502).json({ ok: false, error: "Couldn't read the notice." });
+    }
+  });
+
+  app.put("/api/barbershop/friends-family/announcement", async (req, res) => {
+    res.set("Cache-Control", "no-store");
+    if (!ownerOnly(req, res)) return;
+    if (!ghlBarber) return res.status(503).json({ ok: false, error: "GHL unavailable" });
+
+    // Cap the length: this renders in a band on a phone, and the field is
+    // a notice, not a newsletter.
+    const text = String(req.body?.text ?? "").trim().slice(0, 600);
+    try {
+      await ghlBarber.locations.updateCustomValue(
+        { locationId: BARBER_LOCATION_ID, id: ANNOUNCEMENT_CV_ID },
+        { name: "FF Portal Announcement", value: text }
+      );
+      // Publish immediately rather than making him wait out the read cache
+      // — he just pressed save and will go look.
+      announcementCache = { at: Date.now(), text };
+      return res.json({ ok: true, text });
+    } catch (err) {
+      console.error("[ff] announcement write failed:", err.message);
+      return res.status(502).json({ ok: false, error: "Couldn't save the notice." });
+    }
+  });
+
   /**
    * POST /api/barbershop/friends-family/login
    * body: { password }   — the client's phone number as held in the CRM
@@ -259,7 +361,13 @@ function registerFriendsFamilyRoutes(app) {
 
       rateLimitReset(ip);
 
-      const announcement = await fetchAnnouncement();
+      // Announcement and both calendars' next slots in parallel — this is
+      // the only place the client waits, so it should not be three
+      // round-trips deep.
+      const [announcement, ...slots] = await Promise.all([
+        fetchAnnouncement(),
+        ...tier.options.map((o) => nextSlotFor(o.calendarId)),
+      ]);
       const firstName = (match.firstNameRaw || match.firstName || "").trim();
       return res.json({
         ok: true,
@@ -267,10 +375,11 @@ function registerFriendsFamilyRoutes(app) {
         tier: tier.key,
         tierLabel: tier.label,
         announcement,
-        options: tier.options.map((o) => ({
+        options: tier.options.map((o, i) => ({
           key: o.key,
           label: o.label,
           price: o.price,
+          nextSlot: slots[i] ?? null,
           url: `${BOOKING_HOST}/widget/booking/${o.calendarId}`,
         })),
       });
