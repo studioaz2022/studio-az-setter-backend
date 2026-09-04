@@ -82,10 +82,20 @@ function registerReviewsRoutes(app) {
   // per-barber proof feed for landing pages. Name-agnostic so every barber's
   // page can reuse it. Full history via GBP v4 (Places caps at 5 reviews).
   app.get("/api/reviews/barbershop/mentions", async (req, res) => {
-    const name = String(req.query.name || "").trim().toLowerCase();
-    if (!name || name.length < 3 || !/^[a-z\s'-]+$/.test(name)) {
-      return res.status(400).json({ error: "name must be at least 3 letters" });
+    // Comma-separated aliases: a barber is named in reviews by whichever
+    // name clients actually use, and that isn't always the first one.
+    // Lionel Chavez is written as "Chavez" in 75 reviews and "Lionel" in 5 —
+    // querying the first name alone hid 93% of his own proof.
+    const raw = String(req.query.name || "").trim().toLowerCase();
+    const names = [...new Set(raw.split(",").map((n) => n.trim()).filter(Boolean))];
+    const valid =
+      names.length > 0 &&
+      names.length <= 4 &&
+      names.every((n) => n.length >= 3 && /^[a-z\s'-]+$/.test(n));
+    if (!valid) {
+      return res.status(400).json({ error: "name must be 1-4 aliases of 3+ letters each" });
     }
+    const name = names.join(",");
 
     const cached = mentionsCache.get(name);
     if (cached && Date.now() - cached.at < MENTIONS_TTL_MS) {
@@ -107,11 +117,15 @@ function registerReviewsRoutes(app) {
             : Promise.resolve(null),
         ]);
 
-      const re = mentionRegex(name);
+      // One review naming both "Lionel" and "Chavez" is still one review,
+      // so match against the alias set rather than concatenating per-alias
+      // result lists.
+      const res_ = names.map(mentionRegex);
       const matches = reviews
-        .filter((r) => re.test(r.comment || ""))
+        .filter((r) => res_.some((re) => re.test(r.comment || "")))
         .map((r) => ({
           author: r.reviewer?.displayName || "Google user",
+          authorPhotoUrl: r.reviewer?.profilePhotoUrl || null,
           rating: STAR_TO_NUMBER[r.starRating] ?? null,
           text: r.comment || "",
           publishedAt: r.createTime || null,
