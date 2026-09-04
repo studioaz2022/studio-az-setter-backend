@@ -6129,9 +6129,25 @@ function createApp() {
           `query T($id: String!) { transcript(id: $id) { id video_url } }`,
           { id: sampleId }
         );
+        // Introspect first so the analytics probe uses real field names
+        // rather than guesses — a bad field name returns HTTP 400, which is
+        // indistinguishable from a plan gate if you only look at the status.
+        out.schema = await probe(
+          "introspect",
+          `{ __type(name: "Transcript") { fields { name type { name kind ofType { name } } } } }`
+        );
+        out.analyticsShape = await probe(
+          "introspectAnalytics",
+          `{ __type(name: "MeetingAnalytics") { fields { name type { name kind ofType { name } } } } }`
+        );
         out.analytics = await probe(
           "analytics",
-          `query T($id: String!) { transcript(id: $id) { id analytics { sentiments { positive_pourcentage neutral_pourcentage negative_pourcentage } speakers { name duration word_count filler_words questions } } } }`,
+          `query T($id: String!) { transcript(id: $id) { id analytics { sentiments { positive_pourcentage } } } }`,
+          { id: sampleId }
+        );
+        out.speakers = await probe(
+          "speakers",
+          `query T($id: String!) { transcript(id: $id) { id speakers { name } meeting_attendees { displayName email } } }`,
           { id: sampleId }
         );
         out.summary = await probe(
