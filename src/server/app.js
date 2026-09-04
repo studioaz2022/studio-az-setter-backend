@@ -6164,6 +6164,117 @@ function createApp() {
   });
 
   // ═══════════════════════════════════════════════════════════════════════════
+  // FIREFLIES HYDRATE — fill the archive from GHL, spending zero API quota
+  //
+  // The 33 meetings the pipeline already tracked have their full transcript in
+  // GHL; what they lacked was a copy in Supabase, because fireflies_transcripts
+  // only ever stored metadata. Re-fetching them from Fireflies would cost 2
+  // requests each against a 50/day cap — 66 requests for text we already own.
+  // This copies GHL → Supabase instead and costs nothing upstream, leaving the
+  // whole daily budget for /api/fireflies/backfill, which has no alternative
+  // source.
+  //
+  // CORRECTNESS: GHL custom fields hold only the MOST RECENT consult per
+  // contact, so the stored fireflies_transcript_id must match the row we are
+  // filling. Josh Bernia's 2026-08-25 call fails that check — his 2026-08-26
+  // one overwrote it — and is reported as needing Fireflies rather than being
+  // filled with the wrong conversation. That mismatch is the entire reason this
+  // check exists; without it the archive would silently record one meeting's
+  // words under another meeting's id.
+  //
+  // Internal-only (x-internal-key). Never deletes.
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  app.post("/api/fireflies/hydrate-from-ghl", async (req, res) => {
+    if (!requireInternalKey(req, res)) return;
+    const dryRun = req.query.dryRun === "true";
+
+    try {
+      if (!supabase) return res.status(500).json({ error: "Supabase not configured" });
+
+      const { data: rows, error } = await supabase
+        .from("fireflies_transcripts")
+        .select("transcript_id, contact_id, meeting_title, meeting_date")
+        .is("transcript_text", null)
+        .not("contact_id", "is", null);
+
+      if (error) return res.status(500).json({ error: error.message });
+
+      const filled = [];
+      const needsFireflies = [];
+
+      for (const row of rows || []) {
+        let contact;
+        try {
+          contact = await getContact(row.contact_id);
+        } catch (err) {
+          needsFireflies.push({ ...row, reason: `contact fetch failed: ${err.message}` });
+          continue;
+        }
+
+        const cf = contact?.customField || contact?.customFields || [];
+        const val = (id) => {
+          const f = Array.isArray(cf) ? cf.find((x) => x.id === id) : null;
+          return f && typeof f.value === "string" ? f.value : "";
+        };
+
+        const storedId = val("LUASmxIwwPBr3SsZEHd9");
+        const rawText = val("Tj9WuXbE1hWtxfTgCMGM");
+        const summaryText = val("EU4U5jeDJxXHQ8Jh8gfT");
+
+        // The guard: only trust GHL's text when it belongs to THIS meeting.
+        if (!rawText || storedId !== row.transcript_id) {
+          needsFireflies.push({
+            transcript_id: row.transcript_id,
+            title: row.meeting_title,
+            date: row.meeting_date ? row.meeting_date.slice(0, 10) : null,
+            reason: !rawText
+              ? "no transcript text in GHL"
+              : `GHL holds a different consult (${storedId || "none"}) — overwritten`,
+          });
+          continue;
+        }
+
+        if (!dryRun) {
+          const { error: upErr } = await supabase
+            .from("fireflies_transcripts")
+            .update({
+              transcript_text: rawText,
+              summary_text: summaryText || null,
+              archived_at: new Date().toISOString(),
+            })
+            .eq("transcript_id", row.transcript_id);
+          if (upErr) {
+            needsFireflies.push({ ...row, reason: `supabase update failed: ${upErr.message}` });
+            continue;
+          }
+        }
+
+        filled.push({
+          transcript_id: row.transcript_id,
+          title: row.meeting_title,
+          date: row.meeting_date ? row.meeting_date.slice(0, 10) : null,
+          chars: rawText.length,
+        });
+      }
+
+      res.json({
+        success: true,
+        dryRun,
+        candidates: (rows || []).length,
+        hydrated: filled.length,
+        needsFireflies: needsFireflies.length,
+        firefliesRequestsSpent: 0,
+        filled,
+        stillMissing: needsFireflies,
+      });
+    } catch (err) {
+      console.error("💧 Hydrate error:", err.message);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // FIREFLIES BACKFILL — rescue meetings that never reached the webhook
   //
   // As of 2026-09-04 Fireflies held 50 transcripts while our pipeline tracked
