@@ -1515,11 +1515,25 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
  * Called when a user "unmatches" an auto-matched payment in the review UI.
  */
 async function unmatchPayment({ barberGhlId, squarePaymentId }) {
+  // Soft-delete, not a hard delete.
+  //
+  // A hard delete used to be harmless here because rejecting mostly applied to
+  // rows a barber had confirmed by hand. Now that sync records matches on sight,
+  // removing the row entirely means the very next sweep sees no row for that
+  // square_payment_id, re-matches it, and re-inserts the thing that was just
+  // rejected — a reject/resync loop that never settles.
+  //
+  // The dedup check in matchAndRecordPayment() looks up square_payment_id
+  // without filtering deleted_at, so a tombstoned row keeps the payment out of
+  // future syncs, while the earnings query (deleted_at IS NULL) keeps it out of
+  // the barber's totals. Rejection sticks, and it stays reversible — same
+  // convention as artist-undo / artist-restore.
   const { data, error } = await supabase
     .from("transactions")
-    .delete()
+    .update({ deleted_at: new Date().toISOString() })
     .eq("square_payment_id", squarePaymentId)
     .eq("artist_ghl_id", barberGhlId)
+    .is("deleted_at", null)
     .select("id");
 
   if (error) throw new Error(`Failed to unmatch payment: ${error.message}`);
