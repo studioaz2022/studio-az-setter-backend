@@ -19,6 +19,7 @@
 // on the list". Distinguishing them would leak exactly that.
 
 const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+const { fetchAppointmentsForDateRange } = require("../clients/ghlCalendarClient");
 
 const BARBER_LOCATION_ID =
   process.env.GHL_BARBER_LOCATION_ID || "GLRkNAxfPtWTqTiN83xj";
@@ -218,6 +219,91 @@ async function nextSlotFor(calendarId) {
   }
 }
 
+// ── "Only when Lionel is in the shop" ──
+// Gilberto's chair is next to Lionel's, so Lionel can talk him through a
+// cut — but only while Lionel is actually on the floor. The proxy for
+// that is Lionel having a client in his own chair.
+//
+// TWO EXCLUSIONS DO THE REAL WORK, and both were found by looking at the
+// data rather than assuming:
+//
+//   1. Lionel's user id also owns a "Break" calendar. A break is the
+//      opposite of being available to help, so those events are dropped —
+//      82 raw events became 58.
+//   2. Cancelled and invalid appointments are still returned. Someone who
+//      cancelled does not put Lionel in the building — 58 became 46.
+//
+// Skipping either would have promised a client that Lionel is standing
+// there during his lunch, or during an appointment that no longer exists.
+const LIONEL_GHL_USER_ID = "1kFG5FWdUDhXLUX46snG";
+const LIONEL_CHAIR_CALENDARS = new Set([
+  "Bsv9ngkRgsbLzgtN3Vpq", // haircut
+  "pGNsYjGyEYW9LCD1GcQN", // haircut + beard
+  "9a66xeZi2pEJWQpxiMjy", // F&F haircut
+  "0qOmPMcP7L4qz58fxmu4", // F&F haircut + beard
+]);
+const BOOKED_STATUSES = new Set(["confirmed", "new", "showed"]);
+
+const GILBERTO_CALENDAR_ID = "38Uhu6i5W4L5yGJbE0My";
+const GILBERTO_SLOT_MINUTES = 60; // matches barberDirectory
+const WITH_LIONEL_DAYS = 21;
+const WITH_LIONEL_TTL_MS = 10 * 60 * 1000;
+let withLionelCache = { at: 0, slots: [] };
+
+async function gilbertoSlotsWithLionel() {
+  if (Date.now() - withLionelCache.at < WITH_LIONEL_TTL_MS) {
+    // Re-filter on serve so cached slots can't drift into the past.
+    return withLionelCache.slots.filter((iso) => Date.parse(iso) > Date.now());
+  }
+
+  const now = Date.now();
+  const end = now + WITH_LIONEL_DAYS * 24 * 60 * 60 * 1000;
+
+  const [appts, rawSlots] = await Promise.all([
+    fetchAppointmentsForDateRange({
+      locationId: BARBER_LOCATION_ID,
+      startTime: now,
+      endTime: end,
+      userId: LIONEL_GHL_USER_ID,
+      sdkInstance: ghlBarber,
+    }),
+    ghlBarber.calendars.getSlots({
+      calendarId: GILBERTO_CALENDAR_ID,
+      startDate: now,
+      endDate: end,
+    }),
+  ]);
+
+  const onFloor = (appts || [])
+    .filter((a) => LIONEL_CHAIR_CALENDARS.has(a.calendarId))
+    .filter((a) =>
+      BOOKED_STATUSES.has(String(a.appointmentStatus || "").toLowerCase())
+    )
+    .map((a) => ({ start: Date.parse(a.startTime), end: Date.parse(a.endTime) }))
+    .filter((a) => Number.isFinite(a.start) && Number.isFinite(a.end));
+
+  const slots = [];
+  for (const [key, val] of Object.entries(rawSlots || {})) {
+    if (key === "traceId") continue;
+    slots.push(...(val?.slots || []));
+  }
+
+  // Overlap, not containment: Gilberto's hour and Lionel's half-hour rarely
+  // line up, and Lionel being there for part of the cut is the whole point.
+  const matched = slots
+    .map((iso) => ({ iso, start: Date.parse(iso) }))
+    .filter((s) => Number.isFinite(s.start) && s.start > now)
+    .filter((s) => {
+      const slotEnd = s.start + GILBERTO_SLOT_MINUTES * 60000;
+      return onFloor.some((a) => s.start < a.end && slotEnd > a.start);
+    })
+    .sort((a, b) => a.start - b.start)
+    .map((s) => s.iso);
+
+  withLionelCache = { at: Date.now(), slots: matched };
+  return matched;
+}
+
 function familyFriendsValue(contact) {
   const fields = Array.isArray(contact?.customFields) ? contact.customFields : [];
   const hit = fields.find((f) => f?.id === FAMILY_FRIENDS_FIELD_ID);
@@ -231,6 +317,36 @@ function isOnTheList(contact) {
 }
 
 function registerFriendsFamilyRoutes(app) {
+  /**
+   * GET /api/barbershop/friends-family/gilberto-with-lionel
+   *
+   * Gilberto's open slots that land while Lionel has a client in his chair.
+   * Separate from the sign-in because it costs two GHL calls and is only
+   * wanted if someone scrolls to the standins and asks for it.
+   *
+   * Unauthenticated on purpose: everything it returns is already public on
+   * Gilberto's own booking widget, and the inverse (when Lionel is busy) is
+   * equally readable from Lionel's. Cached so a curious refresh is free.
+   */
+  app.get("/api/barbershop/friends-family/gilberto-with-lionel", async (req, res) => {
+    if (!ghlBarber) {
+      return res.status(503).json({ ok: false, error: "Unavailable" });
+    }
+    try {
+      const slots = await gilbertoSlotsWithLionel();
+      res.set(
+        "Cache-Control",
+        "public, max-age=300, s-maxage=600, stale-while-revalidate=600"
+      );
+      return res.json({ ok: true, slots, count: slots.length });
+    } catch (err) {
+      console.error("[ff] gilberto-with-lionel failed:", err.message);
+      // Degrade to "no filter available" rather than an error the portal
+      // has to explain — the plain Gilberto link still works.
+      return res.json({ ok: true, slots: [], count: 0, degraded: true });
+    }
+  });
+
   /**
    * GET  /api/barbershop/friends-family/announcement
    * PUT  /api/barbershop/friends-family/announcement   body: { text }
