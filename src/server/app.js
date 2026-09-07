@@ -9606,9 +9606,71 @@ function createApp() {
     }
   });
 
+  // GET /api/barbers/square/sync-health
+  // Is the scheduled sweep actually carrying the load? Shows, per barber, when
+  // the cron last ran, when anything last synced, how close the token is to
+  // expiry, and whether a reconnect alert is outstanding. This is the check that
+  // would have caught Gilberto's token dying on 2026-09-04 four days early.
+  app.get("/api/barbers/square/sync-health", async (req, res) => {
+    try {
+      const { data, error } = await supabase
+        .from("barber_square_tokens")
+        .select(
+          "barber_ghl_id, square_merchant_name, expires_at, last_synced_at, " +
+            "last_cron_sync_at, last_cron_error, last_reauth_alert_at, connected_at"
+        );
+      if (error) throw error;
+
+      const now = Date.now();
+      const hoursSince = (ts) => (ts ? Math.round(((now - new Date(ts).getTime()) / 3600000) * 10) / 10 : null);
+
+      const barbers = (data || []).map((row) => {
+        const expiresInHours = row.expires_at
+          ? Math.round(((new Date(row.expires_at).getTime() - now) / 3600000) * 10) / 10
+          : null;
+        return {
+          barberGhlId: row.barber_ghl_id,
+          merchantName: row.square_merchant_name,
+          tokenExpiresInHours: expiresInHours,
+          tokenExpired: expiresInHours != null && expiresInHours <= 0,
+          hoursSinceAnySync: hoursSince(row.last_synced_at),
+          hoursSinceCronSync: hoursSince(row.last_cron_sync_at),
+          lastCronError: row.last_cron_error,
+          reauthAlertOutstanding: !!row.last_reauth_alert_at,
+        };
+      });
+
+      // Healthy = token alive and the cron has swept within the last two ticks.
+      const unhealthy = barbers.filter(
+        (b) => b.tokenExpired || b.lastCronError || b.hoursSinceCronSync == null || b.hoursSinceCronSync > 13
+      );
+
+      res.json({ success: true, healthy: unhealthy.length === 0, barbers, unhealthy });
+    } catch (error) {
+      console.error("[API] Error reading Square sync health:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/square/sync-now
+  // Run the scheduled sweep immediately (refresh tokens, then sync every
+  // connected barber). Shares the cron's in-flight guard.
+  app.post("/api/barbers/square/sync-now", async (req, res) => {
+    req.setTimeout(300000);
+    res.setTimeout(300000);
+    try {
+      const { runSquareSyncNow } = require("../services/squareSyncCron");
+      await runSquareSyncNow();
+      res.json({ success: true, message: "Square sweep complete — see server logs for per-barber detail." });
+    } catch (error) {
+      console.error("[API] Error running Square sweep:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // POST /api/barbers/square/refresh-all-tokens
   // Refresh tokens for all barbers expiring within 8 days.
-  // Intended to be called by a daily cron job (e.g., Render Cron or an external scheduler).
+  // Also runs automatically every 6h via startSquareSyncCron().
   app.post("/api/barbers/square/refresh-all-tokens", async (req, res) => {
     try {
       const results = await refreshAllExpiringTokens();
@@ -15477,6 +15539,9 @@ function createApp() {
   // ═══ LEADS COMMAND CENTER ROUTES ═══
   app.use("/api/leads", leadsRoutes);
 
+  // ═══ CAREERS / BARBER RECRUITING ROUTES (careers page apply + iOS Applicants) ═══
+  app.use("/api/careers", require("../careers/careersRoutes"));
+
   // ═══ ADS TRANSPARENCY ROUTES (per-artist Meta ad metrics) ═══
   app.use("/api/ads", require("../ads/adsRoutes"));
 
@@ -15869,6 +15934,13 @@ function createApp() {
 
   const { startFirefliesCleanupCron } = require("../services/firefliesCleanupCron");
   startFirefliesCleanupCron();
+
+  // ═══ SQUARE TOKEN REFRESH + TRANSACTION SYNC SWEEP ═══
+  // Until this existed, the iOS Earnings tab was the only thing that refreshed a
+  // barber's Square token or pulled their payments. An unopened app meant an
+  // expired connection and missing money.
+  const { startSquareSyncCron } = require("../services/squareSyncCron");
+  startSquareSyncCron();
 
   // ═══ NIGHTLY ANALYTICS SNAPSHOT CRON ═══
   startSnapshotCron();

@@ -301,13 +301,14 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
 
   const matched = synced - unmatchedResults.length;
   const unmatched = unmatchedResults.map((r) => r.payment);
+  const autoRecorded = activeResults.filter((r) => r.autoRecorded).length;
 
   // Update last_synced_at on the token row
   await updateLastSynced(barberGhlId, null);
 
-  console.log(`[SquareSync] Barber ${barberGhlId}: ${synced - unmatched.length} matched (${autoMatched.length} with details), ${unmatched.length} unmatched of ${synced} total`);
+  console.log(`[SquareSync] Barber ${barberGhlId}: ${synced - unmatched.length} matched (${autoRecorded} saved outright, ${autoMatched.length} awaiting confirmation), ${unmatched.length} unmatched of ${synced} total`);
 
-  return { synced, matched, autoMatched, unmatched };
+  return { synced, matched, autoRecorded, autoMatched, unmatched };
 }
 
 /**
@@ -341,6 +342,7 @@ async function backfillBarberTransactions(barberGhlId, options = {}) {
   const totals = {
     synced: 0,
     matched: 0,
+    autoRecorded: 0,
     autoMatched: [],
     unmatched: [],
     chunksProcessed: 0,
@@ -358,6 +360,7 @@ async function backfillBarberTransactions(barberGhlId, options = {}) {
     });
     totals.synced += result.synced;
     totals.matched += result.matched;
+    totals.autoRecorded += result.autoRecorded || 0;
     totals.autoMatched.push(...result.autoMatched);
     totals.unmatched.push(...result.unmatched);
     totals.chunksProcessed++;
@@ -646,8 +649,24 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     createdAt,
   });
 
-  // Deposits are auto-saved to Supabase immediately (excluded from Review Payments screen).
-  // All other types are deferred — returned as suggested matches for barber confirmation.
+  // Everything that reached this point matched a GHL contact by email or phone —
+  // the high-confidence path — so it is saved immediately rather than deferred.
+  //
+  // It used to be that only deposits and product sales were saved here and every
+  // regular haircut was returned as a *suggestion* the barber had to confirm in
+  // Review Payments before any row existed. The Earnings tab reads Supabase, so
+  // until someone opened the app and tapped through that screen the money simply
+  // was not there — and a suggestion is computed per sync and thrown away, so an
+  // unopened app meant it was recomputed and discarded forever. Confirmation is
+  // the right gate for *who* a payment belongs to; it was never the right gate
+  // for *whether the payment exists*.
+  //
+  // Lower-confidence matches (batchProximityMatch, which pairs payments to
+  // appointments by day order) are deliberately still deferred, and payments
+  // with no contact at all still go to the unmatched queue for a human.
+  //
+  // Re-confirming an already-saved payment is safe: assignUnmatchedPayment()
+  // updates the existing row by square_payment_id instead of inserting.
   if (transactionType === "deposit") {
     await recordTransaction({
       contactId,
@@ -686,33 +705,27 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
     return { matched: true, payment: null, autoMatchDetail: null };
   }
 
-  // Non-deposit, non-product: return as suggested match (NOT saved to Supabase yet)
-  const autoMatchDetail = {
-    squarePaymentId: paymentId,
+  // Session payments with a confident contact match — save now, don't defer.
+  await recordTransaction({
     contactId,
     contactName,
-    appointmentId: matchedAppointment?.id || null,
-    appointmentTitle: matchedAppointment?.title || null,
-    appointmentStartTime: matchedAppointment?.startTime || null,
-    calendarId: matchedAppointment?.calendarId || null,
-    amountCents: totalCents, // total_money (service + tip)
+    barberGhlId,
+    squarePayment,
+    totalCents,
     serviceCents,
     createdAt,
-    matchMethod,
+    appointmentId: matchedAppointment?.id || null,
+    calendarId: matchedAppointment?.calendarId || null,
     squareTipCents: squarePayment.tip_money?.amount || null,
-    // Extended fields for deferred confirmation
-    squareOrderId: squarePayment.order_id || null,
-    cardBrand: squarePayment.card_details?.card?.card_brand || null,
-    last4: squarePayment.card_details?.card?.last_4 || null,
-    itemType: orderDetails?.itemType || null,
-    isProductSale: orderDetails?.isProductSale || false,
-    basePriceCents: orderDetails?.basePriceCents || null,
-    totalTaxCents: orderDetails?.totalTaxCents || null,
-    discountCents: orderDetails?.totalDiscountCents || null,
-    note: squarePayment.note || null,
-  };
-
-  return { matched: true, payment: null, autoMatchDetail };
+    discountCents: orderDetails.totalDiscountCents,
+    orderDetails,
+  });
+  console.log(
+    `[SquareSync] Auto-recorded session payment: ${paymentId} ($${totalCents / 100}) → ` +
+      `${contactName || contactId} via ${matchMethod}` +
+      `${matchedAppointment ? `, appointment ${matchedAppointment.id}` : ", no appointment link"}`
+  );
+  return { matched: true, payment: null, autoMatchDetail: null, autoRecorded: true };
 }
 
 /**
