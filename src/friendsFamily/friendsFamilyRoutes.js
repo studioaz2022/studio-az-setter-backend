@@ -237,20 +237,20 @@ async function nextSlotFor(calendarId) {
 // there during his lunch, or during an appointment that no longer exists.
 const LIONEL_GHL_USER_ID = "1kFG5FWdUDhXLUX46snG";
 
-// Haircut + Beard only, both rates — Lionel's call, 2026-09-06. A beard
-// sits him in one place for the long appointment, which is when he can
-// actually keep half an eye on the next chair.
+// All four of the calendars Lionel cuts on — a booking on any of them
+// means he is in the building, which is the whole test.
 //
-// Worth knowing what this costs, because it is not obvious from the names:
-// over the next 21 days he has 2 regular H+B and 6 F&F H+B bookings, but
-// 13 regular haircuts and 25 F&F haircuts. Dropping the two haircut-only
-// calendars therefore takes Gilberto's qualifying openings from 25 across
-// 8 days down to 8 across 4. Add the two ids back to widen it again.
+// Briefly narrowed to the two beard calendars on 2026-09-06 and reverted
+// the same day. Worth leaving the numbers here because the calendar names
+// do not hint at them: over 21 days the split is 25 F&F haircuts, 13
+// regular haircuts, 6 F&F H+B, 2 regular H+B. The F&F HAIRCUT calendar is
+// the busiest by a distance, so dropping the haircut-only pair costs about
+// two thirds of the result (25 openings over 8 days -> 8 over 4).
 const LIONEL_CHAIR_CALENDARS = new Set([
+  "Bsv9ngkRgsbLzgtN3Vpq", // Haircut
   "pGNsYjGyEYW9LCD1GcQN", // Haircut + Beard
+  "9a66xeZi2pEJWQpxiMjy", // F&F Haircut
   "0qOmPMcP7L4qz58fxmu4", // F&F Haircut + Beard
-  // "Bsv9ngkRgsbLzgtN3Vpq", // Haircut — excluded per Lionel
-  // "9a66xeZi2pEJWQpxiMjy", // F&F Haircut — excluded per Lionel
 ]);
 const BOOKED_STATUSES = new Set(["confirmed", "new", "showed"]);
 
