@@ -896,7 +896,45 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         contactName = contact?.contactName || contact?.name || `${contact?.firstName || ""} ${contact?.lastName || ""}`.trim();
       } catch { /* ignore */ }
 
-      // Return as suggested match (NOT saved to Supabase — deferred to user confirmation)
+      // Record it, THEN offer it for confirmation — not one or the other.
+      //
+      // Deferring these was costing real money. In July 2026 Lionel had 151
+      // Square payments and zero recorded haircuts: deposits auto-saved, every
+      // service payment sat here as a suggestion nobody ever tapped. The
+      // uncertainty in a proximity match is *which client* the payment belongs
+      // to, never whether the payment happened — so withholding the row hides a
+      // known amount to avoid guessing a name, which is the wrong trade.
+      //
+      // This matcher is also stricter than "Nth payment, Nth appointment": it
+      // scores each candidate by distance from the appointment end, applies a
+      // grace period for paying in the chair, and rejects anything past
+      // MAX_MATCH_DISTANCE_MIN rather than forcing a pairing.
+      //
+      // The suggestion is still returned, so Review Payments offers the same
+      // correction pass it always did; confirming updates this row by
+      // square_payment_id instead of inserting. Once the row exists, the next
+      // sync's dedup drops it from the queue — one review opportunity, then it
+      // settles.
+      try {
+        await recordTransaction({
+          contactId,
+          contactName,
+          barberGhlId,
+          squarePayment: sp,
+          totalCents,
+          serviceCents,
+          createdAt: sp.created_at,
+          appointmentId: match.id,
+          calendarId: match.calendarId || null,
+          squareTipCents: sp.tip_money?.amount || null,
+          discountCents: candidate.orderDetails?.totalDiscountCents || null,
+          orderDetails: candidate.orderDetails,
+        });
+      } catch (err) {
+        console.warn(`[SquareSync] Failed to record proximity match ${sp.id}: ${err.message}`);
+      }
+
+      // Returned so the barber still gets asked to confirm the attribution.
       const autoMatchDetail = {
         squarePaymentId: sp.id,
         contactId,
@@ -922,7 +960,7 @@ async function batchProximityMatch(unmatchedResults, appointments, barberGhlId, 
         note: sp.note || null,
       };
 
-      console.log(`[SquareSync] Sequential match (suggested): payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
+      console.log(`[SquareSync] Proximity match (recorded, pending confirmation): payment ${sp.id} ($${totalCents / 100}) → appointment ${match.id} (${contactName})`);
       newlyMatched.push({ idx: candidate._idx, autoMatchDetail });
     }
   }
