@@ -8798,11 +8798,18 @@ function createApp() {
       const { barberGhlId } = req.params;
       const { supabase } = require("../clients/supabaseClient");
 
+      // `reviewed_at IS NULL` is what makes this queue finishable. The two
+      // conditions below are derived from the row's own shape, so without it a
+      // Venmo payment that never got an appointment link asks to be reviewed
+      // forever — 32 of them had accumulated since February by 2026-09-07.
       const { data, error } = await supabase
         .from("transactions")
         .select("*")
         .eq("artist_ghl_id", barberGhlId)
         .eq("payment_method", "venmo")
+        .is("reviewed_at", null)
+        .is("deleted_at", null)
+        .is("superseded_by", null)
         .or("contact_id.eq.venmo_unmatched,appointment_id.is.null")
         .order("session_date", { ascending: false });
 
@@ -9602,6 +9609,82 @@ function createApp() {
       res.json({ success: true, expiresAt: result.expires_at });
     } catch (error) {
       console.error("[API] Error refreshing Square token:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/transactions/review
+  // Mark rows as reviewed (attribution settled) or put them back in the queue.
+  // Body: { transactionIds: [...], reviewedBy?, note?, undo? }
+  //
+  // Marking reviewed changes no money — not the amount, the contact, or the
+  // appointment. It only records that someone has decided this row is settled,
+  // so the queues stop asking. `undo: true` clears it again, which is why this
+  // is safe to use liberally.
+  app.post("/api/transactions/review", async (req, res) => {
+    try {
+      const { transactionIds, reviewedBy, note, undo } = req.body || {};
+      if (!Array.isArray(transactionIds) || transactionIds.length === 0) {
+        return res.status(400).json({ success: false, error: "transactionIds must be a non-empty array" });
+      }
+      if (transactionIds.length > 500) {
+        return res.status(400).json({ success: false, error: "Too many ids in one call (max 500)" });
+      }
+
+      const patch = undo
+        ? { reviewed_at: null, reviewed_by: null, review_note: null }
+        : {
+            reviewed_at: new Date().toISOString(),
+            reviewed_by: reviewedBy || "unknown",
+            review_note: note || null,
+          };
+
+      const { data, error } = await supabase
+        .from("transactions")
+        .update(patch)
+        .in("id", transactionIds)
+        .select("id");
+
+      if (error) throw error;
+
+      console.log(`[Review] ${undo ? "Un-reviewed" : "Reviewed"} ${data?.length || 0} transaction(s) by ${reviewedBy || "unknown"}`);
+      res.json({ success: true, updated: data?.length || 0 });
+    } catch (error) {
+      console.error("[API] Error updating review state:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/review-queue
+  // Everything still awaiting a human decision, in one place, across methods.
+  app.get("/api/barbers/:barberGhlId/review-queue", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("id, session_date, payment_method, transaction_type, gross_amount, contact_id, contact_name, appointment_id, notes")
+        .eq("artist_ghl_id", barberGhlId)
+        .is("reviewed_at", null)
+        .is("deleted_at", null)
+        .is("superseded_by", null)
+        .order("session_date", { ascending: false });
+      if (error) throw error;
+
+      // Only rows whose attribution is actually in question. A row with a
+      // contact AND an appointment needs nobody.
+      const needsReview = (data || []).filter(
+        (t) => t.contact_id === "venmo_unmatched" || !t.contact_id || !t.appointment_id
+      );
+
+      res.json({
+        success: true,
+        count: needsReview.length,
+        noContact: needsReview.filter((t) => !t.contact_id || t.contact_id === "venmo_unmatched").length,
+        noAppointmentLink: needsReview.filter((t) => t.contact_id && t.contact_id !== "venmo_unmatched" && !t.appointment_id).length,
+        items: needsReview,
+      });
+    } catch (error) {
+      console.error("[API] Error building review queue:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
