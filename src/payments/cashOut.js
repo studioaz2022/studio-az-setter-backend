@@ -190,13 +190,23 @@ async function getCashOutDay(barberGhlId, day) {
       } else if (t.appointment_id) {
         reason = "Belongs to a visit on another day";
         needsAttention = false;
-      } else if (!t.contact_id || t.contact_id === "walk_in" || t.contact_id === "venmo_unmatched") {
+      } else if (t.contact_id === "walk_in") {
+        reason = "Walk-in — no appointment";
+        needsAttention = false;
+      } else if (!t.contact_id || t.contact_id === "venmo_unmatched") {
         reason = "No client on this payment";
         needsAttention = true;
       } else {
         reason = "Not assigned to a visit";
         needsAttention = true;
       }
+
+      // An answered question is not an open one. Once a barber has said what a
+      // payment is — a walk-in, or simply "yes, I know" — it keeps its place in
+      // the day's money but stops asking. Without this the same orphan is
+      // raised on every sweep forever, which is exactly how the old Venmo queue
+      // accumulated 32 payments going back to February.
+      if (t.reviewed_at) needsAttention = false;
 
       return { ...p, reason, needsAttention, linkedAppointmentId: t.appointment_id || null };
     })

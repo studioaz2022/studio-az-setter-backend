@@ -10002,6 +10002,39 @@ function createApp() {
     }
   });
 
+  // POST /api/barbers/:barberGhlId/transactions/:transactionId/walk-in
+  // "Somebody sat down without a booking." The money is real and it is the
+  // shop's — it just has no appointment, and never will. Marks it reviewed so
+  // it keeps its place in the day's total while it stops being asked about.
+  app.post("/api/barbers/:barberGhlId/transactions/:transactionId/walk-in", async (req, res) => {
+    try {
+      const { barberGhlId, transactionId } = req.params;
+      const { data, error } = await supabase
+        .from("transactions")
+        .update({
+          contact_id: "walk_in",
+          contact_name: "Walk-in",
+          appointment_id: null,
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: barberGhlId,
+          review_note: "Walk-in — no appointment",
+        })
+        .eq("id", transactionId)
+        .eq("artist_ghl_id", barberGhlId)
+        .is("deleted_at", null)
+        .select("id, gross_amount");
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        return res.status(404).json({ success: false, error: "Transaction not found" });
+      }
+      console.log(`[CashOut] $${data[0].gross_amount} marked walk-in`);
+      res.json({ success: true });
+    } catch (error) {
+      console.error("[API] walk-in failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // POST /api/barbers/:barberGhlId/transactions/:transactionId/unassign
   // Take a payment off its visit and return it to MONEY WITH NO VISIT.
   //
