@@ -191,15 +191,68 @@ async function syncBarberTransactions(barberGhlId, options = {}) {
         userId: barberGhlId,
         sdkInstance: ghlBarber,
       });
-      // Filter to active appointments only (confirmed, showed, or new)
-      // Also exclude break/block/personal events — these are calendar holds, not real appointments
+      // Filter to appointments that could plausibly own a payment.
+      //
+      // "new" used to be in this list and should not be. Measured over Jun 1 -
+      // Sep 5 2026 across both connected barbers: 185 past appointments sat at
+      // status "new" and exactly ONE of them ever received a payment. They are
+      // bookings that were never confirmed and mostly never happened. Leaving
+      // them in the candidate pool let a real payment be attached to an
+      // appointment that did not occur — and worse, claim a slot away from the
+      // confirmed appointment it belonged to.
+      //
+      // Also exclude break/block/personal events — calendar holds, not appointments.
       const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
       appointmentsForRange = appointmentsForRange.filter((apt) => {
-        if (!["confirmed", "showed", "new"].includes(apt.appointmentStatus)) return false;
+        if (!["confirmed", "showed"].includes(apt.appointmentStatus)) return false;
         const title = (apt.title || "").toLowerCase().trim();
         return !blockedTitles.includes(title);
       });
-      console.log(`[SquareSync] Pre-fetched ${appointmentsForRange.length} active appointments for proximity matching`);
+
+      // Drop appointments that already have a recorded session payment.
+      //
+      // batchProximityMatch() guards against claiming one appointment twice via
+      // claimedAptIndices, but that set lives for a single run. Payments already
+      // in the table are skipped by the dedup check, so they never enter the
+      // candidate list — which makes the appointment they paid for look free
+      // again on the next run. Re-syncing a month could therefore hang a second,
+      // unrelated payment off an appointment that was already settled. That is
+      // how a "dad paid for himself and his son" pair ends up as two payments on
+      // one appointment while the son's own slot reads unpaid.
+      //
+      // A payment left without an appointment here is NOT lost: contact-matched
+      // ones are still recorded with a null appointment_id, so the money counts
+      // and only the link waits for review.
+      const priorAptIds = appointmentsForRange.map((a) => a.id).filter(Boolean);
+      if (priorAptIds.length > 0) {
+        const paidAptIds = new Set();
+        // Chunked — Supabase .in() on a few hundred ids is fine, thousands is not.
+        for (let i = 0; i < priorAptIds.length; i += 200) {
+          const chunk = priorAptIds.slice(i, i + 200);
+          const { data: paidRows, error: paidErr } = await supabase
+            .from("transactions")
+            .select("appointment_id")
+            .eq("artist_ghl_id", barberGhlId)
+            .eq("transaction_type", "session_payment")
+            .is("deleted_at", null)
+            .is("superseded_by", null)
+            .in("appointment_id", chunk);
+          if (paidErr) {
+            // Fail open: an unreadable ledger should not stop the sync, it should
+            // only cost us this extra safety check for this run.
+            console.warn(`[SquareSync] Could not load already-paid appointments: ${paidErr.message}`);
+            break;
+          }
+          for (const r of paidRows || []) if (r.appointment_id) paidAptIds.add(r.appointment_id);
+        }
+        if (paidAptIds.size > 0) {
+          const before = appointmentsForRange.length;
+          appointmentsForRange = appointmentsForRange.filter((a) => !paidAptIds.has(a.id));
+          console.log(`[SquareSync] Excluded ${before - appointmentsForRange.length} appointment(s) that already have a session payment`);
+        }
+      }
+
+      console.log(`[SquareSync] Pre-fetched ${appointmentsForRange.length} claimable appointments for proximity matching`);
     } else {
       console.warn("[SquareSync] ghlBarber SDK not available — skipping appointment proximity matching");
     }
@@ -598,6 +651,12 @@ async function matchAndRecordPayment(squarePayment, barberGhlId, accessToken, ap
           .select("id, calendar_id, start_time, contact_id")
           .eq("contact_id", contactId)
           .gt("start_time", createdAt)
+          // "new" belongs HERE even though it was removed from the proximity
+          // candidate pool above. A deposit is paid at booking time, when the
+          // appointment legitimately has not been confirmed yet — that is the
+          // normal state for the thing this query is looking for. The proximity
+          // pool is the opposite case: appointments already in the past, where
+          // still being "new" means it never happened.
           .in("status", ["confirmed", "showed", "new"])
           .order("start_time", { ascending: true })
           .limit(1);
