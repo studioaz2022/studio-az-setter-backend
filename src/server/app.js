@@ -2904,9 +2904,25 @@ function createApp() {
       //
       // Nothing about that is visible from the client, which is why it survived
       // this long. Page until the table is exhausted.
+      // Only the columns the iOS Transaction model actually decodes.
+      // `select('*')` shipped ten more, and order_line_items alone — a jsonb
+      // blob the app has never read — was 172 KB of a 1.65 MB response. The
+      // client pays for every unread column twice: once on the wire, and again
+      // in JSONDecoder, which was 0.77s of MAIN-THREAD time per call.
+      const EARNINGS_COLUMNS = [
+        'id', 'contact_id', 'contact_name', 'appointment_id', 'artist_ghl_id',
+        'transaction_type', 'payment_method', 'payment_recipient', 'gross_amount',
+        'shop_percentage', 'artist_percentage', 'shop_amount', 'artist_amount',
+        'settlement_status', 'settled_amount', 'settled_at', 'square_payment_id',
+        'square_order_id', 'venmo_transaction_id', 'venmo_story_url',
+        'venmo_profile_pic_url', 'notes', 'session_date', 'location_id',
+        'created_at', 'calendar_id', 'service_price', 'tip_amount',
+        'square_payment_time',
+      ].join(', ');
+
       let query = supabase
         .from('transactions')
-        .select('*')
+        .select(EARNINGS_COLUMNS)
         .eq('artist_ghl_id', artistId)
         .is('superseded_by', null) // Phase 7g
         .is('deleted_at', null);   // Phase 7g
