@@ -9700,6 +9700,25 @@ function createApp() {
     }
   });
 
+  // GET /api/barbers/:barberGhlId/reconcile?days=14[&apply=true]
+  // Per-day verdict: what actually needs a human, split money vs attendance.
+  // Read-only unless apply=true, which permits the forced-balance link (the
+  // case where exactly one unpaid appointment and one surplus payment leave
+  // only a single assignment that balances the day).
+  app.get("/api/barbers/:barberGhlId/reconcile", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const days = Math.min(parseInt(req.query.days, 10) || 14, 90);
+      const apply = req.query.apply === "true";
+      const { reconcileBarber } = require("../payments/dailyReconcile");
+      const result = await reconcileBarber(barberGhlId, { days, apply });
+      res.json({ success: true, ...result });
+    } catch (error) {
+      console.error("[API] Reconcile failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // GET /api/barbers/square/sync-health
   // Is the scheduled sweep actually carrying the load? Shows, per barber, when
   // the cron last ran, when anything last synced, how close the token is to

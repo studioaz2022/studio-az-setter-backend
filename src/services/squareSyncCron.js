@@ -187,6 +187,31 @@ async function tick() {
         `${totals.autoRecorded} recorded, ${totals.pending} awaiting confirmation, ` +
         `${totals.unmatched} unmatched, ${totals.failed} failed`
     );
+
+    // 3. Reconcile the days that just synced, so the two never disagree.
+    // Report-only until RECONCILE_AUTO_RESOLVE=true — it runs against real days
+    // and prints its verdicts for a while before it is allowed to change a row.
+    try {
+      const { reconcileAllBarbers, AUTO_RESOLVE_ENABLED } = require("../payments/dailyReconcile");
+      const reports = await reconcileAllBarbers({ days: 7 });
+      for (const r of reports) {
+        const t = r.totals;
+        console.log(
+          `🧾 [Reconcile] ${r.barberGhlId}: ${t.clean}/${t.days} day(s) clean · ` +
+            `${t.moneyExceptions} money exception(s) · ${t.attendanceExceptions} attendance item(s) · ` +
+            `forced balance ${AUTO_RESOLVE_ENABLED ? `${t.forcedResolved} applied` : `${t.forcedAvailable} available (REPORT ONLY)`}`
+        );
+        for (const d of r.days.filter((d) => d.verdict === "money_exception")) {
+          console.log(
+            `   ↳ ${d.day}: ${d.surplusPayments} surplus payment(s) [` +
+              d.surplusDetail.map((s) => `$${s.amount} ${s.method} ${s.contactName || "?"}`).join(", ") +
+              `], ${d.unpaidAppointments} unpaid appointment(s)`
+          );
+        }
+      }
+    } catch (err) {
+      console.error(`❌ [Reconcile] pass failed: ${err.message}`);
+    }
   } catch (err) {
     console.error("❌ [SquareCron] Sweep failed:", err.message);
   } finally {
