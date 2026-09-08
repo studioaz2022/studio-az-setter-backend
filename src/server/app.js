@@ -9700,6 +9700,113 @@ function createApp() {
     }
   });
 
+  // POST /api/barbers/:barberGhlId/appointments/:appointmentId/resolve
+  // Answer the attendance question for one appointment: cash | noshow | comp.
+  // Body: { outcome, amount?, tip?, resolvedBy? }
+  //
+  // "cash" is the only one that creates money — and it is real revenue that
+  // would otherwise never be counted, which is the whole reason this exists.
+  // "noshow" and "comp" record that there is correctly nothing to count.
+  app.post("/api/barbers/:barberGhlId/appointments/:appointmentId/resolve", async (req, res) => {
+    try {
+      const { barberGhlId, appointmentId } = req.params;
+      const { outcome, amount, tip, resolvedBy } = req.body || {};
+
+      if (!["cash", "noshow", "comp"].includes(outcome)) {
+        return res.status(400).json({ success: false, error: "outcome must be cash, noshow or comp" });
+      }
+
+      const { data: appt, error: apptErr } = await supabase
+        .from("appointments")
+        .select("id, title, contact_id, calendar_id, start_time, assigned_user_id")
+        .eq("id", appointmentId)
+        .single();
+      if (apptErr || !appt) {
+        return res.status(404).json({ success: false, error: "Appointment not found" });
+      }
+      if (appt.assigned_user_id !== barberGhlId) {
+        return res.status(403).json({ success: false, error: "Appointment belongs to another barber" });
+      }
+
+      let transactionId = null;
+
+      if (outcome === "cash") {
+        const gross = Number(amount);
+        if (!Number.isFinite(gross) || gross <= 0) {
+          return res.status(400).json({ success: false, error: "cash requires a positive amount" });
+        }
+        const tipAmount = Number.isFinite(Number(tip)) ? Number(tip) : 0;
+        const sessionDate = new Intl.DateTimeFormat("en-CA", {
+          timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
+        }).format(new Date(appt.start_time));
+
+        const { data: inserted, error: insErr } = await supabase
+          .from("transactions")
+          .insert({
+            contact_id: appt.contact_id,
+            contact_name: "",
+            appointment_id: appt.id,
+            artist_ghl_id: barberGhlId,
+            transaction_type: "session_payment",
+            payment_method: "cash",
+            payment_recipient: "artist_direct",
+            gross_amount: gross,
+            shop_percentage: 0,
+            artist_percentage: 100,
+            shop_amount: 0,
+            artist_amount: gross,
+            settlement_status: "settled",
+            session_date: sessionDate,
+            location_id: process.env.GHL_BARBER_LOCATION_ID || "GLRkNAxfPtWTqTiN83xj",
+            calendar_id: appt.calendar_id || null,
+            service_price: gross - tipAmount,
+            tip_amount: tipAmount,
+            notes: "Cash, recorded from the end-of-day check",
+            // Born settled: a person just told us what it was.
+            reviewed_at: new Date().toISOString(),
+            reviewed_by: resolvedBy || barberGhlId,
+            review_note: "Cash confirmed against an unpaid appointment",
+          })
+          .select("id")
+          .single();
+        if (insErr) throw insErr;
+        transactionId = inserted.id;
+      }
+
+      const { error: updErr } = await supabase
+        .from("appointments")
+        .update({
+          payment_resolution: outcome,
+          payment_resolved_at: new Date().toISOString(),
+          payment_resolved_by: resolvedBy || barberGhlId,
+        })
+        .eq("id", appointmentId);
+      if (updErr) throw updErr;
+
+      console.log(`[Reconcile] ${barberGhlId} resolved "${appt.title}" as ${outcome}${transactionId ? ` ($${amount} cash recorded)` : ""}`);
+      res.json({ success: true, outcome, transactionId });
+    } catch (error) {
+      console.error("[API] Appointment resolve failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/attendance-queue?days=14
+  // Past appointments with no payment and no answer yet — the end-of-day list.
+  app.get("/api/barbers/:barberGhlId/attendance-queue", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const days = Math.min(parseInt(req.query.days, 10) || 14, 90);
+      const { reconcileBarber } = require("../payments/dailyReconcile");
+      const r = await reconcileBarber(barberGhlId, { days, apply: false });
+      const items = r.days.flatMap((d) => d.unpaidDetail.map((a) => ({ ...a, day: d.day })));
+      res.json({ success: true, count: items.length, items });
+    } catch (error) {
+      console.error("[API] Attendance queue failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // GET /api/barbers/:barberGhlId/reconcile?days=14[&apply=true]
   // Per-day verdict: what actually needs a human, split money vs attendance.
   // Read-only unless apply=true, which permits the forced-balance link (the

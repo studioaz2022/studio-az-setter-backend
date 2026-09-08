@@ -74,11 +74,16 @@ async function reconcileBarber(barberGhlId, options = {}) {
   endExclusive.setUTCHours(0, 0, 0, 0);
   const start = new Date(endExclusive.getTime() - lookbackDays * 24 * 60 * 60 * 1000);
 
+  // payment_resolution IS NULL: once someone has said "that one was cash" or
+  // "he no-showed", the question is answered and the appointment stops being
+  // raised. Without this the same unpaid appointment reappears every sweep
+  // forever — the exact failure the Venmo queue had.
   const { data: appts, error: apptErr } = await supabase
     .from("appointments")
     .select("id, title, contact_id, calendar_id, start_time, status")
     .eq("assigned_user_id", barberGhlId)
     .eq("status", "confirmed")
+    .is("payment_resolution", null)
     .gte("start_time", start.toISOString())
     .lt("start_time", endExclusive.toISOString());
   if (apptErr) throw new Error(`Appointment load failed: ${apptErr.message}`);
