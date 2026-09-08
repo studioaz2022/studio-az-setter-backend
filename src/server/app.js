@@ -2269,7 +2269,7 @@ function createApp() {
   // FINANCIAL TRACKING API ENDPOINTS
   // ═══════════════════════════════════════════════════════════════════════════
 
-  const { supabase } = require("../clients/supabaseClient");
+  const { supabase, fetchAllRows } = require("../clients/supabaseClient");
   const { recordTransaction } = require("../clients/financialTracking");
 
   // POST /api/transactions - Record a manual transaction
@@ -2904,39 +2904,28 @@ function createApp() {
       //
       // Nothing about that is visible from the client, which is why it survived
       // this long. Page until the table is exhausted.
-      const PAGE = 1000;
-      const MAX_ROWS = 50000;   // a ceiling, not an expectation; logged if hit
-      const transactions = [];
-      for (let from = 0; from < MAX_ROWS; from += PAGE) {
-        let query = supabase
-          .from('transactions')
-          .select('*')
-          .eq('artist_ghl_id', artistId)
-          .is('superseded_by', null) // Phase 7g
-          .is('deleted_at', null);   // Phase 7g
+      let query = supabase
+        .from('transactions')
+        .select('*')
+        .eq('artist_ghl_id', artistId)
+        .is('superseded_by', null) // Phase 7g
+        .is('deleted_at', null);   // Phase 7g
 
-        if (locationId) {
-          query = query.eq('location_id', locationId);
-        }
-        if (startDate) {
-          query = query.gte('session_date', startDate);
-        }
-        if (endDate) {
-          query = query.lte('session_date', endDate);
-        }
-
-        const { data: page, error } = await query
-          .order('created_at', { ascending: false })
-          .order('id', { ascending: false })   // stable tiebreak, or pages overlap
-          .range(from, from + PAGE - 1);
-
-        if (error) throw error;
-        transactions.push(...(page || []));
-        if (!page || page.length < PAGE) break;
-        if (from + PAGE >= MAX_ROWS) {
-          console.warn(`[Earnings] artist ${artistId} hit the ${MAX_ROWS}-row ceiling — results are truncated`);
-        }
+      if (locationId) {
+        query = query.eq('location_id', locationId);
       }
+      if (startDate) {
+        query = query.gte('session_date', startDate);
+      }
+      if (endDate) {
+        query = query.lte('session_date', endDate);
+      }
+
+      const { data: transactions, error: txPageErr } = await fetchAllRows(
+        query.order('created_at', { ascending: false }),
+        { label: `earnings:${artistId}`, maxRows: 50000 }
+      );
+      if (txPageErr) throw txPageErr;
 
       // Enrich empty contact_name fields from GHL (batch lookup, then persist)
       const emptyNameTxs = (transactions || []).filter(
@@ -3248,12 +3237,22 @@ function createApp() {
 
       // 1. Fetch all transactions for this artist (group by contact later).
       // Phase 7g — exclude superseded + soft-deleted rows.
-      const { data: txs, error: txErr } = await supabase
-        .from("transactions")
-        .select("contact_id, contact_name, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type")
-        .eq("artist_ghl_id", artistId)
-        .is("superseded_by", null)
-        .is("deleted_at", null);
+      //
+      // Paged, and it was already losing rows. Scoped to an artist and nothing
+      // else, all time: Lionel has 1,319 live transactions and PostgREST was
+      // handing back 1,000 of them without a word. Every contact whose rows fell
+      // off the end was simply absent from "Outstanding from Clients", and every
+      // contact that kept only some of its rows showed too little collected —
+      // which reads as MORE outstanding than is really owed. Silent either way.
+      const { data: txs, error: txErr } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("contact_id, contact_name, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type")
+          .eq("artist_ghl_id", artistId)
+          .is("superseded_by", null)
+          .is("deleted_at", null),
+        { label: "outstanding-contacts" }
+      );
       if (txErr) {
         return res.status(500).json({ success: false, error: txErr.message });
       }
@@ -4624,10 +4623,20 @@ function createApp() {
 
       // 1. Get all tattoo transactions; group by contact_id; for each contact
       //    pick the artist_ghl_id from the LATEST transaction (canonical owner).
-      const { data: txs, error: txErr } = await supabase
-        .from("transactions")
-        .select("contact_id, contact_name, artist_ghl_id, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type, created_at")
-        .eq("location_id", locationId);
+      //
+      // Paged. Scoped to a location and nothing else, all time — the same shape
+      // that cost the shop-wide earnings summary 600 rows. The tattoo location
+      // is only at 57 today so this one has not bitten yet, but "all the money
+      // this location has ever taken" is a set that only grows, and the failure
+      // when it crosses 1000 is silent: contacts vanish from the receivables
+      // pipeline and `total` under-reports with no error to notice.
+      const { data: txs, error: txErr } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("contact_id, contact_name, artist_ghl_id, gross_amount, shop_amount, artist_amount, shop_percentage, payment_recipient, transaction_type, created_at")
+          .eq("location_id", locationId),
+        { label: "outstanding-receivables" }
+      );
       if (txErr) return res.status(500).json({ success: false, error: txErr.message });
 
       // Group transactions by contact_id, recording latest artist + name
@@ -5099,15 +5108,26 @@ function createApp() {
       // 1. Pull all transactions for this artist in the year.
       // Phase 7g — exclude superseded + soft-deleted rows so the tax CSV
       // matches what the artist sees in their own Finance tab.
-      const { data: txs, error: txErr } = await supabase
-        .from("transactions")
-        .select("id, contact_id, contact_name, transaction_type, payment_method, gross_amount, tip_amount, shop_amount, artist_amount, shop_percentage, artist_percentage, session_date, notes")
-        .eq("artist_ghl_id", artistId)
-        .is("superseded_by", null)
-        .is("deleted_at", null)
-        .gte("session_date", startISO)
-        .lt("session_date", endISO)
-        .order("session_date", { ascending: true });
+      //
+      // Paged. A calendar year sounds like a bound and is not one: Lionel has
+      // 1,319 live transactions inside 2026 alone, so this export was writing a
+      // 1,000-row CSV and calling it the year. Sorted session_date ASC, the 319
+      // rows it dropped were the most recent ones — a tax document that was
+      // silently missing the back end of the year, with nothing on its face to
+      // say so. This is the one place in the app where a short read becomes a
+      // number somebody files.
+      const { data: txs, error: txErr } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("id, contact_id, contact_name, transaction_type, payment_method, gross_amount, tip_amount, shop_amount, artist_amount, shop_percentage, artist_percentage, session_date, notes")
+          .eq("artist_ghl_id", artistId)
+          .is("superseded_by", null)
+          .is("deleted_at", null)
+          .gte("session_date", startISO)
+          .lt("session_date", endISO)
+          .order("session_date", { ascending: true }),
+        { label: "tax-csv" }
+      );
       if (txErr) {
         return res.status(500).json({ success: false, error: txErr.message });
       }
@@ -8824,7 +8844,7 @@ function createApp() {
   app.get("/api/barbers/:barberGhlId/venmo/unreviewed", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { supabase } = require("../clients/supabaseClient");
+      const { supabase, fetchAllRows } = require("../clients/supabaseClient");
 
       // `reviewed_at IS NULL` is what makes this queue finishable. The two
       // conditions below are derived from the row's own shape, so without it a
@@ -8833,17 +8853,24 @@ function createApp() {
       //
       // session_payment only, for the same reason as /review-queue: a deposit
       // or product sale without an appointment link is not incomplete.
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("artist_ghl_id", barberGhlId)
-        .eq("payment_method", "venmo")
-        .eq("transaction_type", "session_payment")
-        .is("reviewed_at", null)
-        .is("deleted_at", null)
-        .is("superseded_by", null)
-        .or("contact_id.eq.venmo_unmatched,appointment_id.is.null")
-        .order("session_date", { ascending: false });
+      //
+      // Paged for the same reason as /review-queue — barber-scoped, all time,
+      // bounded only by how much of the backlog has been answered. Eight rows
+      // today; that is a fact about the backlog, not a guarantee about the query.
+      const { data, error } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("*")
+          .eq("artist_ghl_id", barberGhlId)
+          .eq("payment_method", "venmo")
+          .eq("transaction_type", "session_payment")
+          .is("reviewed_at", null)
+          .is("deleted_at", null)
+          .is("superseded_by", null)
+          .or("contact_id.eq.venmo_unmatched,appointment_id.is.null")
+          .order("session_date", { ascending: false }),
+        { label: "venmo-unreviewed" }
+      );
 
       if (error) throw new Error(error.message);
 
@@ -9698,15 +9725,25 @@ function createApp() {
       // them put 92 deposits and 34 product sales in Lionel's queue as
       // permanent, unanswerable noise — they are not incomplete, they are just
       // not appointments.
-      const { data, error } = await supabase
-        .from("transactions")
-        .select("id, session_date, payment_method, transaction_type, gross_amount, contact_id, contact_name, appointment_id, notes")
-        .eq("artist_ghl_id", barberGhlId)
-        .eq("transaction_type", "session_payment")
-        .is("reviewed_at", null)
-        .is("deleted_at", null)
-        .is("superseded_by", null)
-        .order("session_date", { ascending: false });
+      //
+      // Paged. Scoped to a barber, all time, and bounded only by how much of the
+      // backlog has been answered — which is to say not bounded at all. Lionel's
+      // queue is at 929 and rises with every unreviewed payment, so this crosses
+      // 1000 on its own without anyone changing a line. Sorted session_date DESC,
+      // the rows that would fall off are the oldest — the ones that have waited
+      // longest and are least likely to be missed by the person clearing it.
+      const { data, error } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("id, session_date, payment_method, transaction_type, gross_amount, contact_id, contact_name, appointment_id, notes")
+          .eq("artist_ghl_id", barberGhlId)
+          .eq("transaction_type", "session_payment")
+          .is("reviewed_at", null)
+          .is("deleted_at", null)
+          .is("superseded_by", null)
+          .order("session_date", { ascending: false }),
+        { label: "review-queue" }
+      );
       if (error) throw error;
 
       // Only rows whose attribution is actually in question. A row with a
@@ -10282,10 +10319,19 @@ function createApp() {
 
       // How many appointments each payment is already accounted for by: its own,
       // plus any appointment already marked covered by it.
-      const { data: covered } = await supabase
-        .from("appointments")
-        .select("payment_covered_by")
-        .not("payment_covered_by", "is", null);
+      // Paged. This one carries no scope at all — not a barber, not a location,
+      // not a date — so its only bound is how often the covered-visit feature
+      // gets used, across the whole 17k-row appointments table and forever. One
+      // row today because the feature is new. A short read here would understate
+      // coverCount, which makes an already-claimed payment look free to claim
+      // again — the wrong answer, offered confidently.
+      const { data: covered } = await fetchAllRows(
+        supabase
+          .from("appointments")
+          .select("payment_covered_by")
+          .not("payment_covered_by", "is", null),
+        { label: "payment-covered-by" }
+      );
       const coverCount = {};
       for (const c of covered || []) {
         coverCount[c.payment_covered_by] = (coverCount[c.payment_covered_by] || 0) + 1;
@@ -11037,21 +11083,14 @@ function createApp() {
       // shop-wide and all-time, so it was the worst affected: the barbershop
       // has 1,600 rows and this endpoint reported on 1,000 of them, which made
       // every artist's totalEarned here short by whatever fell off the end.
-      const PAGE = 1000;
-      const MAX_ROWS = 100000;
-      const transactions = [];
-      for (let from = 0; from < MAX_ROWS; from += PAGE) {
-        const { data: page, error: txError } = await supabase
+      const { data: transactions, error: txError } = await fetchAllRows(
+        supabase
           .from("transactions")
           .select("*")
-          .eq("location_id", locationId)
-          .order("id", { ascending: false })   // deterministic, or pages overlap
-          .range(from, from + PAGE - 1);
-
-        if (txError) throw txError;
-        transactions.push(...(page || []));
-        if (!page || page.length < PAGE) break;
-      }
+          .eq("location_id", locationId),
+        { label: "earnings-summary" }
+      );
+      if (txError) throw txError;
 
       const { data: rates, error: ratesError } = await supabase
         .from("artist_commission_rates")
@@ -11908,14 +11947,26 @@ function createApp() {
 
       console.log(`\n📊 Syncing Supabase → InstantDB for Lionel (${start} to ${end})`);
 
-      // Fetch all of Lionel's transactions from Supabase
-      const { data: transactions, error } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("artist_ghl_id", LIONEL_GHL_ID)
-        .gte("session_date", start)
-        .lte("session_date", end)
-        .order("session_date", { ascending: false });
+      // Fetch all of Lionel's transactions from Supabase.
+      //
+      // Paged. The default window is 2026-01-01 to today, which is 1,320 rows —
+      // this sync was feeding the rent tracker 1,000 of them and reporting
+      // success. Sorted session_date DESC, the 320 it dropped were the oldest,
+      // so service income for the start of the year never made it across, and
+      // the rent reconcile against the Venmo CSVs was comparing against a
+      // ledger that was short at one end. `fetchAllRows` is imported here rather
+      // than reused from module scope because this handler builds its own client.
+      const { fetchAllRows } = require("../clients/supabaseClient");
+      const { data: transactions, error } = await fetchAllRows(
+        supabase
+          .from("transactions")
+          .select("*")
+          .eq("artist_ghl_id", LIONEL_GHL_ID)
+          .gte("session_date", start)
+          .lte("session_date", end)
+          .order("session_date", { ascending: false }),
+        { label: "rent-tracker-sync" }
+      );
 
       if (error) {
         console.error("  ❌ Supabase query failed:", error.message);

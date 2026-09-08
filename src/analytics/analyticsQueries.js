@@ -306,7 +306,15 @@ async function getAvgRevenuePerVisit(barberGhlId, locationId, periodDays = 30, e
 
   if (endDate) query = query.lt("session_date", endDate);
 
-  const { data: transactions, error } = await query;
+  // Paged. `periodDays` is not the 30-or-90 it looks like — parsePeriod accepts
+  // "ytd" and any bare `<n>d` straight off the query string, so the window is
+  // caller-controlled and open-ended. Lionel's YTD is already 968 session
+  // payments and he adds ~100 a month, so this crosses 1000 within weeks on its
+  // own, and ?period=400d crosses it today. A short read here doesn't error, it
+  // just quietly lowers the average.
+  const { data: transactions, error } = await fetchAllRows(query, {
+    label: "avg-revenue-per-visit",
+  });
 
   if (error) throw new Error(`Avg revenue query failed: ${error.message}`);
   if (!transactions || transactions.length === 0) {
@@ -357,7 +365,13 @@ async function getAvgTipPercentage(barberGhlId, locationId, periodDays = 30, end
 
   if (endDate) query = query.lt("session_date", endDate);
 
-  const { data: transactions, error } = await query;
+  // Paged, same reasoning as getAvgRevenuePerVisit above: the window comes from
+  // ?period= and reaches "ytd", so this set is barber-scoped and effectively
+  // all-time. Truncation would skew the tip average toward whichever end of the
+  // range survived the cut.
+  const { data: transactions, error } = await fetchAllRows(query, {
+    label: "avg-tip-percentage",
+  });
 
   if (error) throw new Error(`Avg tip query failed: ${error.message}`);
   if (!transactions || transactions.length === 0) {
