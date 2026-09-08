@@ -9714,8 +9714,23 @@ function createApp() {
       const { barberGhlId, appointmentId } = req.params;
       const { outcome, amount, tip, resolvedBy, sendText, coveringTransactionId } = req.body || {};
 
-      if (!["cash", "noshow", "comp", "cancel", "covered"].includes(outcome)) {
-        return res.status(400).json({ success: false, error: "outcome must be cash, noshow, comp, cancel or covered" });
+      if (!["cash", "noshow", "comp", "cancel", "covered", "reopen"].includes(outcome)) {
+        return res.status(400).json({ success: false, error: "outcome must be cash, noshow, comp, cancel, covered or reopen" });
+      }
+
+      // "reopen" is the undo. It clears the answer and puts the visit back in
+      // the open pile without touching money — deliberately handled before the
+      // cash/cancel branches so it can never create a row or call GHL.
+      if (outcome === "reopen") {
+        const { error: reopenErr } = await supabase
+          .from("appointments")
+          .update({ payment_resolution: null, payment_resolved_at: null,
+                    payment_resolved_by: null, payment_covered_by: null })
+          .eq("id", appointmentId)
+          .eq("assigned_user_id", barberGhlId);
+        if (reopenErr) throw reopenErr;
+        console.log(`[Reconcile] ${barberGhlId} reopened appointment ${appointmentId}`);
+        return res.json({ success: true, outcome: "reopen" });
       }
 
       const { data: appt, error: apptErr } = await supabase
