@@ -10259,6 +10259,17 @@ function createApp() {
           declaredServices: c.declaredServices,
           alreadyAccountedFor: c.claims,
           lineItems: c.order_line_items,
+          // Which repair this candidate actually is — the two are NOT the same
+          // and getting it wrong moves money off a visit that was already right.
+          //
+          //   "assign"  the payment belongs to nobody yet; put it on this visit.
+          //   "cover"   the payment already sits on another visit and its
+          //             receipt declares more services than it has visits. A
+          //             parent paying for their kids. The money must STAY where
+          //             it is — this visit gets marked as covered by it, so the
+          //             single row keeps the full amount and nothing is
+          //             double-counted.
+          action: c.appointment_id ? "cover" : "assign",
           reason: c.reason,
           method: c.payment_method,
           day: c.session_date,
