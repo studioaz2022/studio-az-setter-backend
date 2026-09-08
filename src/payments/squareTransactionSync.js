@@ -1081,7 +1081,7 @@ async function lookupGhlContactByPhone(phone) {
  * @returns {{ totalDiscountCents: number|null, discountName: string|null, itemType: string|null, lineItemName: string|null, isProductSale: boolean }}
  */
 async function fetchSquareOrderDetails(accessToken, orderId) {
-  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false, basePriceCents: null, totalTaxCents: null, isTattoo: false };
+  const empty = { totalDiscountCents: null, discountName: null, itemType: null, lineItemName: null, isProductSale: false, basePriceCents: null, totalTaxCents: null, isTattoo: false, allLineItems: [], serviceItemCount: 0 };
   if (!orderId || !accessToken) return empty;
   try {
     const res = await axios.get(`${SQUARE_BASE_URL}/v2/orders/${orderId}`, {
@@ -1098,6 +1098,30 @@ async function fetchSquareOrderDetails(accessToken, orderId) {
     const itemType = lineItem?.item_type || null;
     const lineItemName = lineItem?.name || null;
     const hasCatalogId = !!lineItem?.catalog_object_id;
+
+    // …and keep ALL of them. Reading only [0] is what hid parents paying for
+    // their kids: Heidi Girod's $92 is two $40 "Haircut" items and Matthew
+    // Walters' $162.50 is a $65 haircut plus a $60 custom amount. Looking at
+    // the first item alone, both are ordinary single haircuts that merely
+    // "overpaid", and the sibling appointment reads unpaid forever.
+    const allLineItems = (order.line_items || []).map((li) => ({
+      name: li.name || null,
+      quantity: parseInt(li.quantity, 10) || 1,
+      itemType: li.item_type || null,
+      basePriceCents: li.base_price_money?.amount ?? null,
+      totalCents: li.total_money?.amount ?? null,
+      catalogObjectId: li.catalog_object_id || null,
+    }));
+
+    // How many SERVICES this payment covers. Quantity counts: one "Haircut"
+    // line at qty 2 is two haircuts just as much as two separate lines are.
+    // Products are excluded — a pomade on the same ticket is not an appointment.
+    const knownProductish = (li) =>
+      li.itemType === "ITEM" && li.catalogObjectId &&
+      !["haircut", "beard"].some((s) => (li.name || "").toLowerCase().includes(s));
+    const serviceItemCount = allLineItems
+      .filter((li) => !knownProductish(li))
+      .reduce((sum, li) => sum + (li.quantity || 1), 0);
 
     // Detect tattoo payments via order metadata (new links) or line item name (legacy)
     const orderMetadata = order.metadata || {};
@@ -1130,7 +1154,11 @@ async function fetchSquareOrderDetails(accessToken, orderId) {
       console.log(`[SquareSync] Order ${orderId}: product sale detected — "${lineItemName}" (${itemType}), base $${(basePriceCents || 0) / 100}, tax $${(totalTaxCents || 0) / 100}`);
     }
 
-    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale, basePriceCents, totalTaxCents, isTattoo };
+    if (serviceItemCount > 1) {
+      console.log(`[SquareSync] Order ${orderId}: covers ${serviceItemCount} services — ${allLineItems.map((li) => `${li.name || li.itemType}$${(li.totalCents || 0) / 100}`).join(" + ")}`);
+    }
+
+    return { totalDiscountCents, discountName, itemType, lineItemName, isProductSale, basePriceCents, totalTaxCents, isTattoo, allLineItems, serviceItemCount };
   } catch (err) {
     console.warn(`[SquareSync] Failed to fetch order ${orderId}: ${err.message}`);
     return empty;
@@ -1387,6 +1415,11 @@ async function recordTransaction({ contactId, contactName, barberGhlId, squarePa
     service_price: servicePrice,
     tip_amount: tipAmount,
     discount_amount: discountAmount,
+    // Kept so a payment covering two haircuts stays recognisable later without
+    // another round trip to Square — and so it is recognisable at all for rows
+    // whose order id we would otherwise never have stored.
+    order_line_items: orderDetails?.allLineItems?.length ? orderDetails.allLineItems : null,
+    service_item_count: orderDetails?.serviceItemCount ?? null,
   });
 
   if (error) {
@@ -1434,7 +1467,7 @@ async function updateLastSynced(barberGhlId, cursor) {
 /**
  * Manually assign an unmatched payment to a contact (called from iOS review UI).
  */
-async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents, cashTipCents }) {
+async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, squareOrderId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale, basePriceCents, cashTipCents }) {
   // Check if already recorded — if so, update instead of insert (handles re-assignment).
   // Use plain select with limit(1): .maybeSingle() returns an error when ≥2 rows match,
   // which gets silently ignored and causes the next call to insert another duplicate.
@@ -1555,6 +1588,11 @@ async function assignUnmatchedPayment({ barberGhlId, squarePaymentId, contactId,
     artist_amount: recordedGross,
     settlement_status: "settled",
     square_payment_id: squarePaymentId,
+    // square_order_id was missing from this insert, and this is the path every
+    // manually-confirmed payment takes — which is why 411 of 1,197 Square rows
+    // have no order id and cannot be re-examined for extra line items. Heidi
+    // Girod's and Matthew Walters' two-haircut orders were both lost this way.
+    square_order_id: squareOrderId || null,
     session_date: toLocalDate(createdAt),
     square_payment_time: createdAt,
     location_id: BARBER_LOCATION_ID,

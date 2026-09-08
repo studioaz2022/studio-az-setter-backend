@@ -8647,7 +8647,7 @@ function createApp() {
   app.post("/api/barbers/:barberGhlId/square/assign", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
-      const { squarePaymentId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale } = req.body;
+      const { squarePaymentId, squareOrderId, contactId, contactName, amountCents, serviceCents, createdAt, note, appointmentId, calendarId, squareTipCents, itemType, isProductSale } = req.body;
 
       if (!squarePaymentId || !contactId || !amountCents) {
         return res.status(400).json({
@@ -8659,6 +8659,7 @@ function createApp() {
       const result = await assignUnmatchedPayment({
         barberGhlId,
         squarePaymentId,
+        squareOrderId,
         contactId,
         contactName,
         amountCents,
@@ -8738,6 +8739,7 @@ function createApp() {
           await assignUnmatchedPayment({
             barberGhlId,
             squarePaymentId: match.squarePaymentId,
+            squareOrderId: match.squareOrderId,
             contactId: match.contactId,
             contactName: match.contactName,
             amountCents: match.amountCents,
@@ -9710,10 +9712,10 @@ function createApp() {
   app.post("/api/barbers/:barberGhlId/appointments/:appointmentId/resolve", async (req, res) => {
     try {
       const { barberGhlId, appointmentId } = req.params;
-      const { outcome, amount, tip, resolvedBy } = req.body || {};
+      const { outcome, amount, tip, resolvedBy, sendText, coveringTransactionId } = req.body || {};
 
-      if (!["cash", "noshow", "comp"].includes(outcome)) {
-        return res.status(400).json({ success: false, error: "outcome must be cash, noshow or comp" });
+      if (!["cash", "noshow", "comp", "cancel", "covered"].includes(outcome)) {
+        return res.status(400).json({ success: false, error: "outcome must be cash, noshow, comp, cancel or covered" });
       }
 
       const { data: appt, error: apptErr } = await supabase
@@ -9773,20 +9775,202 @@ function createApp() {
         transactionId = inserted.id;
       }
 
+      // "covered" — one payment already paid for this appointment as well as
+      // its own. A parent paying for their kids. The money deliberately stays
+      // on the single existing transaction: splitting it across rows would be
+      // the easiest possible way to double-count revenue.
+      if (outcome === "covered") {
+        if (!coveringTransactionId) {
+          return res.status(400).json({ success: false, error: "covered requires coveringTransactionId" });
+        }
+        const { data: cover, error: coverErr } = await supabase
+          .from("transactions")
+          .select("id, gross_amount, contact_name, service_item_count")
+          .eq("id", coveringTransactionId)
+          .eq("artist_ghl_id", barberGhlId)
+          .single();
+        if (coverErr || !cover) {
+          return res.status(404).json({ success: false, error: "Covering payment not found" });
+        }
+      }
+
+      // "cancel" — the appointment did not happen and should not sit in the
+      // book. Two paths, and which one runs is the barber's call:
+      //
+      //   sendText true  -> mark cancelled in GHL and text the client ourselves.
+      //                     GHL's own notification stays off (toNotify:false) so
+      //                     the client gets one message, not two.
+      //   sendText false -> delete the appointment outright, per Lionel: if
+      //                     nobody is being told, there is no reason to leave a
+      //                     cancelled shell behind.
+      let cancellationTextSent = false;
+      let appointmentDeleted = false;
+
+      if (outcome === "cancel") {
+        const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+        if (!ghlBarber) {
+          return res.status(503).json({ success: false, error: "Barbershop GHL client unavailable" });
+        }
+
+        if (sendText) {
+          try {
+            await ghlBarber.calendars.editAppointment(
+              { eventId: appointmentId },
+              {
+                appointmentStatus: "cancelled",
+                calendarId: appt.calendar_id,
+                assignedUserId: appt.assigned_user_id,
+                toNotify: false,
+              }
+            );
+          } catch (err) {
+            console.error(`[Reconcile] GHL cancel failed for ${appointmentId}: ${err.response?.data ? JSON.stringify(err.response.data).slice(0, 200) : err.message}`);
+            return res.status(502).json({ success: false, error: "Couldn't cancel in GHL — nothing was changed." });
+          }
+
+          if (appt.contact_id) {
+            try {
+              const { sendConversationMessage } = require("../clients/ghlClient");
+              const when = new Intl.DateTimeFormat("en-US", {
+                timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
+                hour: "numeric", minute: "2-digit",
+              }).format(new Date(appt.start_time));
+              await sendConversationMessage({
+                contactId: appt.contact_id,
+                body: `Hey, this is Studio AZ Barbershop. We've canceled your appointment on ${when}. Reply here any time and we'll get you rebooked.`,
+              });
+              cancellationTextSent = true;
+            } catch (err) {
+              // The cancellation itself already succeeded. Report the text
+              // failure rather than rolling back a correct cancellation.
+              console.error(`[Reconcile] Cancellation text failed for ${appt.contact_id}: ${err.message}`);
+            }
+          }
+        } else {
+          try {
+            // deleteEvent takes (params, body) — the body is required by the
+            // SDK signature even though there is nothing to put in it.
+            await ghlBarber.calendars.deleteEvent({ eventId: appointmentId }, {});
+            appointmentDeleted = true;
+          } catch (err) {
+            console.error(`[Reconcile] GHL delete failed for ${appointmentId}: ${err.response?.data ? JSON.stringify(err.response.data).slice(0, 200) : err.message}`);
+            return res.status(502).json({ success: false, error: "Couldn't delete in GHL — nothing was changed." });
+          }
+        }
+      }
+
       const { error: updErr } = await supabase
         .from("appointments")
         .update({
           payment_resolution: outcome,
           payment_resolved_at: new Date().toISOString(),
           payment_resolved_by: resolvedBy || barberGhlId,
+          payment_covered_by: outcome === "covered" ? coveringTransactionId : null,
+          // Keep the local mirror honest about what GHL now says.
+          ...(outcome === "cancel" && !appointmentDeleted ? { status: "cancelled" } : {}),
         })
         .eq("id", appointmentId);
       if (updErr) throw updErr;
 
-      console.log(`[Reconcile] ${barberGhlId} resolved "${appt.title}" as ${outcome}${transactionId ? ` ($${amount} cash recorded)` : ""}`);
-      res.json({ success: true, outcome, transactionId });
+      console.log(
+        `[Reconcile] ${barberGhlId} resolved "${appt.title}" as ${outcome}` +
+          (transactionId ? ` ($${amount} cash recorded)` : "") +
+          (cancellationTextSent ? " — client texted" : "") +
+          (appointmentDeleted ? " — appointment deleted in GHL" : "") +
+          (outcome === "covered" ? ` — covered by transaction ${coveringTransactionId}` : "")
+      );
+      res.json({ success: true, outcome, transactionId, cancellationTextSent, appointmentDeleted });
     } catch (error) {
       console.error("[API] Appointment resolve failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/appointments/:appointmentId/candidate-payments
+  // "Was this already paid for on somebody else's ticket?"
+  //
+  // Ranked, because the evidence is not all equal. Square's order line items are
+  // the only hard proof one payment bought two services — Heidi Girod's $92 is
+  // literally two $40 "Haircut" lines — so a payment whose order says it covers
+  // more services than it has appointments ranks first. Everything below that is
+  // circumstantial and is labelled as such rather than being presented as fact.
+  app.get("/api/barbers/:barberGhlId/appointments/:appointmentId/candidate-payments", async (req, res) => {
+    try {
+      const { barberGhlId, appointmentId } = req.params;
+
+      const { data: appt, error: apptErr } = await supabase
+        .from("appointments")
+        .select("id, title, contact_id, start_time")
+        .eq("id", appointmentId)
+        .single();
+      if (apptErr || !appt) {
+        return res.status(404).json({ success: false, error: "Appointment not found" });
+      }
+
+      const day = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
+      }).format(new Date(appt.start_time));
+
+      const { data: sameDay, error: payErr } = await supabase
+        .from("transactions")
+        .select("id, contact_id, contact_name, gross_amount, service_price, appointment_id, service_item_count, order_line_items, square_payment_time")
+        .eq("artist_ghl_id", barberGhlId)
+        .eq("transaction_type", "session_payment")
+        .eq("session_date", day)
+        .is("deleted_at", null)
+        .is("superseded_by", null);
+      if (payErr) throw payErr;
+
+      // How many appointments each payment is already accounted for by: its own,
+      // plus any appointment already marked covered by it.
+      const { data: covered } = await supabase
+        .from("appointments")
+        .select("payment_covered_by")
+        .not("payment_covered_by", "is", null);
+      const coverCount = {};
+      for (const c of covered || []) {
+        coverCount[c.payment_covered_by] = (coverCount[c.payment_covered_by] || 0) + 1;
+      }
+
+      const candidates = (sameDay || [])
+        .filter((t) => t.appointment_id !== appointmentId)
+        .map((t) => {
+          const claims = 1 + (coverCount[t.id] || 0);
+          const declared = t.service_item_count || 0;
+          const sameContact = t.contact_id && t.contact_id === appt.contact_id;
+
+          let reason = null;
+          let rank = 99;
+          if (declared > claims) {
+            reason = `Square receipt shows ${declared} services on this ticket, ${claims} accounted for`;
+            rank = sameContact ? 0 : 1;
+          } else if (sameContact) {
+            reason = "Same client, paid the same day";
+            rank = 2;
+          }
+          return { ...t, claims, declaredServices: declared, sameContact, reason, rank };
+        })
+        .filter((c) => c.reason)
+        .sort((a, b) => a.rank - b.rank || (b.gross_amount || 0) - (a.gross_amount || 0));
+
+      res.json({
+        success: true,
+        appointment: { id: appt.id, title: appt.title, day },
+        count: candidates.length,
+        candidates: candidates.map((c) => ({
+          transactionId: c.id,
+          payerName: c.contact_name,
+          amount: c.gross_amount,
+          declaredServices: c.declaredServices,
+          alreadyAccountedFor: c.claims,
+          lineItems: c.order_line_items,
+          reason: c.reason,
+          // Hard evidence from the receipt, versus a same-day coincidence.
+          confident: c.rank <= 1,
+        })),
+      });
+    } catch (error) {
+      console.error("[API] candidate-payments failed:", error.message);
       res.status(500).json({ success: false, error: error.message });
     }
   });
