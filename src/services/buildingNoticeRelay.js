@@ -186,8 +186,12 @@ async function postToDiscord({ subject, body, receivedAt, approved }) {
   let description = body || "(no text content)";
   if (description.length > 3800) description = description.slice(0, 3800) + "\n…";
 
-  await axios.post(
-    WEBHOOK_URL,
+  // ?wait=true makes Discord return the created message, so its id lands in
+  // the logs. A webhook has no endpoint to LIST its messages, so without this
+  // a post is undeletable after the fact — which is exactly the hole hit when
+  // the food truck notices had to be pulled back out by hand.
+  const resp = await axios.post(
+    WEBHOOK_URL + "?wait=true",
     {
       embeds: [
         {
@@ -204,6 +208,8 @@ async function postToDiscord({ subject, body, receivedAt, approved }) {
     },
     { timeout: 15_000 }
   );
+
+  return resp.data?.id || null;
 }
 
 /* ------------------------------------------------------------------ poll */
@@ -273,7 +279,7 @@ async function pollOnce({ dryRun = false } = {}) {
     }
 
     try {
-      await postToDiscord({
+      const discordId = await postToDiscord({
         subject,
         body: cleanBody(extractBody(payload)),
         receivedAt,
@@ -283,7 +289,7 @@ async function pollOnce({ dryRun = false } = {}) {
       console.log(
         `[buildingRelay] ✅ relayed "${subject}" (${
           broadcast ? "broadcast" : "owner-approved"
-        })`
+        }) discordMessageId=${discordId}`
       );
     } catch (err) {
       console.error(
