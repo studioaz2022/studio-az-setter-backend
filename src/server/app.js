@@ -9896,6 +9896,277 @@ function createApp() {
     }
   });
 
+  // GET /api/barbers/:barberGhlId/cash-out?date=YYYY-MM-DD
+  // Everything the Cash Out screen needs for one day, in one object, built from
+  // the database. See REVIEW_WINDOW_REBUILD_PLAN.md §12.1.
+  app.get("/api/barbers/:barberGhlId/cash-out", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { getCashOutDay, localDay } = require("../payments/cashOut");
+      const date = req.query.date || localDay(new Date());
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+        return res.status(400).json({ success: false, error: "date must be YYYY-MM-DD" });
+      }
+      const day = await getCashOutDay(barberGhlId, date);
+      res.json({ success: true, ...day });
+    } catch (error) {
+      console.error("[API] cash-out failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/cash-out/week?start=YYYY-MM-DD
+  // Seven contiguous days of marks for the week strip. Uses the same "open"
+  // computation as the day view on purpose — two definitions of open is how the
+  // old screen ended up printing "No payments" beside seven payment cards.
+  app.get("/api/barbers/:barberGhlId/cash-out/week", async (req, res) => {
+    try {
+      const { barberGhlId } = req.params;
+      const { getCashOutWeek, localDay, shiftDay } = require("../payments/cashOut");
+      let start = req.query.start;
+      if (!start) {
+        // Default to the Monday of the current shop-local week.
+        const today = localDay(new Date());
+        const dow = new Date(`${today}T12:00:00Z`).getUTCDay(); // 0=Sun
+        start = shiftDay(today, -((dow + 6) % 7));
+      }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(start)) {
+        return res.status(400).json({ success: false, error: "start must be YYYY-MM-DD" });
+      }
+      const week = await getCashOutWeek(barberGhlId, start);
+      res.json({ success: true, ...week });
+    } catch (error) {
+      console.error("[API] cash-out week failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/transactions/:transactionId/hide
+  // "Not mine." Permanently hides a payment that belongs to the tattoo shop —
+  // Lionel's single Square account takes both his haircut money and tattoo
+  // deposits. Not a delete: the row survives and one statement restores every
+  // one of them (see cashOut.js HIDDEN_BY).
+  app.post("/api/barbers/:barberGhlId/transactions/:transactionId/hide", async (req, res) => {
+    try {
+      const { barberGhlId, transactionId } = req.params;
+      const { unhide } = req.body || {};
+      const { HIDDEN_BY } = require("../payments/cashOut");
+
+      const { data: existing } = await supabase
+        .from("transactions")
+        .select("id, contact_name, gross_amount, notes, order_line_items")
+        .eq("id", transactionId)
+        .eq("artist_ghl_id", barberGhlId)
+        .single();
+      if (!existing) {
+        return res.status(404).json({ success: false, error: "Transaction not found" });
+      }
+
+      const patch = unhide
+        ? { reviewed_at: null, reviewed_by: null, review_note: null }
+        : { reviewed_at: new Date().toISOString(), reviewed_by: HIDDEN_BY,
+            review_note: "Marked 'not mine' — belongs to the tattoo shop" };
+
+      const { error } = await supabase.from("transactions").update(patch).eq("id", transactionId);
+      if (error) throw error;
+
+      if (!unhide) {
+        // Log what the ticket actually said. If a pattern repeats, the isTattoo
+        // detector in fetchSquareOrderDetails should be tightened so these stop
+        // reaching the barbershop at all — hiding is the fallback, not the fix.
+        const items = Array.isArray(existing.order_line_items)
+          ? existing.order_line_items.map((li) => li.name || li.itemType).join(" + ")
+          : "(no line items stored)";
+        console.log(`[CashOut] Hidden as not-barbershop: $${existing.gross_amount} "${existing.contact_name}" — ticket: ${items} | notes: ${existing.notes || "-"}`);
+      }
+
+      res.json({ success: true, hidden: !unhide });
+    } catch (error) {
+      console.error("[API] hide transaction failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/transactions/:transactionId/unassign
+  // Take a payment off its visit and return it to MONEY WITH NO VISIT.
+  //
+  // This is the round trip the old screen never had. unmatchPayment() tombstones
+  // the row (deleted_at), and the sync dedup ignores deleted_at, so an unmatched
+  // payment vanished from earnings AND from the queue — you could break a link
+  // but never rebuild one. Here the row stays alive and fully counted; only the
+  // appointment link is cleared.
+  app.post("/api/barbers/:barberGhlId/transactions/:transactionId/unassign", async (req, res) => {
+    try {
+      const { barberGhlId, transactionId } = req.params;
+      const { data, error } = await supabase
+        .from("transactions")
+        .update({
+          appointment_id: null,
+          calendar_id: null,
+          reviewed_at: null,
+          reviewed_by: null,
+          review_note: null,
+        })
+        .eq("id", transactionId)
+        .eq("artist_ghl_id", barberGhlId)
+        .is("deleted_at", null)
+        .select("id, gross_amount, contact_name, session_date");
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        return res.status(404).json({ success: false, error: "Transaction not found" });
+      }
+
+      // Any appointment that was leaning on this payment is open again.
+      await supabase
+        .from("appointments")
+        .update({ payment_resolution: null, payment_resolved_at: null, payment_resolved_by: null, payment_covered_by: null })
+        .eq("payment_covered_by", transactionId);
+
+      console.log(`[CashOut] Unassigned $${data[0].gross_amount} (${data[0].contact_name}) on ${data[0].session_date} — back in the day's unassigned money`);
+      res.json({ success: true, transaction: data[0] });
+    } catch (error) {
+      console.error("[API] unassign failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // POST /api/barbers/:barberGhlId/transactions/:transactionId/assign
+  // Put a payment on a visit. The visit owns the date: session_date follows the
+  // appointment, because revenue belongs to the day the service happened, not
+  // the day the client got round to paying (§6.1).
+  app.post("/api/barbers/:barberGhlId/transactions/:transactionId/assign", async (req, res) => {
+    try {
+      const { barberGhlId, transactionId } = req.params;
+      const { appointmentId } = req.body || {};
+      if (!appointmentId) {
+        return res.status(400).json({ success: false, error: "appointmentId is required" });
+      }
+
+      const { data: appt } = await supabase
+        .from("appointments")
+        .select("id, title, contact_id, calendar_id, start_time, assigned_user_id")
+        .eq("id", appointmentId)
+        .single();
+      if (!appt) return res.status(404).json({ success: false, error: "Appointment not found" });
+      if (appt.assigned_user_id !== barberGhlId) {
+        return res.status(403).json({ success: false, error: "Appointment belongs to another barber" });
+      }
+
+      const { localDay, clientNameFromTitle } = require("../payments/cashOut");
+      const sessionDate = localDay(appt.start_time);
+
+      const { data, error } = await supabase
+        .from("transactions")
+        .update({
+          appointment_id: appt.id,
+          calendar_id: appt.calendar_id || null,
+          contact_id: appt.contact_id || undefined,
+          contact_name: clientNameFromTitle(appt.title),
+          session_date: sessionDate,
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: barberGhlId,
+          review_note: "Assigned from Cash Out",
+        })
+        .eq("id", transactionId)
+        .eq("artist_ghl_id", barberGhlId)
+        .is("deleted_at", null)
+        .select("id, gross_amount, session_date");
+      if (error) throw error;
+      if (!data || data.length === 0) {
+        return res.status(404).json({ success: false, error: "Transaction not found" });
+      }
+
+      console.log(`[CashOut] Assigned $${data[0].gross_amount} → "${appt.title}" (session_date ${sessionDate})`);
+      res.json({ success: true, transaction: data[0] });
+    } catch (error) {
+      console.error("[API] assign failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
+  // GET /api/barbers/:barberGhlId/transactions/:transactionId/candidate-visits
+  // The reverse of candidate-payments: which visit does this money belong to?
+  // Same ±2 day window and the same evidence ranking.
+  app.get("/api/barbers/:barberGhlId/transactions/:transactionId/candidate-visits", async (req, res) => {
+    try {
+      const { barberGhlId, transactionId } = req.params;
+      const { localDay, shiftDay, clientNameFromTitle, serviceFromTitle, adjacentLabel } = require("../payments/cashOut");
+
+      const { data: tx } = await supabase
+        .from("transactions")
+        .select("id, contact_id, contact_name, gross_amount, session_date, square_payment_time, created_at, service_item_count")
+        .eq("id", transactionId)
+        .eq("artist_ghl_id", barberGhlId)
+        .single();
+      if (!tx) return res.status(404).json({ success: false, error: "Transaction not found" });
+
+      const paidDay = localDay(tx.square_payment_time || tx.created_at);
+      const from = new Date(`${shiftDay(paidDay, -2)}T00:00:00Z`).toISOString();
+      const to = new Date(`${shiftDay(paidDay, 3)}T00:00:00Z`).toISOString();
+
+      const { data: appts } = await supabase
+        .from("appointments")
+        .select("id, title, contact_id, start_time, status, payment_resolution")
+        .eq("assigned_user_id", barberGhlId)
+        .eq("status", "confirmed")
+        .gte("start_time", from)
+        .lt("start_time", to);
+
+      // Which appointments already have money on them?
+      const ids = (appts || []).map((a) => a.id);
+      const claimed = new Set();
+      if (ids.length) {
+        const { data: paid } = await supabase
+          .from("transactions")
+          .select("appointment_id")
+          .eq("artist_ghl_id", barberGhlId)
+          .is("deleted_at", null)
+          .is("superseded_by", null)
+          .neq("id", transactionId)
+          .in("appointment_id", ids);
+        for (const p of paid || []) if (p.appointment_id) claimed.add(p.appointment_id);
+      }
+
+      const candidates = (appts || [])
+        .filter((a) => !claimed.has(a.id) && !a.payment_resolution)
+        .map((a) => {
+          const apptDay = localDay(a.start_time);
+          const sameContact = tx.contact_id && a.contact_id === tx.contact_id;
+          const sameDay = apptDay === paidDay;
+
+          let rank = 99;
+          let reason;
+          if (sameContact && sameDay) { rank = 0; reason = "Same client, same day"; }
+          else if (sameContact) { rank = 1; reason = `Same client · ${adjacentLabel(paidDay, apptDay)}`; }
+          else if (sameDay) { rank = 2; reason = "Unpaid visit on this day"; }
+          else { rank = 3; reason = `Unpaid visit · ${adjacentLabel(paidDay, apptDay)}`; }
+
+          return {
+            appointmentId: a.id,
+            clientName: clientNameFromTitle(a.title),
+            serviceName: serviceFromTitle(a.title),
+            startTime: a.start_time,
+            day: apptDay,
+            sameDay,
+            reason,
+            confident: rank <= 1,
+            rank,
+          };
+        })
+        .sort((a, b) => a.rank - b.rank || new Date(a.startTime) - new Date(b.startTime));
+
+      res.json({
+        success: true,
+        transaction: { id: tx.id, amount: Number(tx.gross_amount) || 0, payerName: tx.contact_name, paidDay },
+        count: candidates.length,
+        candidates,
+      });
+    } catch (error) {
+      console.error("[API] candidate-visits failed:", error.message);
+      res.status(500).json({ success: false, error: error.message });
+    }
+  });
+
   // GET /api/barbers/:barberGhlId/appointments/:appointmentId/candidate-payments
   // "Was this already paid for on somebody else's ticket?"
   //
@@ -9917,16 +10188,20 @@ function createApp() {
         return res.status(404).json({ success: false, error: "Appointment not found" });
       }
 
-      const day = new Intl.DateTimeFormat("en-CA", {
-        timeZone: "America/Chicago", year: "numeric", month: "2-digit", day: "2-digit",
-      }).format(new Date(appt.start_time));
+      const { localDay, shiftDay, adjacentLabel } = require("../payments/cashOut");
+      const day = localDay(appt.start_time);
 
+      // ±2 days, not just this one. A Venmo sent at 03:45 for yesterday's cut is
+      // routine here, and a same-day-only window is exactly why cross-day
+      // matching felt unsupported. Widening is safe because every candidate
+      // states its own evidence and the day is labelled in plain words.
       const { data: sameDay, error: payErr } = await supabase
         .from("transactions")
-        .select("id, contact_id, contact_name, gross_amount, service_price, appointment_id, service_item_count, order_line_items, square_payment_time")
+        .select("id, contact_id, contact_name, gross_amount, service_price, appointment_id, service_item_count, order_line_items, square_payment_time, session_date, payment_method")
         .eq("artist_ghl_id", barberGhlId)
         .eq("transaction_type", "session_payment")
-        .eq("session_date", day)
+        .gte("session_date", shiftDay(day, -2))
+        .lte("session_date", shiftDay(day, 2))
         .is("deleted_at", null)
         .is("superseded_by", null);
       if (payErr) throw payErr;
@@ -9949,16 +10224,26 @@ function createApp() {
           const declared = t.service_item_count || 0;
           const sameContact = t.contact_id && t.contact_id === appt.contact_id;
 
+          const txDay = t.session_date;
+          const onSameDay = txDay === day;
+          const whenLabel = onSameDay ? null : adjacentLabel(day, txDay);
+
           let reason = null;
           let rank = 99;
           if (declared > claims) {
             reason = `Square receipt shows ${declared} services on this ticket, ${claims} accounted for`;
             rank = sameContact ? 0 : 1;
-          } else if (sameContact) {
+          } else if (sameContact && onSameDay) {
             reason = "Same client, paid the same day";
             rank = 2;
+          } else if (sameContact) {
+            reason = `Same client · ${whenLabel}`;
+            rank = 3;
+          } else if (onSameDay && !t.appointment_id) {
+            reason = "Unassigned money on this day";
+            rank = 4;
           }
-          return { ...t, claims, declaredServices: declared, sameContact, reason, rank };
+          return { ...t, claims, declaredServices: declared, sameContact, reason, rank, onSameDay, whenLabel };
         })
         .filter((c) => c.reason)
         .sort((a, b) => a.rank - b.rank || (b.gross_amount || 0) - (a.gross_amount || 0));
@@ -9975,6 +10260,10 @@ function createApp() {
           alreadyAccountedFor: c.claims,
           lineItems: c.order_line_items,
           reason: c.reason,
+          method: c.payment_method,
+          day: c.session_date,
+          sameDay: c.onSameDay,
+          whenLabel: c.whenLabel,
           // Hard evidence from the receipt, versus a same-day coincidence.
           confident: c.rank <= 1,
         })),
