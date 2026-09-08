@@ -85,6 +85,44 @@ const TASK_DUE_INTERVALS = {
 };
 
 /**
+ * Coerce every metadata value to a string.
+ *
+ * This is not tidiness, it is the difference between one odd task and an empty
+ * screen. iOS decodes `metadata` as [String: String], and it decodes the task
+ * list as ONE array — so a single non-string value here does not hide one row,
+ * it throws DecodingError and takes the entire Command Center down with it. The
+ * artist sees "The data couldn't be read because it isn't in the correct
+ * format" over "All Caught Up!", which reads exactly like their tasks were
+ * deleted.
+ *
+ * That is what happened to Maria on 2026-09-08: the partial-lead nudge wrote
+ * `minutes_stalled: 23` as a JSON number at 01:24, and every one of her tasks
+ * vanished from the app until this. Nothing was ever missing from the database.
+ *
+ * Nulls are dropped rather than stringified — the string "null" is not a value
+ * anyone wants rendered in a task sheet. Objects are JSON-encoded so they at
+ * least survive legibly instead of becoming "[object Object]".
+ *
+ * Every backend-created task funnels through here, which is the point: this is
+ * the one place that can make the guarantee for writers that don't know they
+ * need to.
+ */
+function stringifyMetadata(metadata) {
+  const out = {};
+  for (const [key, value] of Object.entries(metadata || {})) {
+    if (value === null || value === undefined) continue;
+    if (typeof value === "string") {
+      out[key] = value;
+    } else if (typeof value === "object") {
+      out[key] = JSON.stringify(value);
+    } else {
+      out[key] = String(value);
+    }
+  }
+  return out;
+}
+
+/**
  * Creates a Command Center task in Supabase
  */
 async function createCommandCenterTask(taskData) {
@@ -122,7 +160,7 @@ async function createCommandCenterTask(taskData) {
     related_conversation_id: relatedConversationId,
     target_message_id: targetMessageId,
     requires_all_assignees: false,
-    metadata: metadata,
+    metadata: stringifyMetadata(metadata),
     location_id: locationId,
   };
 
