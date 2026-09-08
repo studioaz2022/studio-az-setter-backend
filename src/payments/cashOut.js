@@ -135,6 +135,12 @@ async function getCashOutDay(barberGhlId, day) {
     arrivedOn: t.square_payment_time ? localDay(t.square_payment_time) : null,
   });
 
+  // Index every payment on the day by its own id, so a visit that was covered
+  // by another ticket can name the ticket instead of gesturing at it. A covered
+  // visit is reconciled — the money exists, it just sits on a sibling — and the
+  // app can only say so if it knows which sibling.
+  const txById = new Map(allTx.map((t) => [t.id, t]));
+
   const visits = visitAppts.map((a) => {
     const payments = (byAppt.get(a.id) || []).map(shapePayment);
     const paid = payments.filter((p) => p.type !== "refund");
@@ -158,6 +164,12 @@ async function getCashOutDay(barberGhlId, day) {
       resolution: a.payment_resolution || null,
       resolvedBy: a.payment_resolved_by || null,
       coveredByTransactionId: a.payment_covered_by || null,
+      // Null when the covering ticket is not on this day — rare, and the app
+      // falls back to "another ticket" rather than inventing one.
+      coveredBy:
+        a.payment_resolution === "covered" && a.payment_covered_by && txById.has(a.payment_covered_by)
+          ? shapePayment(txById.get(a.payment_covered_by))
+          : null,
       payments,
       total: Math.round(paid.reduce((s, p) => s + p.amount, 0) * 100) / 100,
       // Open = still wants a human decision. A resolved appointment does not.
