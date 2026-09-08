@@ -49,6 +49,13 @@ const RELAY_MAX_AGE_MS = 6 * 60 * 60 * 1000; // don't post a backlog on boot
 const RELAY_LABEL = "Relayed to Discord"; // shared ledger with the code relay
 const APPROVAL_LABEL = "Post to Discord"; // owner applies this to approve
 
+// Recurring announcements with no value to the shop. Muting these is a
+// signal-to-noise decision, not a safety one: a channel that pings weekly
+// about food trucks gets tuned out, and then the Labor Day closure gets
+// scrolled past too. Matched on SUBJECT only, never body, so a closure notice
+// that happens to mention trucks in passing still posts.
+const MUTED_SUBJECT_PATTERNS = [/food\s*trucks?/i];
+
 const SENDER = (
   process.env.BUILDING_MANAGER_SENDER || "sschmid@minikahda.com"
 ).toLowerCase();
@@ -144,6 +151,11 @@ function isBroadcast(payload) {
   return !to.includes(OWNER_PERSONAL) && !cc.includes(OWNER_PERSONAL);
 }
 
+/** Recurring noise the shop does not care about. Subject-only by design. */
+function isMuted(subject) {
+  return MUTED_SUBJECT_PATTERNS.some((re) => re.test(subject || ""));
+}
+
 /** Collapse quoted replies, signature and whitespace into something postable. */
 function cleanBody(raw) {
   let text = (raw || "").replace(/\r/g, "");
@@ -227,12 +239,16 @@ async function pollOnce({ dryRun = false } = {}) {
 
     const approved = (full.data.labelIds || []).includes(approvalId);
     const broadcast = isBroadcast(payload);
+    const muted = isMuted(subject);
     const isFresh = Date.now() - receivedAt <= RELAY_MAX_AGE_MS;
-    const shouldPost = (broadcast || approved) && isFresh;
+
+    // Explicit approval outranks the mute list: if he ever labels a food truck
+    // notice on purpose, honour it rather than silently swallowing it.
+    const shouldPost = approved || (broadcast && !muted && isFresh);
 
     if (dryRun) {
       console.log(
-        `[buildingRelay] DRY RUN "${subject}" broadcast=${broadcast} approved=${approved} fresh=${isFresh} -> ${
+        `[buildingRelay] DRY RUN "${subject}" broadcast=${broadcast} muted=${muted} approved=${approved} fresh=${isFresh} -> ${
           shouldPost ? "POST" : "SKIP"
         }`
       );
@@ -247,9 +263,11 @@ async function pollOnce({ dryRun = false } = {}) {
     );
 
     if (!shouldPost) {
-      const why = !isFresh
-        ? "stale"
-        : "direct to owner — not a broadcast, not approved";
+      const why = muted
+        ? "muted subject (recurring noise)"
+        : !isFresh
+          ? "stale"
+          : "direct to owner — not a broadcast, not approved";
       console.log(`[buildingRelay] claimed "${subject}" without posting (${why})`);
       continue;
     }
@@ -325,4 +343,5 @@ module.exports = {
   pollOnce,
   isBroadcast,
   cleanBody,
+  isMuted,
 };
