@@ -2891,26 +2891,52 @@ function createApp() {
       const { artistId } = req.params;
       const { locationId, startDate, endDate } = req.query;
 
-      let query = supabase
-        .from('transactions')
-        .select('*')
-        .eq('artist_ghl_id', artistId)
-        .is('superseded_by', null) // Phase 7g
-        .is('deleted_at', null);   // Phase 7g
+      // PAGINATED, and it has to be.
+      //
+      // PostgREST caps an unbounded select at db-max-rows (1000 on Supabase) and
+      // says nothing about it — no error, no flag, just a short array. This
+      // endpoint sorts by created_at DESC, so the rows that fell off the end
+      // were the OLDEST-WRITTEN ones, and the Sep 2026 Square backfill wrote all
+      // of January and February in one go on Mar 2. Lionel's YTD was 1,319 rows;
+      // the app received 1,000, and the revenue chart drew January as 1
+      // transaction and February as 10 — against 158 and 165 actually on the
+      // books, about $19k of real revenue that simply was not in the response.
+      //
+      // Nothing about that is visible from the client, which is why it survived
+      // this long. Page until the table is exhausted.
+      const PAGE = 1000;
+      const MAX_ROWS = 50000;   // a ceiling, not an expectation; logged if hit
+      const transactions = [];
+      for (let from = 0; from < MAX_ROWS; from += PAGE) {
+        let query = supabase
+          .from('transactions')
+          .select('*')
+          .eq('artist_ghl_id', artistId)
+          .is('superseded_by', null) // Phase 7g
+          .is('deleted_at', null);   // Phase 7g
 
-      if (locationId) {
-        query = query.eq('location_id', locationId);
-      }
-      if (startDate) {
-        query = query.gte('session_date', startDate);
-      }
-      if (endDate) {
-        query = query.lte('session_date', endDate);
-      }
+        if (locationId) {
+          query = query.eq('location_id', locationId);
+        }
+        if (startDate) {
+          query = query.gte('session_date', startDate);
+        }
+        if (endDate) {
+          query = query.lte('session_date', endDate);
+        }
 
-      const { data: transactions, error } = await query.order('created_at', { ascending: false });
+        const { data: page, error } = await query
+          .order('created_at', { ascending: false })
+          .order('id', { ascending: false })   // stable tiebreak, or pages overlap
+          .range(from, from + PAGE - 1);
 
-      if (error) throw error;
+        if (error) throw error;
+        transactions.push(...(page || []));
+        if (!page || page.length < PAGE) break;
+        if (from + PAGE >= MAX_ROWS) {
+          console.warn(`[Earnings] artist ${artistId} hit the ${MAX_ROWS}-row ceiling — results are truncated`);
+        }
+      }
 
       // Enrich empty contact_name fields from GHL (batch lookup, then persist)
       const emptyNameTxs = (transactions || []).filter(
@@ -11006,12 +11032,26 @@ function createApp() {
 
       const { locationId = "mUemx2jG4wly4kJWBkI4" } = req.query;
 
-      const { data: transactions, error: txError } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("location_id", locationId);
+      // Paginated for the same reason as /api/artists/:artistId/earnings —
+      // PostgREST silently caps an unbounded select at 1000 rows. This one is
+      // shop-wide and all-time, so it was the worst affected: the barbershop
+      // has 1,600 rows and this endpoint reported on 1,000 of them, which made
+      // every artist's totalEarned here short by whatever fell off the end.
+      const PAGE = 1000;
+      const MAX_ROWS = 100000;
+      const transactions = [];
+      for (let from = 0; from < MAX_ROWS; from += PAGE) {
+        const { data: page, error: txError } = await supabase
+          .from("transactions")
+          .select("*")
+          .eq("location_id", locationId)
+          .order("id", { ascending: false })   // deterministic, or pages overlap
+          .range(from, from + PAGE - 1);
 
-      if (txError) throw txError;
+        if (txError) throw txError;
+        transactions.push(...(page || []));
+        if (!page || page.length < PAGE) break;
+      }
 
       const { data: rates, error: ratesError } = await supabase
         .from("artist_commission_rates")
