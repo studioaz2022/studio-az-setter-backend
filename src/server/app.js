@@ -8802,11 +8802,15 @@ function createApp() {
       // conditions below are derived from the row's own shape, so without it a
       // Venmo payment that never got an appointment link asks to be reviewed
       // forever — 32 of them had accumulated since February by 2026-09-07.
+      //
+      // session_payment only, for the same reason as /review-queue: a deposit
+      // or product sale without an appointment link is not incomplete.
       const { data, error } = await supabase
         .from("transactions")
         .select("*")
         .eq("artist_ghl_id", barberGhlId)
         .eq("payment_method", "venmo")
+        .eq("transaction_type", "session_payment")
         .is("reviewed_at", null)
         .is("deleted_at", null)
         .is("superseded_by", null)
@@ -9660,10 +9664,17 @@ function createApp() {
   app.get("/api/barbers/:barberGhlId/review-queue", async (req, res) => {
     try {
       const { barberGhlId } = req.params;
+      // session_payment ONLY. A missing appointment link is a question for a
+      // haircut and nothing else: a deposit is usually paid before the booking
+      // exists, and a product sale has no appointment by its nature. Including
+      // them put 92 deposits and 34 product sales in Lionel's queue as
+      // permanent, unanswerable noise — they are not incomplete, they are just
+      // not appointments.
       const { data, error } = await supabase
         .from("transactions")
         .select("id, session_date, payment_method, transaction_type, gross_amount, contact_id, contact_name, appointment_id, notes")
         .eq("artist_ghl_id", barberGhlId)
+        .eq("transaction_type", "session_payment")
         .is("reviewed_at", null)
         .is("deleted_at", null)
         .is("superseded_by", null)
