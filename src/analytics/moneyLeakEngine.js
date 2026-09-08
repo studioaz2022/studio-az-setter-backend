@@ -393,6 +393,40 @@ async function computeCurrentPace(barberGhlId, locationId) {
   }
   currentWeekRevenue = Math.round(currentWeekRevenue * 100) / 100;
 
+  // 1b. Last week's total, for the days before this week has anything in it.
+  //
+  // A barber opening the app on a Monday morning — or any time over a weekend
+  // that ran quiet — was told "You earned $0 this week", which is true and
+  // useless. It reads like the shop failed rather than like the week has not
+  // started. The app falls back to this figure until the first payment of the
+  // new week lands.
+  const lastMonday = new Date(monday);
+  lastMonday.setUTCDate(lastMonday.getUTCDate() - 7);
+  const lastMondayStr = lastMonday.toISOString().split("T")[0];
+  const lastSunday = new Date(monday);
+  lastSunday.setUTCDate(lastSunday.getUTCDate() - 1);
+  const lastSundayStr = lastSunday.toISOString().split("T")[0];
+
+  let lastWeekRevenue = 0;
+  const { data: lastWeekTx, error: lastWeekErr } = await supabase
+    .from("transactions")
+    .select("gross_amount")
+    .eq("artist_ghl_id", barberGhlId)
+    .eq("location_id", locationId)
+    .in("transaction_type", ["session_payment"])
+    .gte("session_date", lastMondayStr)
+    .lte("session_date", lastSundayStr);
+
+  if (lastWeekErr) {
+    // Not fatal — the headline just loses its fallback and shows this week.
+    console.warn(`[Pace] Last-week query failed: ${lastWeekErr.message}`);
+  } else {
+    for (const t of (lastWeekTx || [])) {
+      lastWeekRevenue += parseFloat(t.gross_amount || 0);
+    }
+    lastWeekRevenue = Math.round(lastWeekRevenue * 100) / 100;
+  }
+
   // 2. Upcoming booked appointments for the rest of this week
   //    (tomorrow through Sunday, or today if no transactions yet)
   const upcomingStartDate = centralDateStr; // include today's remaining appointments
@@ -449,6 +483,9 @@ async function computeCurrentPace(barberGhlId, locationId) {
   return {
     pace: projectedRevenue,
     currentWeekRevenue,
+    lastWeekRevenue,
+    lastWeekStart: lastMondayStr,
+    lastWeekEnd: lastSundayStr,
     projectedFromBookings,
     bookedAppointmentCount,
     tipMultiplier: Math.round(tipMultiplier * 1000) / 1000,
@@ -858,7 +895,8 @@ async function computeFullScorecard(barberGhlId, locationId, tier = "growth") {
       goal: null, bestWeekRevenue: null, bestWeekDate: null,
     }),
     safeCompute(() => computeCurrentPace(barberGhlId, locationId), {
-      pace: null, currentWeekRevenue: null, projectedFromBookings: null,
+      pace: null, currentWeekRevenue: null, lastWeekRevenue: null,
+      lastWeekStart: null, lastWeekEnd: null, projectedFromBookings: null,
       bookedAppointmentCount: null, tipMultiplier: null, daysElapsed: null,
     }),
   ]);
@@ -968,6 +1006,9 @@ async function computeFullScorecard(barberGhlId, locationId, tier = "growth") {
       bestWeekRevenue: weeklyGoalData.bestWeekRevenue,
       bestWeekDate: weeklyGoalData.bestWeekDate,
       currentWeekRevenue: currentPaceData.currentWeekRevenue,
+      lastWeekRevenue: currentPaceData.lastWeekRevenue,
+      lastWeekStart: currentPaceData.lastWeekStart,
+      lastWeekEnd: currentPaceData.lastWeekEnd,
       projectedFromBookings: currentPaceData.projectedFromBookings,
       bookedAppointmentCount: currentPaceData.bookedAppointmentCount,
       tipMultiplier: currentPaceData.tipMultiplier,
