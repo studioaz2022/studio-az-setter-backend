@@ -90,47 +90,77 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   // and appointment lookup instead of the email/payment date.
   const noteDate = parseNoteDate(parsed.note);
   const effectiveDate = noteDate || paymentDate;
-  const localDate = toLocalDate(effectiveDate.toISOString());
+  // `let`, not const: a cross-day contact match reassigns this so session_date
+  // follows the appointment rather than the moment the client hit send.
+  let localDate = toLocalDate(effectiveDate.toISOString());
   if (noteDate) {
     console.log(`  [VenmoBarber] Note date detected: "${parsed.note}" → ${localDate} (payment was ${toLocalDate(paymentDate.toISOString())})`);
   }
-  let unclaimedAppts = [];
+  let unclaimedAppts = [];      // same local day — used for the blind fallback
+  let unclaimedApptsWide = [];  // ±1 day — used only once we know WHO paid
 
   try {
-    const dayStart = new Date(`${localDate}T00:00:00`);
-    const dayEnd = new Date(`${localDate}T23:59:59`);
+    // Venmo gets a three-day window, not one day.
+    //
+    // Venmo payers here are the shop's closest regulars, and they are loose
+    // about when they actually hit send — payments stamped 03:01 and 04:33
+    // against afternoon appointments are normal, not errors. A strict same-day
+    // window drops those on the floor. (It was also subtly wrong already:
+    // `new Date("YYYY-MM-DDT00:00:00")` parses in the server's zone, which is
+    // UTC on Render, so the "day" was skewed hours off Chicago regardless.)
+    //
+    // Widening is safe here precisely because Venmo carries a sender name.
+    // The wide list is only ever consulted after a contact has been identified,
+    // and then only for THAT contact's appointments — so a bigger window cannot
+    // pull in a stranger. The blind distance-scoring fallback keeps the narrow
+    // same-day list, because there the time IS the only evidence.
+    const dayStart = new Date(`${localDate}T00:00:00-06:00`);
+    const wideStart = new Date(dayStart.getTime() - 24 * 60 * 60 * 1000);
+    const wideEnd = new Date(dayStart.getTime() + 48 * 60 * 60 * 1000);
 
     const appointments = await fetchAppointmentsForDateRange({
       locationId: BARBER_LOCATION_ID,
-      startTime: dayStart.toISOString(),
-      endTime: dayEnd.toISOString(),
+      startTime: wideStart.toISOString(),
+      endTime: wideEnd.toISOString(),
       userId: barberGhlId,
       sdkInstance: ghlBarber,
     });
 
-    // Filter to real client appointments — exclude breaks, blocks, personal holds
+    // Filter to real client appointments — exclude breaks, blocks, personal holds.
+    // "new" is excluded for the same reason as in the Square matcher: measured
+    // over Jun-Sep 2026, 185 past appointments sat at "new" and exactly one ever
+    // got paid. They are bookings that never happened.
     const blockedTitles = ["break", "block", "blocked", "lunch", "personal", "off"];
     const activeAppts = appointments.filter((apt) => {
       if (apt.assignedUserId !== barberGhlId) return false;
-      if (!["confirmed", "showed", "new"].includes(apt.appointmentStatus)) return false;
+      if (!["confirmed", "showed"].includes(apt.appointmentStatus)) return false;
       const title = (apt.title || "").toLowerCase().trim();
       return !blockedTitles.includes(title);
     });
 
     if (activeAppts.length > 0) {
+      // Claim check by appointment id rather than by session_date: a payment
+      // recorded under a different day still claims its appointment, and the
+      // old session_date-scoped query could not see that.
       const { data: existingTx } = await supabase
         .from("transactions")
         .select("appointment_id")
         .eq("artist_ghl_id", barberGhlId)
-        .eq("session_date", localDate)
-        .not("appointment_id", "is", null);
+        .eq("transaction_type", "session_payment")
+        .is("deleted_at", null)
+        .is("superseded_by", null)
+        .in("appointment_id", activeAppts.map((a) => a.id));
 
       const claimedAptIds = new Set((existingTx || []).map((t) => t.appointment_id));
-      unclaimedAppts = activeAppts
+      unclaimedApptsWide = activeAppts
         .filter((apt) => !claimedAptIds.has(apt.id))
         .sort((a, b) => new Date(a.startTime) - new Date(b.startTime));
+      unclaimedAppts = unclaimedApptsWide.filter(
+        (apt) => toLocalDate(apt.startTime) === localDate
+      );
+      console.log(`  [VenmoBarber] ${unclaimedAppts.length} unclaimed on ${localDate}, ${unclaimedApptsWide.length} across the ±1 day window`);
     } else {
-      console.log(`  [VenmoBarber] No active appointments found for ${localDate}`);
+      console.log(`  [VenmoBarber] No active appointments found near ${localDate}`);
     }
   } catch (err) {
     console.warn(`  [VenmoBarber] Appointment fetch failed: ${err.message}`);
@@ -189,12 +219,20 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
     return nicknameMap[first1] === first2 || nicknameMap[first2] === first1;
   };
 
-  // Strategy 1: Match sender name against today's appointment titles directly.
+  // Strategy 1: Match sender name against appointment titles directly.
   // This catches cases like "CJ Washington" → "C.J. Washington" where GHL search fails.
   // Also handles nicknames (Ben → Benjamin, etc.).
-  if (unclaimedAppts.length > 0 && parsed.senderName) {
+  //
+  // Searches the ±1 day window, same-day entries first, so a regular who pays
+  // in the small hours for the previous day's cut still gets identified — but a
+  // same-day title always wins over an adjacent-day one when both would match.
+  const titleSearchAppts = [
+    ...unclaimedAppts,
+    ...unclaimedApptsWide.filter((a) => toLocalDate(a.startTime) !== localDate),
+  ];
+  if (titleSearchAppts.length > 0 && parsed.senderName) {
     const senderNorm = normalize(parsed.senderName);
-    for (const apt of unclaimedAppts) {
+    for (const apt of titleSearchAppts) {
       const titleNorm = normalize(apt.title);
       if (!titleNorm) continue;
       if (titleNorm.includes(senderNorm) || senderNorm.includes(titleNorm)) {
@@ -268,6 +306,10 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
           limit: 10,
         });
         const firstNameContacts = firstNameResult?.contacts || [];
+        // Deliberately SAME-DAY only, unlike the full-name title search above.
+        // This branch matches on a first name alone, which is weak enough that
+        // the day constraint is carrying real weight — widen it to ±1 day and
+        // two different Mikes on consecutive days become one Mike.
         if (firstNameContacts.length > 0 && unclaimedAppts.length > 0) {
           const apptContactIds = new Set(unclaimedAppts.map((a) => a.contactId).filter(Boolean));
           const apptMatch = firstNameContacts.find((c) => apptContactIds.has(c.id));
@@ -283,13 +325,34 @@ async function handleBarberVenmoPayment({ parsed, barberGhlId }) {
   }
 
   // Step 5: Appointment matching
-  if (unclaimedAppts.length > 0) {
+  if (unclaimedApptsWide.length > 0) {
     if (contactId) {
-      // We found a GHL contact — only match to THEIR appointment, never a stranger's
-      const contactAppt = unclaimedAppts.find((apt) => apt.contactId === contactId);
+      // We know who paid, so search the full ±1 day window — only ever among
+      // THIS contact's own appointments, which is what makes the wider net safe.
+      // A regular who pays at 3am for yesterday's cut now lands correctly
+      // instead of falling into the review queue.
+      //
+      // Prefer the same day when this contact has appointments on more than one
+      // day in the window; otherwise take the nearest in time to the payment.
+      const paymentMs = (parsed.date || new Date()).getTime();
+      const theirs = unclaimedApptsWide.filter((apt) => apt.contactId === contactId);
+      const sameDay = theirs.filter((apt) => toLocalDate(apt.startTime) === localDate);
+      const pool = sameDay.length > 0 ? sameDay : theirs;
+      const contactAppt = pool.sort(
+        (a, b) => Math.abs(new Date(a.startTime) - paymentMs) - Math.abs(new Date(b.startTime) - paymentMs)
+      )[0];
+
       if (contactAppt) {
         appointmentId = contactAppt.id;
         calendarId = contactAppt.calendarId || null;
+        const apptDay = toLocalDate(contactAppt.startTime);
+        if (apptDay !== localDate) {
+          // Revenue belongs to the day the service happened, not the day the
+          // client got around to paying. Without this, a late-night Venmo lands
+          // the money in the wrong month at a month boundary.
+          console.log(`  [VenmoBarber] Cross-day match: payment on ${localDate} → appointment on ${apptDay}; session_date follows the appointment`);
+          localDate = apptDay;
+        }
         console.log(`  [VenmoBarber] Matched to contact's appointment: ${appointmentId}`);
       }
       // If their appointment is already claimed or doesn't exist, leave as unmatched
