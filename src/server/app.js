@@ -9813,6 +9813,29 @@ function createApp() {
         }
 
         if (sendText) {
+          // ═══ GHL-OWNED-SMS ═══════════════════════════════════════════════
+          // The client's cancellation text is sent by a GoHighLevel WORKFLOW,
+          // not by this codebase. That workflow triggers on appointment status
+          // becoming "cancelled", so writing the status here IS the send.
+          //
+          // Which is why nothing else here texts them. An earlier version set
+          // the status AND sent its own message, which would have delivered two
+          // texts for one cancellation — `toNotify: false` suppresses GHL's own
+          // built-in notification, it does NOT stop a workflow listening for the
+          // status change.
+          //
+          // It is also the whole reason the other branch DELETES rather than
+          // cancelling: deleting never sets the status, so the workflow never
+          // fires, so a silent cancellation stays silent. "No text" is not a
+          // preference we honour by choice — it is only achievable by never
+          // touching the status at all.
+          //
+          // TO MOVE THIS OFF GHL: stop writing "cancelled" here, disable the
+          // matching workflow in GHL, and send the message from the backend
+          // (sendConversationMessage in clients/ghlClient) so both branches go
+          // through one code path and the copy lives in this repo.
+          // See APPOINTMENT_COMMS_BACKEND_PLAN.md.
+          // ═════════════════════════════════════════════════════════════════
           try {
             await ghlBarber.calendars.editAppointment(
               { eventId: appointmentId },
@@ -9820,33 +9843,20 @@ function createApp() {
                 appointmentStatus: "cancelled",
                 calendarId: appt.calendar_id,
                 assignedUserId: appt.assigned_user_id,
+                // Suppresses GHL's built-in notification only. The workflow
+                // above is separate and fires regardless.
                 toNotify: false,
               }
             );
+            cancellationTextSent = true; // by the GHL workflow, not by us
           } catch (err) {
             console.error(`[Reconcile] GHL cancel failed for ${appointmentId}: ${err.response?.data ? JSON.stringify(err.response.data).slice(0, 200) : err.message}`);
             return res.status(502).json({ success: false, error: "Couldn't cancel in GHL — nothing was changed." });
           }
-
-          if (appt.contact_id) {
-            try {
-              const { sendConversationMessage } = require("../clients/ghlClient");
-              const when = new Intl.DateTimeFormat("en-US", {
-                timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric",
-                hour: "numeric", minute: "2-digit",
-              }).format(new Date(appt.start_time));
-              await sendConversationMessage({
-                contactId: appt.contact_id,
-                body: `Hey, this is Studio AZ Barbershop. We've canceled your appointment on ${when}. Reply here any time and we'll get you rebooked.`,
-              });
-              cancellationTextSent = true;
-            } catch (err) {
-              // The cancellation itself already succeeded. Report the text
-              // failure rather than rolling back a correct cancellation.
-              console.error(`[Reconcile] Cancellation text failed for ${appt.contact_id}: ${err.message}`);
-            }
-          }
         } else {
+          // Deliberately a DELETE, not a status change. See the GHL-OWNED-SMS
+          // note above: setting "cancelled" would trip the workflow and text the
+          // client, which is precisely what this branch exists to avoid.
           try {
             // deleteEvent takes (params, body) — the body is required by the
             // SDK signature even though there is nothing to put in it.
@@ -9875,7 +9885,7 @@ function createApp() {
       console.log(
         `[Reconcile] ${barberGhlId} resolved "${appt.title}" as ${outcome}` +
           (transactionId ? ` ($${amount} cash recorded)` : "") +
-          (cancellationTextSent ? " — client texted" : "") +
+          (cancellationTextSent ? " — GHL workflow will text the client" : "") +
           (appointmentDeleted ? " — appointment deleted in GHL" : "") +
           (outcome === "covered" ? ` — covered by transaction ${coveringTransactionId}` : "")
       );
