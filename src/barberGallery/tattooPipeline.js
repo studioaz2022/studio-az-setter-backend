@@ -37,14 +37,26 @@ const REFRAME_URL_HOSTS = new Set(["assets.cdn.filesafe.space"]);
 const STYLE_LABELS = {
   realism: "Realism",
   "fine-line": "Fine line",
-  "black-and-grey": "Black and grey",
-  color: "Color",
+  portrait: "Portrait",
+  religious: "Religious",
   traditional: "Traditional",
   lettering: "Lettering",
   geometric: "Geometric",
   floral: "Floral",
+  polynesian: "Polynesian",
   "cover-up": "Cover-up",
 };
+
+// Styles whose label is a proper adjective and keeps its capital wherever it
+// lands in a sentence. Everything else lowercases when something precedes it,
+// so we get "Black and grey realism tattoo" but "Black and grey Polynesian
+// half sleeve tattoo" — which is exactly how the hand-written originals read.
+const PROPER_STYLES = new Set(["polynesian"]);
+
+// Ink is its own axis: it says how a piece is inked, not what it is. Only black
+// and grey is ever stated in copy — the originals never write "color tattoo",
+// because colour is the unmarked case.
+const INK_LEAD = { "black-and-grey": "Black and grey" };
 
 const PLACEMENT_LABELS = {
   forearm: "forearm",
@@ -70,7 +82,7 @@ const placementLabel = (slug) => PLACEMENT_LABELS[slug] || deSlug(slug);
  * wrote one, which is what makes these read like the hand-written originals
  * rather than a template.
  */
-function buildAltText({ artistName, style, placement, caption }) {
+function buildAltText({ artistName, style, placement, ink, caption }) {
   const subject = String(caption || "")
     .trim()
     .toLowerCase()
@@ -84,8 +96,13 @@ function buildAltText({ artistName, style, placement, caption }) {
   // read as a location ("tattoo on forearm"). The hand-written originals do
   // both, each where it sounds right, so this follows them.
   const adjectival = placement === "full-sleeve" || placement === "half-sleeve";
+  const inkLead = INK_LEAD[ink] || null;
+  const styleWord = inkLead && !PROPER_STYLES.has(style)
+    ? styleLabel(style).toLowerCase()
+    : styleLabel(style);
   const lead = [
-    styleLabel(style),
+    inkLead,
+    styleWord,
     subject,
     adjectival ? placementLabel(placement) : null,
     "tattoo",
@@ -95,7 +112,7 @@ function buildAltText({ artistName, style, placement, caption }) {
 }
 
 /** "joan-fine-line-floral-forearm-minneapolis-a1b2c3.webp" */
-function buildSeoFilename({ firstName, style, placement, caption }) {
+function buildSeoFilename({ firstName, style, placement, ink, caption }) {
   const subject = String(caption || "")
     .trim()
     .toLowerCase()
@@ -107,7 +124,7 @@ function buildSeoFilename({ firstName, style, placement, caption }) {
 
   const shortId = crypto.randomBytes(3).toString("hex");
   return (
-    [firstName.toLowerCase(), style, subject, placement, "minneapolis", shortId]
+    [firstName.toLowerCase(), ink === "black-and-grey" ? ink : null, style, subject, placement, "minneapolis", shortId]
       .filter(Boolean)
       .join("-")
       .toLowerCase()
@@ -139,7 +156,7 @@ async function uploadToGhl(buffer, filename, folderId) {
  * upload to the artist's GHL folder. Stores BYTES ONLY; the row is written by
  * the caller after the artist's session has been verified.
  */
-async function processUpload({ buffer, artistName, firstName, folderId, style, placement, caption }) {
+async function processUpload({ buffer, artistName, firstName, folderId, style, placement, ink, caption }) {
   requireSdk();
   if (!buffer?.length) throw new HttpError(400, "file is required");
   if (!style) throw new HttpError(400, "Pick a style.");
@@ -158,8 +175,8 @@ async function processUpload({ buffer, artistName, firstName, folderId, style, p
     );
   }
 
-  const seoFilename = buildSeoFilename({ firstName, style, placement, caption });
-  const altText = buildAltText({ artistName, style, placement, caption });
+  const seoFilename = buildSeoFilename({ firstName, style, placement, ink, caption });
+  const altText = buildAltText({ artistName, style, placement, ink, caption });
   const uploaded = await uploadToGhl(processed, seoFilename, folderId);
 
   console.log(

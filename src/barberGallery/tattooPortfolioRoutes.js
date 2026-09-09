@@ -30,7 +30,7 @@ const upload = multer({
 });
 
 const PHOTO_COLUMNS =
-  "id, artist_id, style, placement, status, alt_text, seo_filename, caption, width, height, ghl_file_id, url, featured, sort_order, created_at";
+  "id, artist_id, style, placement, ink, status, alt_text, seo_filename, caption, width, height, ghl_file_id, url, featured, sort_order, created_at";
 
 // ── Public read (the website) ──────────────────────────────────────────────
 
@@ -47,7 +47,7 @@ router.get("/public", async (_req, res) => {
 
     const { data, error } = await supabase
       .from("tattoo_portfolio_photos")
-      .select(`style, placement, alt_text, url, caption, featured, sort_order,
+      .select(`style, placement, ink, alt_text, url, caption, featured, sort_order,
                tattoo_artists!inner ( slug, full_name, active )`)
       .eq("status", "published")
       .eq("tattoo_artists.active", true)
@@ -66,6 +66,7 @@ router.get("/public", async (_req, res) => {
         // display label, not the slug.
         style: styleLabel(row.style),
         placement: row.placement || null,
+        ink: row.ink || null,
         caption: row.caption || null,
         featured: row.featured,
       });
@@ -89,12 +90,13 @@ router.get("/public", async (_req, res) => {
 const STYLE_LABELS = {
   realism: "Realism",
   "fine-line": "Fine Line",
-  "black-and-grey": "Black & Grey",
-  color: "Color",
+  portrait: "Portrait",
+  religious: "Religious",
   traditional: "Traditional",
   lettering: "Lettering",
   geometric: "Geometric",
   floral: "Floral",
+  polynesian: "Polynesian",
   "cover-up": "Cover-Up",
 };
 const styleLabel = (slug) =>
@@ -276,8 +278,10 @@ router.post(
   handle("post that photo", async (req, res) => {
     const style = String(req.body.style || "");
     const placement = String(req.body.placement || "");
+    const ink = String(req.body.ink || "");
     if (!style) throw new HttpError(400, "Pick a style.");
     if (!placement) throw new HttpError(400, "Pick a placement.");
+    if (!ink) throw new HttpError(400, "Pick black & grey or color.");
 
     const folderId = await folderFor(req.artist);
     const caption = String(req.body.caption || "").trim();
@@ -289,6 +293,7 @@ router.post(
       folderId,
       style,
       placement,
+      ink,
       caption,
     });
 
@@ -298,6 +303,7 @@ router.post(
         artist_id: req.artist.id, // from the verified session, never the body
         style,
         placement,
+        ink,
         alt_text: processed.altText,
         seo_filename: processed.seoFilename,
         caption: caption || null,
@@ -342,6 +348,7 @@ router.patch(
     if (Number.isInteger(body.sortOrder)) patch.sort_order = body.sortOrder;
     if (typeof body.style === "string" && body.style) patch.style = body.style;
     if (typeof body.placement === "string" && body.placement) patch.placement = body.placement;
+    if (typeof body.ink === "string" && body.ink) patch.ink = body.ink;
     if ("caption" in body) {
       const caption = String(body.caption ?? "").trim();
       patch.caption = caption || null;
@@ -350,11 +357,12 @@ router.patch(
     // Style, placement and caption all feed the alt text, so it is rebuilt
     // whenever any of them moves — otherwise a retagged photo keeps describing
     // itself as the thing it used to be.
-    if (patch.style || patch.placement || "caption" in body) {
+    if (patch.style || patch.placement || patch.ink || "caption" in body) {
       patch.alt_text = pipeline.buildAltText({
         artistName: req.artist.full_name,
         style: patch.style ?? photo.style,
         placement: patch.placement ?? photo.placement,
+        ink: patch.ink ?? photo.ink,
         caption: "caption" in body ? patch.caption : photo.caption,
       });
     }
