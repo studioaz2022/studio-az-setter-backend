@@ -158,4 +158,6 @@ async function verifyStaffEmail(email) {
   };
 }
 
-module.exports = { verifyStaffEmail, ghlBarber, getCachedUsers };
+// ghlTattoo joins the exports so the tattoo portfolio pipeline can reach the
+// tattoo location's media library, the same way ghlBarber serves the barbershop.
+module.exports = { verifyStaffEmail, ghlBarber, ghlTattoo, getCachedUsers };

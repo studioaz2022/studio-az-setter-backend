@@ -16417,6 +16417,10 @@ function createApp() {
   // id — see the header of galleryAppRoutes.js.
   app.use("/api/gallery-app", require("../barberGallery/galleryAppRoutes"));
 
+  // Tattoo artist portfolios — same session-verified trust model as the gallery,
+  // plus an unauthenticated /public read that feeds tattooshopminneapolis.com.
+  app.use("/api/tattoo-portfolio", require("../barberGallery/tattooPortfolioRoutes"));
+
   // ═══ GALLERY MARKETING ANALYTICS (future-marketing-platform-roadmap.md Phase 4) ═══
   app.use("/api/gallery", require("../barberGallery/galleryAnalyticsRoutes"));
 
