@@ -12866,11 +12866,18 @@ function createApp() {
         const isBarber = resolved.locationId === FD_BARBER_LOC_ID;
         const sdk = isBarber && ghlBarber ? ghlBarber : ghl;
 
-        const result = await sdk.contacts.getContacts({
+        // Ranked, order-insensitive lookup. GHL alone pages without
+        // ranking (93 "John"s, 20 returned, the rest invisible) and
+        // matches only an ordered prefix sequence, which is why the
+        // desk had to type a full name exactly. See contactSearch.js.
+        const { searchContacts: fdSearchContacts } = require("../frontdesk/contactSearch");
+        const found = await fdSearchContacts({
+          sdk,
           locationId: resolved.locationId,
-          query: q,
-          limit: 20,
+          q,
+          limit: 25,
         });
+        const result = { contacts: found.contacts };
 
         // Resolve assignedTo → staff name from the cached user list.
         let userNameMap = {};
@@ -12913,7 +12920,17 @@ function createApp() {
           };
         });
 
-        res.json({ success: true, location: resolved.label, contacts });
+        res.json({
+          success: true,
+          location: resolved.label,
+          contacts,
+          // How many GHL matched for the token we searched on, so the
+          // UI can say "showing 25 of 93" instead of silently cutting.
+          total: found.total,
+          // True when nothing matched exactly and these are best
+          // guesses at a misspelling — the UI labels them as such.
+          fuzzy: found.fuzzy,
+        });
       } catch (err) {
         console.error("❌ GET /api/frontdesk/search error:", err.message || err);
         res.status(500).json({ success: false, error: err.message });
