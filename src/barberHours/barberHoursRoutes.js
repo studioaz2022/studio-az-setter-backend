@@ -523,3 +523,13 @@ router.put("/schedules/:scheduleId/booking", makeRequireInternalKey(), async (re
 });
 
 module.exports = router;
+
+// Shared with /api/gallery-app, which serves the iOS app. The app must never
+// name a GHL user id of its own — the gallery routes resolve the barber from
+// their verified app session and then call these directly, so there is no way
+// to ask for someone else's schedule.
+module.exports.findBarber = findBarber;
+module.exports.searchSchedules = searchSchedules;
+module.exports.shapeSchedule = shapeSchedule;
+module.exports.readBookingSettings = readBookingSettings;
+module.exports.SERVICE_ORDER = SERVICE_ORDER;

@@ -16412,6 +16412,10 @@ function createApp() {
 
   // ═══ BARBER GALLERY UPLOADER (BARBER_GALLERY_UPLOADER_PLAN.md) ═══
   app.use("/api/barber-gallery", require("../barberGallery/barberGalleryRoutes"));
+  // The iOS app's gallery. Separate from the routes above because it resolves the
+  // barber from their verified app session instead of trusting a client-supplied
+  // id — see the header of galleryAppRoutes.js.
+  app.use("/api/gallery-app", require("../barberGallery/galleryAppRoutes"));
 
   // ═══ GALLERY MARKETING ANALYTICS (future-marketing-platform-roadmap.md Phase 4) ═══
   app.use("/api/gallery", require("../barberGallery/galleryAnalyticsRoutes"));
