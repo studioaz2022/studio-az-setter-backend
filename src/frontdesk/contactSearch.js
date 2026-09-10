@@ -177,8 +177,9 @@ function scoreContact(c, tokens, normQuery, allowFuzzy) {
 }
 
 /**
- * Run one GHL query. Isolated so the caller can try several strategies
- * without each of them knowing the SDK's shape.
+ * Ask GHL with the `query` parameter — a word-prefix match on an
+ * ordered phrase. Kept only as a fallback for the typo rescue, where
+ * a 4-character stem is exactly the shape `query` is good at.
  */
 async function ghlQuery(sdk, locationId, query, pageLimit) {
   const r = await sdk.contacts.searchContactsAdvanced({
@@ -191,6 +192,65 @@ async function ghlQuery(sdk, locationId, query, pageLimit) {
 }
 
 /**
+ * Ask GHL with structured FILTERS — the good primitive.
+ *
+ * The `query` parameter only does an ordered word-prefix match, which
+ * is what made mid-word searches and phone-suffix lookups impossible:
+ * "kert" found nobody though three clients have it in their surname,
+ * and "3536" found the client whose NAME is a phone number instead of
+ * the one whose number ends in 3536. `filters` with the `contains`
+ * operator is a true substring match, and the array is ANDed, so:
+ *
+ *   every token must appear SOMEWHERE (AND across the tokens)
+ *   in the name, the email, or the phone (OR within each token)
+ *
+ * That single shape covers word order, skipped middle names, mid-word
+ * fragments and phone suffixes at the API level, in one round trip.
+ */
+/** GHL rejects a `contains` filter on fewer than 3 characters. */
+const CONTAINS_MIN = 3;
+
+async function ghlFilterQuery(sdk, locationId, tokens, pageLimit) {
+  const filters = tokens.map((tok) => {
+    const d = digitsOf(tok);
+    const or = [
+      { field: "contactName", operator: "contains", value: tok },
+      { field: "email", operator: "contains", value: tok },
+    ];
+    // Only a real fragment of a number is worth matching against a
+    // phone — two digits would match almost everyone.
+    if (d.length >= 3) {
+      or.push({ field: "phone", operator: "contains", value: d });
+    }
+    return { group: "OR", filters: or };
+  });
+  // GHL's filter endpoint intermittently answers "Network error: no
+  // response received" — observed on identical payloads that succeed
+  // moments later, so it is flakiness rather than a bad request. One
+  // retry keeps a blip from costing the desk the good matching and
+  // dropping them onto the weaker prefix path.
+  let lastErr;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const r = await sdk.contacts.searchContactsAdvanced({
+        locationId,
+        pageLimit,
+        page: 1,
+        filters,
+      });
+      return { total: r?.total ?? null, contacts: r?.contacts || [] };
+    } catch (err) {
+      lastErr = err;
+      // Only a transport-level failure is worth repeating; a rejected
+      // filter shape will be rejected again just as fast.
+      if (err?.response?.status) break;
+      if (attempt === 0) await new Promise((r) => setTimeout(r, 250));
+    }
+  }
+  throw lastErr;
+}
+
+/**
  * Front-desk contact search.
  *
  * @returns {Promise<{contacts: object[], total: number|null, fuzzy: boolean, strategy: string}>}
@@ -198,65 +258,83 @@ async function ghlQuery(sdk, locationId, query, pageLimit) {
 async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 }) {
   const tokens = tokenize(q);
   const normQuery = norm(q);
-  if (!tokens.length) return { contacts: [], total: 0, fuzzy: false, strategy: "empty" };
-
-  const qDigits = digitsOf(q);
-  const isPhoneish = qDigits.length >= 4 && qDigits.length >= normQuery.replace(/\s/g, "").length - 3;
-
-  // Pick what to ASK GHL for. The longest token is a free proxy for the
-  // most selective one (surnames are longer than first names far more
-  // often than not), which is what keeps us under the page cap.
-  const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
-  const primary = isPhoneish ? qDigits : longest;
+  if (!tokens.length) {
+    return { contacts: [], total: 0, fuzzy: false, strategy: "empty" };
+  }
 
   const seen = new Map();
   const collect = (list) => {
     for (const c of list) if (c?.id && !seen.has(c.id)) seen.set(c.id, c);
   };
 
-  let strategy = "primary-token";
-  let { total, contacts } = await ghlQuery(sdk, locationId, primary, fetchSize);
-  collect(contacts);
+  // GHL refuses a `contains` filter shorter than 3 characters, so only
+  // the long-enough tokens can be pushed down to the API. Any shorter
+  // ones are still enforced locally by the ranker, which is an AND —
+  // so "jo smith" filters on "smith" server-side and then requires
+  // "jo" here. Without this the whole filter query 422s and every
+  // search with a short token silently drops to the weaker path.
+  const filterable = tokens.filter((t) => t.length >= CONTAINS_MIN);
+
+  let strategy = "contains";
+  let total = null;
+  if (filterable.length) {
+    try {
+      const r = await ghlFilterQuery(sdk, locationId, filterable, fetchSize);
+      total = r.total;
+      collect(r.contacts);
+    } catch (err) {
+      // Never let a filter failure cost the desk their search — fall
+      // back to the older prefix behaviour rather than returning none.
+      console.warn(
+        "[contactSearch] filter query failed, falling back to query param:",
+        err?.message || err
+      );
+      const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
+      const r = await ghlQuery(sdk, locationId, longest, fetchSize);
+      total = r.total;
+      collect(r.contacts);
+      strategy = "query-fallback";
+    }
+  } else {
+    // Every token is 1-2 characters ("jo", "li"). Nothing to filter
+    // on, so use the prefix search, which has no minimum.
+    const r = await ghlQuery(sdk, locationId, normQuery, fetchSize);
+    total = r.total;
+    collect(r.contacts);
+    strategy = "short-query";
+  }
 
   let ranked = rank([...seen.values()], tokens, normQuery, false);
 
-  // Nothing landed. Two common reasons: the token we chose is spelled
-  // wrong, or the record stores that part of the name differently.
-  if (!ranked.length) {
-    // (a) try the other tokens verbatim
-    for (const t of tokens) {
-      if (t === primary || t.length < 3) continue;
-      const r = await ghlQuery(sdk, locationId, t, fetchSize);
-      collect(r.contacts);
-      if (total == null) total = r.total;
-    }
-    ranked = rank([...seen.values()], tokens, normQuery, false);
-    if (ranked.length) strategy = "alternate-token";
-  }
-
+  // Typo rescue. `contains` is exact about the characters it is given,
+  // so a misspelling matches nothing at all. GHL's `query` parameter
+  // matches word prefixes from about four characters, which still
+  // reaches the record when the error is later in the word
+  // ("Milkurt" -> stem "Milk" -> Milkert). An error inside the first
+  // four characters is not recoverable this way, and the result is
+  // flagged `fuzzy` so the desk verifies rather than trusting it.
   let fuzzy = false;
   if (!ranked.length) {
-    // (b) typo rescue. GHL matches word prefixes from ~4 characters, so
-    // a 4-char prefix of the longest token still reaches the record
-    // when the error is later in the word ("Milkurt" -> "Milk" ->
-    // Milkert). An error inside the first four characters is not
-    // recoverable this way, and we say so rather than pretending.
-    const stem = longest.slice(0, 4);
+    const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
     if (longest.length >= 5) {
-      const r = await ghlQuery(sdk, locationId, stem, fetchSize);
-      collect(r.contacts);
-      ranked = rank([...seen.values()], tokens, normQuery, true);
-      if (ranked.length) {
-        fuzzy = true;
-        strategy = "fuzzy-stem";
+      try {
+        const r = await ghlQuery(sdk, locationId, longest.slice(0, 4), fetchSize);
+        collect(r.contacts);
+        ranked = rank([...seen.values()], tokens, normQuery, true);
+        if (ranked.length) {
+          fuzzy = true;
+          strategy = "fuzzy-stem";
+        }
+      } catch {
+        /* the rescue is best-effort; a failure just means no results */
       }
     }
   }
 
   return {
     contacts: ranked.slice(0, limit),
-    // `total` is GHL's count for the token we asked about, which is the
-    // honest "how big is the pool we ranked" number.
+    // With filters this is the true count for the WHOLE query, so
+    // "showing 25 of 118" is now an honest statement.
     total,
     fuzzy,
     strategy,
