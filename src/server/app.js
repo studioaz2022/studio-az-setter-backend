@@ -12930,6 +12930,10 @@ function createApp() {
           // True when nothing matched exactly and these are best
           // guesses at a misspelling — the UI labels them as such.
           fuzzy: found.fuzzy,
+          // True when GHL's filter endpoint was unavailable AND the
+          // weaker fallback found nothing. "No matches" would be a
+          // lie in that case — the client may well exist.
+          degraded: found.degraded,
         });
       } catch (err) {
         console.error("❌ GET /api/frontdesk/search error:", err.message || err);

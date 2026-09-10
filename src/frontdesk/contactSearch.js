@@ -279,6 +279,10 @@ async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 
 
   let strategy = "contains";
   let total = null;
+  // True when the good matching was unavailable and we answered from
+  // the weaker prefix path. "No matches" would then be a lie: the
+  // client may exist and simply not be reachable by a prefix.
+  let degraded = false;
   if (filterable.length) {
     try {
       const r = await ghlFilterQuery(sdk, locationId, filterable, fetchSize);
@@ -296,6 +300,7 @@ async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 
       total = r.total;
       collect(r.contacts);
       strategy = "query-fallback";
+      degraded = true;
     }
   } else {
     // Every token is 1-2 characters ("jo", "li"). Nothing to filter
@@ -340,6 +345,8 @@ async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 
     total,
     fuzzy,
     strategy,
+    // Only worth telling the desk when it actually cost them results.
+    degraded: degraded && ranked.length === 0,
   };
 }
 
