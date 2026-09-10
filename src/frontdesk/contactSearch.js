@@ -182,12 +182,10 @@ function scoreContact(c, tokens, normQuery, allowFuzzy) {
  * a 4-character stem is exactly the shape `query` is good at.
  */
 async function ghlQuery(sdk, locationId, query, pageLimit) {
-  const r = await sdk.contacts.searchContactsAdvanced({
-    locationId,
-    query,
-    pageLimit,
-    page: 1,
-  });
+  const r = await sdk.contacts.searchContactsAdvanced(
+    { locationId, query, pageLimit, page: 1 },
+    { timeout: QUERY_TIMEOUT_MS }
+  );
   return { total: r?.total ?? null, contacts: r?.contacts || [] };
 }
 
@@ -210,6 +208,17 @@ async function ghlQuery(sdk, locationId, query, pageLimit) {
 /** GHL rejects a `contains` filter on fewer than 3 characters. */
 const CONTAINS_MIN = 3;
 
+// Budget for the whole lookup: the good path, then the fallback, has to
+// finish inside the front end's deadline or the desk sees an aborted
+// request instead of results.
+// GHL's filter endpoint normally answers in ~3s and hangs for 18-20s
+// when it misbehaves, so the cut goes between those: wide enough to
+// ride out ordinary variance and keep the good matching, tight enough
+// that a hang never reaches the desk. Worst case here plus the
+// fallback stays inside the front end's 12s deadline.
+const FILTER_TIMEOUT_MS = 6000;
+const QUERY_TIMEOUT_MS = 3500;
+
 async function ghlFilterQuery(sdk, locationId, tokens, pageLimit) {
   const filters = tokens.map((tok) => {
     const d = digitsOf(tok);
@@ -224,30 +233,23 @@ async function ghlFilterQuery(sdk, locationId, tokens, pageLimit) {
     }
     return { group: "OR", filters: or };
   });
-  // GHL's filter endpoint intermittently answers "Network error: no
-  // response received" — observed on identical payloads that succeed
-  // moments later, so it is flakiness rather than a bad request. One
-  // retry keeps a blip from costing the desk the good matching and
-  // dropping them onto the weaker prefix path.
-  let lastErr;
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const r = await sdk.contacts.searchContactsAdvanced({
-        locationId,
-        pageLimit,
-        page: 1,
-        filters,
-      });
-      return { total: r?.total ?? null, contacts: r?.contacts || [] };
-    } catch (err) {
-      lastErr = err;
-      // Only a transport-level failure is worth repeating; a rejected
-      // filter shape will be rejected again just as fast.
-      if (err?.response?.status) break;
-      if (attempt === 0) await new Promise((r) => setTimeout(r, 250));
-    }
-  }
-  throw lastErr;
+  // GHL's filter endpoint is unreliable in two directions: sometimes it
+  // answers "Network error: no response received" instantly, and
+  // sometimes it HANGS for 18-20 seconds on the very same payload that
+  // returns in 3. Measured directly against the SDK, with no retry
+  // involved, and unrelated to pageLimit — "3536" took 20.7s at a page
+  // limit of 25 and 3.0s at 100.
+  //
+  // The desk types into this box, and the browser gives up before that
+  // ever lands, so an unbounded wait is not a slow search — it is a
+  // failed one with a worse error message. Bound it and let the caller
+  // fall back to the prefix search, which is consistently around a
+  // second. Retrying the filter would just risk a second hang.
+  const r = await sdk.contacts.searchContactsAdvanced(
+    { locationId, pageLimit, page: 1, filters },
+    { timeout: FILTER_TIMEOUT_MS }
+  );
+  return { total: r?.total ?? null, contacts: r?.contacts || [] };
 }
 
 /**
@@ -286,7 +288,7 @@ async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 
       // Never let a filter failure cost the desk their search — fall
       // back to the older prefix behaviour rather than returning none.
       console.warn(
-        "[contactSearch] filter query failed, falling back to query param:",
+        "[contactSearch] filter query failed/timed out, falling back:",
         err?.message || err
       );
       const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
