@@ -1,0 +1,892 @@
+{
+  "tattoo": {
+    "name": "locations/13377765707428643781",
+    "title": "Studio AZ Tattoo",
+    "categories": {
+      "primaryCategory": {
+        "name": "categories/gcid:tattoo_shop",
+        "displayName": "Tattoo shop",
+        "serviceTypes": [
+          {
+            "serviceTypeId": "job_type_id:abstract_tattoos",
+            "displayName": "Abstract tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:aftercare",
+            "displayName": "Tattoo aftercare"
+          },
+          {
+            "serviceTypeId": "job_type_id:body_waxing",
+            "displayName": "Body waxing"
+          },
+          {
+            "serviceTypeId": "job_type_id:celtic_symbol_tattoos",
+            "displayName": "Celtic symbol tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:colored_tattoos",
+            "displayName": "Color ink tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:cover_ups_and_re_work",
+            "displayName": "Tattoo cover-ups & reworkings"
+          },
+          {
+            "serviceTypeId": "job_type_id:custom_lettering",
+            "displayName": "Custom tattoo lettering"
+          },
+          {
+            "serviceTypeId": "job_type_id:delicate_dot_work",
+            "displayName": "Delicate dot work tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:ear_piercing",
+            "displayName": "Ear piercing"
+          },
+          {
+            "serviceTypeId": "job_type_id:eyebrow_piercing",
+            "displayName": "Eyebrow piercing"
+          },
+          {
+            "serviceTypeId": "job_type_id:female_tattoos",
+            "displayName": "Female tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:figurative_tattoos",
+            "displayName": "Figurative tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:fine_detail_tattoos",
+            "displayName": "Fine line tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:haida_tattoos",
+            "displayName": "Haida tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:henna_tattoos",
+            "displayName": "Henna tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:industrial_piercing",
+            "displayName": "Industrial piercings"
+          },
+          {
+            "serviceTypeId": "job_type_id:intimate_tattoos",
+            "displayName": "Intimate tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:male_tattoos",
+            "displayName": "Male tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:mandala_tattoos",
+            "displayName": "Mandala tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:maori_tattoos",
+            "displayName": "Maori tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:memorial_tattoo",
+            "displayName": "Memorial tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:microblading",
+            "displayName": "Microblading"
+          },
+          {
+            "serviceTypeId": "job_type_id:nose_piercing",
+            "displayName": "Nose piercing"
+          },
+          {
+            "serviceTypeId": "job_type_id:old_fashioned_tattoos",
+            "displayName": "Old-fashioned tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:permanent_eyeliner",
+            "displayName": "Permanent eyeliner"
+          },
+          {
+            "serviceTypeId": "job_type_id:permanent_makeup",
+            "displayName": "Permanent makeup"
+          },
+          {
+            "serviceTypeId": "job_type_id:photo_realistic_tattoos",
+            "displayName": "Photo-realistic tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:piercings",
+            "displayName": "Piercings"
+          },
+          {
+            "serviceTypeId": "job_type_id:pointillist_tattoos",
+            "displayName": "Pointillism tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:polynesian_tribal",
+            "displayName": "Polynesian tribal tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:scar_camouflage",
+            "displayName": "Scar camouflage"
+          },
+          {
+            "serviceTypeId": "job_type_id:sleeve_tattoos",
+            "displayName": "Sleeve tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:solid_black_work",
+            "displayName": "Solid black work tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:tattoo",
+            "displayName": "Tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:tattoo_design",
+            "displayName": "Tattoo design"
+          },
+          {
+            "serviceTypeId": "job_type_id:tattoo_finishing",
+            "displayName": "Tattoo finishing"
+          },
+          {
+            "serviceTypeId": "job_type_id:tattoo_removal",
+            "displayName": "Tattoo removal"
+          },
+          {
+            "serviceTypeId": "job_type_id:tattoo_touch_ups",
+            "displayName": "Tattoo touch-ups"
+          },
+          {
+            "serviceTypeId": "job_type_id:temporary_tattoos",
+            "displayName": "Temporary tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:three_d_realistic_tattoos",
+            "displayName": "3D photo-real tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:three_d_styles",
+            "displayName": "3D-style tattoos"
+          },
+          {
+            "serviceTypeId": "job_type_id:tooth_gems",
+            "displayName": "Tooth gems"
+          },
+          {
+            "serviceTypeId": "job_type_id:traditional_asian_and_japanese",
+            "displayName": "Traditional Asian tattoos"
+          }
+        ],
+        "moreHoursTypes": [
+          {
+            "hoursTypeId": "ACCESS",
+            "displayName": "Access",
+            "localizedDisplayName": "Access"
+          },
+          {
+            "hoursTypeId": "BREAKFAST",
+            "displayName": "Breakfast",
+            "localizedDisplayName": "Breakfast"
+          },
+          {
+            "hoursTypeId": "BRUNCH",
+            "displayName": "Brunch",
+            "localizedDisplayName": "Brunch"
+          },
+          {
+            "hoursTypeId": "DELIVERY",
+            "displayName": "Delivery",
+            "localizedDisplayName": "Delivery"
+          },
+          {
+            "hoursTypeId": "DINNER",
+            "displayName": "Dinner",
+            "localizedDisplayName": "Dinner"
+          },
+          {
+            "hoursTypeId": "DRIVE_THROUGH",
+            "displayName": "Drive through",
+            "localizedDisplayName": "Drive through"
+          },
+          {
+            "hoursTypeId": "HAPPY_HOUR",
+            "displayName": "Happy hours",
+            "localizedDisplayName": "Happy hours"
+          },
+          {
+            "hoursTypeId": "KITCHEN",
+            "displayName": "Kitchen",
+            "localizedDisplayName": "Kitchen"
+          },
+          {
+            "hoursTypeId": "LUNCH",
+            "displayName": "Lunch",
+            "localizedDisplayName": "Lunch"
+          },
+          {
+            "hoursTypeId": "ONLINE_SERVICE_HOURS",
+            "displayName": "Online service hours",
+            "localizedDisplayName": "Online service hours"
+          },
+          {
+            "hoursTypeId": "PICKUP",
+            "displayName": "Pickup",
+            "localizedDisplayName": "Pickup"
+          },
+          {
+            "hoursTypeId": "TAKEOUT",
+            "displayName": "Takeout",
+            "localizedDisplayName": "Takeout"
+          },
+          {
+            "hoursTypeId": "SENIOR_HOURS",
+            "displayName": "Senior hours",
+            "localizedDisplayName": "Senior hours"
+          }
+        ]
+      },
+      "additionalCategories": [
+        {
+          "name": "categories/gcid:tattoo_artist",
+          "displayName": "Tattoo artist",
+          "moreHoursTypes": [
+            {
+              "hoursTypeId": "ACCESS",
+              "displayName": "Access",
+              "localizedDisplayName": "Access"
+            },
+            {
+              "hoursTypeId": "BREAKFAST",
+              "displayName": "Breakfast",
+              "localizedDisplayName": "Breakfast"
+            },
+            {
+              "hoursTypeId": "BRUNCH",
+              "displayName": "Brunch",
+              "localizedDisplayName": "Brunch"
+            },
+            {
+              "hoursTypeId": "DELIVERY",
+              "displayName": "Delivery",
+              "localizedDisplayName": "Delivery"
+            },
+            {
+              "hoursTypeId": "DINNER",
+              "displayName": "Dinner",
+              "localizedDisplayName": "Dinner"
+            },
+            {
+              "hoursTypeId": "DRIVE_THROUGH",
+              "displayName": "Drive through",
+              "localizedDisplayName": "Drive through"
+            },
+            {
+              "hoursTypeId": "HAPPY_HOUR",
+              "displayName": "Happy hours",
+              "localizedDisplayName": "Happy hours"
+            },
+            {
+              "hoursTypeId": "KITCHEN",
+              "displayName": "Kitchen",
+              "localizedDisplayName": "Kitchen"
+            },
+            {
+              "hoursTypeId": "LUNCH",
+              "displayName": "Lunch",
+              "localizedDisplayName": "Lunch"
+            },
+            {
+              "hoursTypeId": "ONLINE_SERVICE_HOURS",
+              "displayName": "Online service hours",
+              "localizedDisplayName": "Online service hours"
+            },
+            {
+              "hoursTypeId": "PICKUP",
+              "displayName": "Pickup",
+              "localizedDisplayName": "Pickup"
+            },
+            {
+              "hoursTypeId": "TAKEOUT",
+              "displayName": "Takeout",
+              "localizedDisplayName": "Takeout"
+            },
+            {
+              "hoursTypeId": "SENIOR_HOURS",
+              "displayName": "Senior hours",
+              "localizedDisplayName": "Senior hours"
+            }
+          ]
+        }
+      ]
+    },
+    "profile": {
+      "description": "Studio AZ Tattoo is a modern tattoo studio located in the heart of Minneapolis, right beneath Studio AZ Barbershop. We specialize in clean linework, custom designs, and walk-in flash — all delivered in a professional, welcoming space. Whether it’s your first tattoo or your tenth, we make sure you feel heard, respected, and hyped for the final result. Our team of talented artists each brings a unique style, with bios and portfolios available so you always know who you’re booking with. No pressure, no attitude — just quality ink and good vibes. We’re proud to serve the Latino community and beyond with bilingual artists, a laid-back atmosphere, and tattoos that speak louder than words. Book online or stop by. We’re here to help you wear you."
+    },
+    "serviceItems": [
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:abstract_tattoos",
+          "description": "Abstract tattoos in Minneapolis at Studio AZ. One-of-a-kind designs blending artistic experimentation with precise execution — geometric patterns, flowing linework, surreal compositions. Every piece original, never repeated. Free consultation. North Loop."
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:fine_detail_tattoos",
+          "description": "Fine line tattoos in Minneapolis — delicate, precise linework that holds up over time. Specializing in floral designs, geometric patterns, script, and minimalist pieces. Every design custom-made during a free consultation. North Loop. Appointment only."
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:tattoo_design",
+          "description": "Custom tattoo design in Minneapolis. Every tattoo at Studio AZ is designed from scratch — no flash, no templates. Free consultation, original artwork based on your vision, design approval before your appointment day. Available in English and Spanish."
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:tattoo",
+          "description": "Custom tattoos in Minneapolis. 100% original designs — no flash, no templates. Specialties: fine line, realism, black & grey, color, custom work. Spanish-speaking artists with full English consultation support. North Loop. Free consultation. Appointment only."
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:tattoo_shop",
+          "label": {
+            "displayName": "Realism Tattoos",
+            "description": "Realism tattoos in Minneapolis at Studio AZ. Photorealistic portraits, religious imagery, animals, and memorial pieces with lifelike detail and smooth shading. Color and black & grey realism. Free consultation, custom-designed for you. North Loop."
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:tattoo_shop",
+          "label": {
+            "displayName": "Black and Grey Tattoos",
+            "description": "Black and grey tattoos in Minneapolis. Tonal depth and smooth shading create dimension without color. Religious imagery, Polynesian patterns, florals, portraits, and large-scale sleeve work. Free consultation, custom-designed every time. North Loop."
+          }
+        }
+      }
+    ]
+  },
+  "barbershop": {
+    "name": "locations/3193954697909267343",
+    "title": "Studio AZ Barbershop",
+    "categories": {
+      "primaryCategory": {
+        "name": "categories/gcid:barber_shop",
+        "displayName": "Barber shop",
+        "serviceTypes": [
+          {
+            "serviceTypeId": "job_type_id:beard_conditioner",
+            "displayName": "Beard conditioning"
+          },
+          {
+            "serviceTypeId": "job_type_id:beard_dyeing",
+            "displayName": "Beard dyeing"
+          },
+          {
+            "serviceTypeId": "job_type_id:beard_maintenance",
+            "displayName": "Beard maintenance"
+          },
+          {
+            "serviceTypeId": "job_type_id:beard_trimming",
+            "displayName": "Beard trim"
+          },
+          {
+            "serviceTypeId": "job_type_id:buzz_cut",
+            "displayName": "Buzz cut"
+          },
+          {
+            "serviceTypeId": "job_type_id:capillary_treatment",
+            "displayName": "Capillary hair treatment"
+          },
+          {
+            "serviceTypeId": "job_type_id:curly_hair",
+            "displayName": "Curly hair"
+          },
+          {
+            "serviceTypeId": "job_type_id:custom_cut",
+            "displayName": "Custom cut"
+          },
+          {
+            "serviceTypeId": "job_type_id:eyebrow_tint",
+            "displayName": "Eyebrow tinting"
+          },
+          {
+            "serviceTypeId": "job_type_id:eyebrow_trimming",
+            "displayName": "Eyebrow trimming"
+          },
+          {
+            "serviceTypeId": "job_type_id:fade_cut",
+            "displayName": "Fade cut"
+          },
+          {
+            "serviceTypeId": "job_type_id:grooms_day",
+            "displayName": "Groom packages"
+          },
+          {
+            "serviceTypeId": "job_type_id:hair_coloring",
+            "displayName": "Hair coloring"
+          },
+          {
+            "serviceTypeId": "job_type_id:hair_extensions",
+            "displayName": "Hair extensions"
+          },
+          {
+            "serviceTypeId": "job_type_id:haircut",
+            "displayName": "Haircut"
+          },
+          {
+            "serviceTypeId": "job_type_id:head_shave",
+            "displayName": "Head shave"
+          },
+          {
+            "serviceTypeId": "job_type_id:hot_towel_shave",
+            "displayName": "Hot towel shave"
+          },
+          {
+            "serviceTypeId": "job_type_id:kids_haircuts",
+            "displayName": "Kids' cuts"
+          },
+          {
+            "serviceTypeId": "job_type_id:long_haircut",
+            "displayName": "Long haircut"
+          },
+          {
+            "serviceTypeId": "job_type_id:male_hair_removal",
+            "displayName": "Male body hair removal"
+          },
+          {
+            "serviceTypeId": "job_type_id:manicure_for_men",
+            "displayName": "Men's manicures"
+          },
+          {
+            "serviceTypeId": "job_type_id:military_haircut",
+            "displayName": "Military haircut"
+          },
+          {
+            "serviceTypeId": "job_type_id:perms",
+            "displayName": "Perms"
+          },
+          {
+            "serviceTypeId": "job_type_id:razor_cut",
+            "displayName": "Razor cut"
+          },
+          {
+            "serviceTypeId": "job_type_id:scalp_treatments",
+            "displayName": "Scalp treatment"
+          },
+          {
+            "serviceTypeId": "job_type_id:scissor_cut",
+            "displayName": "Scissor cut"
+          },
+          {
+            "serviceTypeId": "job_type_id:shampoo_and_conditioning",
+            "displayName": "Shampoo & conditioning"
+          },
+          {
+            "serviceTypeId": "job_type_id:shape_up",
+            "displayName": "Hair shape up"
+          },
+          {
+            "serviceTypeId": "job_type_id:shave",
+            "displayName": "Shave"
+          },
+          {
+            "serviceTypeId": "job_type_id:straight_razor_shave",
+            "displayName": "Straight razor shave"
+          },
+          {
+            "serviceTypeId": "job_type_id:straightening",
+            "displayName": "Hair straightening"
+          },
+          {
+            "serviceTypeId": "job_type_id:waxing_beauty",
+            "displayName": "Waxing"
+          }
+        ],
+        "moreHoursTypes": [
+          {
+            "hoursTypeId": "BREAKFAST",
+            "displayName": "Breakfast",
+            "localizedDisplayName": "Breakfast"
+          },
+          {
+            "hoursTypeId": "DELIVERY",
+            "displayName": "Delivery",
+            "localizedDisplayName": "Delivery"
+          },
+          {
+            "hoursTypeId": "DINNER",
+            "displayName": "Dinner",
+            "localizedDisplayName": "Dinner"
+          },
+          {
+            "hoursTypeId": "DRIVE_THROUGH",
+            "displayName": "Drive through",
+            "localizedDisplayName": "Drive through"
+          },
+          {
+            "hoursTypeId": "LUNCH",
+            "displayName": "Lunch",
+            "localizedDisplayName": "Lunch"
+          },
+          {
+            "hoursTypeId": "ONLINE_SERVICE_HOURS",
+            "displayName": "Online service hours",
+            "localizedDisplayName": "Online service hours"
+          },
+          {
+            "hoursTypeId": "PICKUP",
+            "displayName": "Pickup",
+            "localizedDisplayName": "Pickup"
+          },
+          {
+            "hoursTypeId": "SENIOR_HOURS",
+            "displayName": "Senior hours",
+            "localizedDisplayName": "Senior hours"
+          }
+        ]
+      },
+      "additionalCategories": [
+        {
+          "name": "categories/gcid:hair_salon",
+          "displayName": "Hair salon",
+          "serviceTypes": [
+            {
+              "serviceTypeId": "job_type_id:balayages",
+              "displayName": "Balayage"
+            },
+            {
+              "serviceTypeId": "job_type_id:bang_trim",
+              "displayName": "Bang trim"
+            },
+            {
+              "serviceTypeId": "job_type_id:beard_trimming",
+              "displayName": "Beard trim"
+            },
+            {
+              "serviceTypeId": "job_type_id:blowdrying",
+              "displayName": "Blowdry"
+            },
+            {
+              "serviceTypeId": "job_type_id:blowouts",
+              "displayName": "Blowouts"
+            },
+            {
+              "serviceTypeId": "job_type_id:body_waxing",
+              "displayName": "Body waxing"
+            },
+            {
+              "serviceTypeId": "job_type_id:box_braids",
+              "displayName": "Box Braids"
+            },
+            {
+              "serviceTypeId": "job_type_id:braids",
+              "displayName": "Braids"
+            },
+            {
+              "serviceTypeId": "job_type_id:curly_hair",
+              "displayName": "Curly hair"
+            },
+            {
+              "serviceTypeId": "job_type_id:dreadlocks",
+              "displayName": "Dreadlocks"
+            },
+            {
+              "serviceTypeId": "job_type_id:eyebrow_threading",
+              "displayName": "Eyebrow threading"
+            },
+            {
+              "serviceTypeId": "job_type_id:gloss_glaze",
+              "displayName": "Gloss or Glaze"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_coloring",
+              "displayName": "Hair coloring"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_extensions",
+              "displayName": "Hair extensions"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_glazing",
+              "displayName": "Hair glazing"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_glossing",
+              "displayName": "Hair glossing"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_hydration",
+              "displayName": "Hair hydration treatments"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_regrowth",
+              "displayName": "Hair regrowth"
+            },
+            {
+              "serviceTypeId": "job_type_id:hair_styling",
+              "displayName": "Hairstyling"
+            },
+            {
+              "serviceTypeId": "job_type_id:haircut",
+              "displayName": "Haircut"
+            },
+            {
+              "serviceTypeId": "job_type_id:highlighting",
+              "displayName": "Hair highlighting"
+            },
+            {
+              "serviceTypeId": "job_type_id:keratin_treatment",
+              "displayName": "Keratin treatments"
+            },
+            {
+              "serviceTypeId": "job_type_id:kids_haircuts",
+              "displayName": "Kids' cuts"
+            },
+            {
+              "serviceTypeId": "job_type_id:laser_hair_removal",
+              "displayName": "Laser hair removal"
+            },
+            {
+              "serviceTypeId": "job_type_id:manicures",
+              "displayName": "Manicures"
+            },
+            {
+              "serviceTypeId": "job_type_id:ombres",
+              "displayName": "Ombre hair color"
+            },
+            {
+              "serviceTypeId": "job_type_id:pedicures",
+              "displayName": "Pedicures"
+            },
+            {
+              "serviceTypeId": "job_type_id:perms",
+              "displayName": "Perms"
+            },
+            {
+              "serviceTypeId": "job_type_id:progressive_brush",
+              "displayName": "Brazilian hair straightening"
+            },
+            {
+              "serviceTypeId": "job_type_id:straightening",
+              "displayName": "Hair straightening"
+            },
+            {
+              "serviceTypeId": "job_type_id:twist_braids",
+              "displayName": "Twist braids"
+            },
+            {
+              "serviceTypeId": "job_type_id:updo",
+              "displayName": "Updos"
+            }
+          ],
+          "moreHoursTypes": [
+            {
+              "hoursTypeId": "ACCESS",
+              "displayName": "Access",
+              "localizedDisplayName": "Access"
+            },
+            {
+              "hoursTypeId": "BREAKFAST",
+              "displayName": "Breakfast",
+              "localizedDisplayName": "Breakfast"
+            },
+            {
+              "hoursTypeId": "BRUNCH",
+              "displayName": "Brunch",
+              "localizedDisplayName": "Brunch"
+            },
+            {
+              "hoursTypeId": "DELIVERY",
+              "displayName": "Delivery",
+              "localizedDisplayName": "Delivery"
+            },
+            {
+              "hoursTypeId": "DINNER",
+              "displayName": "Dinner",
+              "localizedDisplayName": "Dinner"
+            },
+            {
+              "hoursTypeId": "DRIVE_THROUGH",
+              "displayName": "Drive through",
+              "localizedDisplayName": "Drive through"
+            },
+            {
+              "hoursTypeId": "HAPPY_HOUR",
+              "displayName": "Happy hours",
+              "localizedDisplayName": "Happy hours"
+            },
+            {
+              "hoursTypeId": "KITCHEN",
+              "displayName": "Kitchen",
+              "localizedDisplayName": "Kitchen"
+            },
+            {
+              "hoursTypeId": "LUNCH",
+              "displayName": "Lunch",
+              "localizedDisplayName": "Lunch"
+            },
+            {
+              "hoursTypeId": "ONLINE_SERVICE_HOURS",
+              "displayName": "Online service hours",
+              "localizedDisplayName": "Online service hours"
+            },
+            {
+              "hoursTypeId": "PICKUP",
+              "displayName": "Pickup",
+              "localizedDisplayName": "Pickup"
+            },
+            {
+              "hoursTypeId": "TAKEOUT",
+              "displayName": "Takeout",
+              "localizedDisplayName": "Takeout"
+            },
+            {
+              "hoursTypeId": "SENIOR_HOURS",
+              "displayName": "Senior hours",
+              "localizedDisplayName": "Senior hours"
+            }
+          ]
+        }
+      ]
+    },
+    "profile": {
+      "description": "Welcome to Studio AZ Barbershop, the premier barbershop in Minneapolis. A collective group of passionate, individual artists. We break away from the typical corporate haircut experience that rushes people \"in and out.\" Instead, we focus on personalized, high-quality haircuts that resonate with your unique style. Our skilled barbers and stylists take the time to create a tailored experience, unlike any other barbershop or salon."
+    },
+    "serviceItems": [
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:beard_maintenance"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:beard_trimming"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:curly_hair"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:custom_cut"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:fade_cut"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:haircut"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:head_shave"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:hot_towel_shave"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:long_haircut"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:scissor_cut"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:shampoo_and_conditioning"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:shape_up"
+        }
+      },
+      {
+        "structuredServiceItem": {
+          "serviceTypeId": "job_type_id:shave"
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "SMP"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "Scalp Micro Pigmentation"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "men's haircut"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "mens haircut"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "men's cut"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "mens cut"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "Men's Haircuts"
+          }
+        }
+      },
+      {
+        "freeFormServiceItem": {
+          "category": "categories/gcid:barber_shop",
+          "label": {
+            "displayName": "Hair Tattoo"
+          }
+        }
+      }
+    ]
+  }
+}
