@@ -33,6 +33,13 @@
 // because it reports `total`, which lets the desk see when a query is
 // broader than the list being shown.
 
+const {
+  searchIndex,
+  fuzzyIndex,
+  countIndex,
+  upsertContacts,
+} = require("./contactIndex");
+
 /** Strip diacritics + lowercase so "José" matches "jose". */
 function norm(s) {
   return (s || "")
@@ -52,22 +59,39 @@ function tokenize(q) {
 
 const digitsOf = (s) => (s || "").replace(/\D+/g, "");
 
-/** Levenshtein with an early bail — we only ever care about tiny edits. */
+/**
+ * Damerau-Levenshtein (optimal string alignment) with an early bail — we only
+ * ever care about tiny edits.
+ *
+ * Transpositions count as ONE edit, not two. Plain Levenshtein scores
+ * "mlikert" against "milkert" as 2 because it has to delete and reinsert,
+ * which pushed the most common typo there is — two adjacent letters swapped —
+ * outside the budget for a 7-character name and made the client unreachable.
+ */
 function editDistance(a, b, max) {
   if (Math.abs(a.length - b.length) > max) return max + 1;
+  // Three rows: two back is what makes a transposition a single edit.
+  let prev2 = null;
   let prev = Array.from({ length: b.length + 1 }, (_, i) => i);
   for (let i = 1; i <= a.length; i++) {
     const cur = [i];
     let best = i;
     for (let j = 1; j <= b.length; j++) {
-      cur[j] = Math.min(
-        prev[j] + 1,
-        cur[j - 1] + 1,
-        prev[j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
-      );
-      if (cur[j] < best) best = cur[j];
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+      if (
+        i > 1 &&
+        j > 1 &&
+        a[i - 1] === b[j - 2] &&
+        a[i - 2] === b[j - 1]
+      ) {
+        v = Math.min(v, prev2[j - 2] + 1);
+      }
+      cur[j] = v;
+      if (v < best) best = v;
     }
     if (best > max) return max + 1; // no path can recover
+    prev2 = prev;
     prev = cur;
   }
   return prev[b.length];
@@ -255,98 +279,125 @@ async function ghlFilterQuery(sdk, locationId, tokens, pageLimit) {
 /**
  * Front-desk contact search.
  *
- * @returns {Promise<{contacts: object[], total: number|null, fuzzy: boolean, strategy: string}>}
+ * Order of attack, cheapest and most reliable first:
+ *
+ *   1. THE LOCAL INDEX. Every token must appear in `search_text`, which is
+ *      name + email + bare phone digits, so word order, mid-word fragments
+ *      and phone suffixes all work. ~100ms, deterministic, and unaffected by
+ *      GHL being slow.
+ *   2. A STEM PASS on the same index for typos. We hold the whole corpus
+ *      locally now, so a misspelling is answered from a 3-character stem plus
+ *      bounded edit distance — no API call, and it works on the first
+ *      characters too, which the old GHL-side rescue could never do.
+ *   3. GHL, only on a miss. That is exactly the shape of a client created
+ *      moments ago, and anything found there is written into the index so the
+ *      same miss cannot happen twice.
+ *
+ * @returns {Promise<{contacts: object[], total: number|null, fuzzy: boolean, degraded: boolean, strategy: string}>}
  */
 async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 }) {
   const tokens = tokenize(q);
   const normQuery = norm(q);
   if (!tokens.length) {
-    return { contacts: [], total: 0, fuzzy: false, strategy: "empty" };
+    return { contacts: [], total: 0, fuzzy: false, degraded: false, strategy: "empty" };
   }
 
+  // ---- 1. the index -------------------------------------------------
+  let indexUp = true;
+  try {
+    const rows = await searchIndex({ locationId, tokens });
+    const ranked = rank(rows, tokens, normQuery, false);
+    if (ranked.length) {
+      const total = await countIndex({ locationId, tokens }).catch(() => null);
+      return {
+        contacts: ranked.slice(0, limit),
+        total: total ?? ranked.length,
+        fuzzy: false,
+        degraded: false,
+        strategy: "index",
+      };
+    }
+  } catch (err) {
+    indexUp = false;
+    console.warn("[contactSearch] index unavailable:", err.message);
+  }
+
+  // ---- 2. typo rescue, still local ----------------------------------
+  // Trigram word-similarity over the whole local corpus. This is the pass
+  // that survives a mistake in the OPENING characters — a stem taken off the
+  // front of a misspelling is itself misspelled, so "Mlikert" could never
+  // stem its way to Milkert. Postgres scores it at 0.375 and finds him.
+  // Whatever comes back is re-ranked here by edit distance, which drops the
+  // trigram noise that rides along.
+  const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
+  if (indexUp && longest.length >= 4) {
+    try {
+      const near = await fuzzyIndex({ locationId, q: longest });
+      const ranked = rank(near, tokens, normQuery, true);
+      if (ranked.length) {
+        return {
+          contacts: ranked.slice(0, limit),
+          total: ranked.length,
+          fuzzy: true,
+          degraded: false,
+          strategy: "index-fuzzy",
+        };
+      }
+    } catch (err) {
+      console.warn("[contactSearch] fuzzy pass failed:", err.message);
+    }
+  }
+
+  // ---- 3. GHL, for the client who was created seconds ago ------------
   const seen = new Map();
   const collect = (list) => {
     for (const c of list) if (c?.id && !seen.has(c.id)) seen.set(c.id, c);
   };
-
-  // GHL refuses a `contains` filter shorter than 3 characters, so only
-  // the long-enough tokens can be pushed down to the API. Any shorter
-  // ones are still enforced locally by the ranker, which is an AND —
-  // so "jo smith" filters on "smith" server-side and then requires
-  // "jo" here. Without this the whole filter query 422s and every
-  // search with a short token silently drops to the weaker path.
-  const filterable = tokens.filter((t) => t.length >= CONTAINS_MIN);
-
-  let strategy = "contains";
   let total = null;
-  // True when the good matching was unavailable and we answered from
-  // the weaker prefix path. "No matches" would then be a lie: the
-  // client may exist and simply not be reachable by a prefix.
+  let strategy = indexUp ? "ghl-miss" : "ghl-index-down";
   let degraded = false;
-  if (filterable.length) {
-    try {
+
+  const filterable = tokens.filter((t) => t.length >= CONTAINS_MIN);
+  try {
+    if (filterable.length) {
       const r = await ghlFilterQuery(sdk, locationId, filterable, fetchSize);
       total = r.total;
       collect(r.contacts);
-    } catch (err) {
-      // Never let a filter failure cost the desk their search — fall
-      // back to the older prefix behaviour rather than returning none.
-      console.warn(
-        "[contactSearch] filter query failed/timed out, falling back:",
-        err?.message || err
-      );
-      const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
+    } else {
+      const r = await ghlQuery(sdk, locationId, normQuery, fetchSize);
+      total = r.total;
+      collect(r.contacts);
+    }
+  } catch (err) {
+    console.warn("[contactSearch] GHL fallback failed:", err?.message || err);
+    try {
       const r = await ghlQuery(sdk, locationId, longest, fetchSize);
       total = r.total;
       collect(r.contacts);
-      strategy = "query-fallback";
+    } catch {
       degraded = true;
     }
-  } else {
-    // Every token is 1-2 characters ("jo", "li"). Nothing to filter
-    // on, so use the prefix search, which has no minimum.
-    const r = await ghlQuery(sdk, locationId, normQuery, fetchSize);
-    total = r.total;
-    collect(r.contacts);
-    strategy = "short-query";
   }
 
-  let ranked = rank([...seen.values()], tokens, normQuery, false);
+  const found = [...seen.values()];
+  const ranked = rank(found, tokens, normQuery, false);
 
-  // Typo rescue. `contains` is exact about the characters it is given,
-  // so a misspelling matches nothing at all. GHL's `query` parameter
-  // matches word prefixes from about four characters, which still
-  // reaches the record when the error is later in the word
-  // ("Milkurt" -> stem "Milk" -> Milkert). An error inside the first
-  // four characters is not recoverable this way, and the result is
-  // flagged `fuzzy` so the desk verifies rather than trusting it.
-  let fuzzy = false;
-  if (!ranked.length) {
-    const longest = tokens.reduce((a, b) => (b.length > a.length ? b : a));
-    if (longest.length >= 5) {
-      try {
-        const r = await ghlQuery(sdk, locationId, longest.slice(0, 4), fetchSize);
-        collect(r.contacts);
-        ranked = rank([...seen.values()], tokens, normQuery, true);
-        if (ranked.length) {
-          fuzzy = true;
-          strategy = "fuzzy-stem";
-        }
-      } catch {
-        /* the rescue is best-effort; a failure just means no results */
-      }
-    }
+  // Self-heal: whatever GHL knew and we didn't now belongs in the index, so
+  // the next person to type this name gets the fast path.
+  if (found.length) {
+    upsertContacts(found, locationId).catch((e) =>
+      console.warn("[contactSearch] backfill-on-miss failed:", e.message)
+    );
   }
 
   return {
     contacts: ranked.slice(0, limit),
-    // With filters this is the true count for the WHOLE query, so
-    // "showing 25 of 118" is now an honest statement.
     total,
-    fuzzy,
+    fuzzy: false,
+    // Only claim degraded when we genuinely could not search AND found
+    // nothing — "No matches" would be a lie in that case.
+    degraded: (degraded || !indexUp) && ranked.length === 0,
     strategy,
-    // Only worth telling the desk when it actually cost them results.
-    degraded: degraded && ranked.length === 0,
   };
 }
 

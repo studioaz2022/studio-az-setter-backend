@@ -10746,8 +10746,34 @@ function createApp() {
           await handleAppointmentDeleted(req.body);
           handledAppointment = true;
           break;
+        // Contact events keep the front-desk search index honest. GHL was
+        // already sending these and we were discarding them, so no new
+        // webhook configuration was needed — only the decision to listen.
+        case "ContactCreate":
+        case "contact.created":
+        case "ContactUpdate":
+        case "contact.updated":
+          try {
+            await require("../frontdesk/contactIndex").upsertFromWebhook(req.body);
+          } catch (e) {
+            // Never fail the webhook over the index; the reconcile sweep
+            // will catch whatever this missed.
+            console.warn("[contactIndex] webhook upsert failed:", e.message);
+          }
+          break;
+        case "ContactDelete":
+        case "contact.deleted":
+          try {
+            await require("../frontdesk/contactIndex").deleteFromWebhook(req.body);
+          } catch (e) {
+            // A missed delete is the dangerous direction — it leaves a
+            // client on screen who no longer exists — so say so loudly
+            // even though the sweep is the real backstop.
+            console.error("[contactIndex] webhook DELETE failed:", e.message);
+          }
+          break;
         default:
-          // Non-appointment events (ContactUpdate, OutboundMessage, etc.) — ignore silently
+          // Other events (OutboundMessage, etc.) — ignore silently
           break;
       }
 
@@ -11384,11 +11410,18 @@ function createApp() {
         return res.status(400).json({ success: false, error: "No SDK available for this location" });
       }
 
-      const result = await sdk.contacts.getContacts({
+      // Same engine as the front desk: local index first, GHL only on a
+      // miss. This endpoint had the identical weakness — deprecated
+      // getContacts, limit 20, no ranking — so the iOS Record Payment
+      // lookup was as blunt as the desk's was.
+      const { searchContacts: indexedSearch } = require("../frontdesk/contactSearch");
+      const found = await indexedSearch({
+        sdk,
         locationId,
-        query: q,
-        limit: 20,
+        q,
+        limit: 25,
       });
+      const result = { contacts: found.contacts };
 
       // Build userId → name map from cached users for assignedTo resolution
       const locationKey = isBarberLocation ? "barber" : "tattoo";
@@ -14756,6 +14789,17 @@ function createApp() {
               contactId =
                 created?.contact?.id || created?.id || null;
               isNewContact = !!contactId;
+              // Put them in the search index now, not when the webhook
+              // catches up. The desk books a walk-in and then looks them up
+              // again moments later — that lookup should not be the one
+              // request that has to wait on GHL.
+              if (contactId) {
+                require("../frontdesk/contactIndex").writeThrough(
+                  created?.contact || { id: contactId, firstName, lastName, phone,
+                    assignedTo: staffGhlUserId },
+                  resolved.locationId
+                );
+              }
             } catch (createErr) {
               const cm = createErr.response?.data?.message || createErr.message;
               await logAudit("failed", `book contact create failed for ${phone}`, cm);

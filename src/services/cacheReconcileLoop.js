@@ -103,6 +103,45 @@ async function sendStaleAlertSMS(gapMs) {
  * overlap (if the previous sweep is still running for any reason, skip
  * this tick — don't pile on).
  */
+// ── contact index backstop ──────────────────────────────────────────
+const CONTACTS_EVERY_MS = 6 * 60 * 60 * 1000;
+let lastContactsReconcileAt = 0;
+
+/**
+ * Reconcile the front-desk contact search index against GHL, at most every
+ * six hours. Rides the existing sweep rather than adding a timer, so it
+ * inherits the overlap guard.
+ *
+ * The DELETE half is the point. An upsert-only sync looks healthy forever
+ * while accumulating clients who were deleted or merged away — a stale row
+ * is worse than a missing one, because the desk believes what it sees.
+ */
+async function maybeReconcileContacts() {
+  if (Date.now() - lastContactsReconcileAt < CONTACTS_EVERY_MS) return;
+  lastContactsReconcileAt = Date.now();
+  try {
+    const { reconcileLocation } = require("../frontdesk/contactIndex");
+    const { ghlBarber } = require("../clients/ghlMultiLocationSdk");
+    const { ghl } = require("../clients/ghlSdk");
+    const { BARBER_LOCATION_ID } = require("../config/kioskConfig");
+    const targets = [
+      ["barbershop", ghlBarber, process.env.GHL_BARBER_LOCATION_ID || BARBER_LOCATION_ID],
+      ["tattoo", ghl, process.env.GHL_LOCATION_ID],
+    ];
+    for (const [name, sdk, locationId] of targets) {
+      if (!sdk || !locationId) continue;
+      const r = await reconcileLocation({ sdk, locationId });
+      console.log(
+        `[contactIndex] ${name} reconciled — fetched=${r.fetched} upserted=${r.upserted} deleted=${r.deleted}` +
+          (r.refusedDelete ? " (REFUSED DELETE: partial fetch)" : "")
+      );
+    }
+  } catch (err) {
+    // Never let the contact index take down the appointment sweep.
+    console.warn("[contactIndex] reconcile failed (non-fatal):", err.message);
+  }
+}
+
 async function runSweep() {
   if (sweepInFlight) {
     console.log("[cacheReconcileLoop] sweep already in flight, skipping");
@@ -121,6 +160,13 @@ async function runSweep() {
       dryRun: false,
       evidenceSince: evidenceSinceMs,
     });
+    // Contact index drift check. Webhooks keep it fresh minute to minute;
+    // this is the backstop that removes clients GHL no longer has, which is
+    // the failure mode that put a month-old deleted block on the schedule.
+    // Every 6 hours rather than every sweep — it walks ~9k contacts and takes
+    // ~40s, and drift is slow.
+    await maybeReconcileContacts();
+
     const dt = ((Date.now() - startMs) / 1000).toFixed(1);
     const totalIns =
       (agg.barbershop?.inserted || 0) + (agg.tattoo?.inserted || 0);
