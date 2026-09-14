@@ -230,13 +230,13 @@ async function slotsForBarberService(barberSlug, serviceSlug) {
 
 // ── services catalog ─────────────────────────────────────────────────
 
-function servicesCatalog() {
+function servicesCatalog({ reveal = null } = {}) {
   return SERVICE_ORDER.map((slug) => {
     const s = SERVICES[slug];
     return {
       slug,
       label: s.label,
-      barbers: eligibleBarbers(slug).map((b) => ({
+      barbers: eligibleBarbers(slug, { reveal }).map((b) => ({
         slug: b.slug,
         name: b.name,
         price: b.prices[slug], // null = "Varies"
@@ -442,8 +442,14 @@ function registerBookingRoutes(app) {
       "Cache-Control",
       "public, max-age=300, s-maxage=600, stale-while-revalidate=3600"
     );
+    // `?reveal=<slug>` admits one hidden directory entry (the test barber)
+    // into an otherwise identical catalog. Slug-shaped or ignored.
+    const reveal =
+      typeof req.query.reveal === "string" && /^[a-z0-9-]{1,32}$/.test(req.query.reveal)
+        ? req.query.reveal
+        : null;
     return res.json({
-      services: servicesCatalog(),
+      services: servicesCatalog({ reveal }),
       tz: SHOP_TZ,
       // Square Web Payments SDK bootstrap for the deposit step. Served from
       // THIS process's env — the same env the orders are created with — so the

@@ -90,6 +90,23 @@ const BARBERS = {
     slotIntervalMinutes: 30,
     prices: { haircut: 80, "haircut-beard": 100 },
   },
+  // ── Hidden. For end-to-end tests of the live booking path. ──
+  // Books the "WalkIn · Haircut · Test (Studio AZ)" calendar, whose only
+  // team member is the "Studio AZ" admin user — so a test booking notifies
+  // no barber. `hidden` keeps it out of the catalog unless a request names
+  // it (`?reveal=test`), which only the widget does, and only when the URL
+  // it was opened from already said `?barber=test`. Still bookable by slug
+  // like any other entry; everything downstream (slots, create, audit, the
+  // GHL workflows) runs the real code.
+  test: {
+    name: "Test Barber",
+    calendarId: "48a2xaeIgoz2XNMSAwRj",
+    ghlUserId: "mf1uNeKFJ1hTl1ZEvwjW",
+    slotDurationMinutes: 30,
+    slotIntervalMinutes: 30,
+    prices: { haircut: 0 },
+    hidden: true,
+  },
   anna: {
     name: "Anna Kinkead",
     calendarId: "WWduImUIgEoEx8mBTkmp",
@@ -122,9 +139,13 @@ function serviceOffered(barberSlug, serviceSlug) {
   return !!(b && SERVICES[serviceSlug] && serviceSlug in b.prices);
 }
 
-function eligibleBarbers(serviceSlug) {
+/**
+ * Barbers offering a service, for the public catalog. Hidden entries are
+ * left out unless `reveal` names one of them by slug.
+ */
+function eligibleBarbers(serviceSlug, { reveal = null } = {}) {
   return Object.entries(BARBERS)
-    .filter(([, b]) => serviceSlug in b.prices)
+    .filter(([slug, b]) => serviceSlug in b.prices && (!b.hidden || slug === reveal))
     .map(([slug, b]) => ({ slug, ...b }));
 }
 
