@@ -114,11 +114,29 @@ async function pushedIds(source, ids) {
   return new Set((data || []).map((r) => r.source_photo_id));
 }
 
+// The weekly cap is enforced here against the ledger, not by trusting the
+// cron cadence: a double-fired cron or a manual /push must not over-drip.
+// Anything claimed/pushed in the trailing 6 days counts against the cap
+// (failed rows don't — a broken week shouldn't eat the budget).
+async function remainingBudget(source) {
+  const since = new Date(Date.now() - 6 * 24 * 3600 * 1000).toISOString();
+  const { count, error } = await supabase
+    .from("gbp_photo_pushes")
+    .select("id", { count: "exact", head: true })
+    .eq("source", source)
+    .in("status", ["claimed", "pushed"])
+    .gte("created_at", since);
+  if (error) throw new Error(`ledger budget read: ${error.message}`);
+  return Math.max(0, WEEKLY_CAP - (count || 0));
+}
+
 async function selectForSource(source) {
+  const budget = await remainingBudget(source);
+  if (budget === 0) return [];
   const cfg = SOURCES[source];
   const all = (await cfg.candidates()).filter(bigEnough).filter((c) => c.url);
   const seen = await pushedIds(source, all.map((c) => c.photoId));
-  return roundRobin(all.filter((c) => !seen.has(c.photoId)), WEEKLY_CAP);
+  return roundRobin(all.filter((c) => !seen.has(c.photoId)), budget);
 }
 
 // Both galleries serve WEBP, which Google rejects ("Image format is not
