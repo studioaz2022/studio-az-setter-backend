@@ -273,4 +273,5 @@ module.exports = {
   getPerformanceSummary,
   listReviews,
   STAR_TO_NUMBER,
+  getAccessToken,
 };

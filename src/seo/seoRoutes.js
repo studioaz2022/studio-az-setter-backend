@@ -45,6 +45,55 @@ router.use("/dashboard", requireInternalKey, dashboardRoutes);
 // URL becomes /api/seo/dashboard/abandoners/:site.
 
 // ──────────────────────────────────────
+// GBP photo freshness pipeline (GBP_PHOTO_PIPELINE_PLAN.md)
+// ──────────────────────────────────────
+// Weekly Render cron hits /push. GBP_PHOTO_PUSH_ENABLED != "true" forces
+// dry-run, so a fresh deploy can never post to the public profiles by accident.
+const { runCycle: runGbpPhotoCycle, pipelineStatus: gbpPhotoStatus, jpegForPhoto } = require("./gbpPhotoPipeline");
+
+// PUBLIC (no internal key): Google fetches sourceUrl anonymously, so this is
+// the JPEG face of the WEBP-only galleries. It only resolves photo IDs whose
+// gallery row is status=published — it cannot proxy arbitrary URLs, and a
+// published photo is already public on our own sites.
+router.get("/gbp-photos/img/:source/:file", async (req, res) => {
+  try {
+    const source = req.params.source;
+    const photoId = String(req.params.file || "").replace(/\.jpg$/i, "");
+    if (!["tattoo", "barber"].includes(source) || !/^[0-9a-f-]{16,64}$/i.test(photoId)) {
+      return res.status(400).send("Bad request");
+    }
+    const jpeg = await jpegForPhoto(source, photoId);
+    if (!jpeg) return res.status(404).send("Not found");
+    res.set("Content-Type", "image/jpeg");
+    res.set("Cache-Control", "public, max-age=86400");
+    return res.send(jpeg);
+  } catch (error) {
+    console.error("[GBP photos] converter failed:", error.message);
+    return res.status(502).send("Upstream error");
+  }
+});
+
+router.post("/gbp-photos/push", requireInternalKey, async (req, res) => {
+  try {
+    const enabled = process.env.GBP_PHOTO_PUSH_ENABLED === "true";
+    const dryRun = req.query.dryRun === "1" || !enabled;
+    const results = await runGbpPhotoCycle({ dryRun });
+    res.json({ success: true, enabled, dryRun, results });
+  } catch (error) {
+    console.error("[GBP photos] push cycle failed:", error.message);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+router.get("/gbp-photos/status", requireInternalKey, async (_req, res) => {
+  try {
+    res.json({ success: true, ...(await gbpPhotoStatus()) });
+  } catch (error) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// ──────────────────────────────────────
 // Search Console endpoints
 // ──────────────────────────────────────
 
