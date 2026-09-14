@@ -665,6 +665,7 @@ function registerBookingCreateRoute(app) {
       appointmentId,
       contactId,
       photoUploaded,
+      manage: manageLinks(appointmentId, barber.calendarId),
       ...(depositResult
         ? {
             deposit: {
@@ -677,6 +678,26 @@ function registerBookingCreateRoute(app) {
         : {}),
     });
   });
+}
+
+// The four self-service links GHL mints for an appointment — reschedule,
+// cancel, add-to-Google, .ics. GHL's own workflow writes these same URLs into
+// the contact's "Appt 1" custom fields a few seconds after booking, and every
+// confirmation SMS carries them; the pattern is fixed and keyed only on the
+// appointment id (and the calendar, for reschedule), so the website can show
+// them on its confirmation page immediately rather than waiting on the
+// workflow. Verified against workflow-written values for an API-created
+// booking (contact H3NamSlW7XAiF7WVUUo8, appt LDY3VGNZrF0Qy5VQkcUo).
+const BOOKING_HOST = "https://mn.studioaz.us";
+function manageLinks(appointmentId, calendarId) {
+  if (!appointmentId) return null;
+  const id = encodeURIComponent(appointmentId);
+  return {
+    reschedule: `${BOOKING_HOST}/widget/booking/${encodeURIComponent(calendarId)}?event_id=${id}`,
+    cancel: `${BOOKING_HOST}/widget/cancel-booking?event_id=${id}`,
+    googleCalendar: `${BOOKING_HOST}/google/calendar/add-event/${id}`,
+    ics: `${BOOKING_HOST}/google/calendar/get-ics/${id}`,
+  };
 }
 
 // parsePhoto/uploadHairstylePhoto are exported so the GHL write path can be
