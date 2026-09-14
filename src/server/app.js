@@ -11396,7 +11396,12 @@ function createApp() {
   // ═══ CONTACT SEARCH (GHL CRM) ═══
 
   app.get("/api/contacts/search", async (req, res) => {
-    const { q, locationId } = req.query;
+    // `assignedTo` narrows to contacts assigned to, OR followed by, that
+    // user — the predicate the iOS contact picker used to send to GHL
+    // directly. Both halves matter: 1,390 barbershop contacts have a
+    // follower, and dropping them would quietly hide clients an artist
+    // follows but was never assigned.
+    const { q, locationId, assignedTo } = req.query;
     if (!q || !locationId) {
       return res.status(400).json({ success: false, error: "q and locationId are required" });
     }
@@ -11419,7 +11424,8 @@ function createApp() {
         sdk,
         locationId,
         q,
-        limit: 25,
+        limit: Math.min(100, parseInt(req.query.limit, 10) || 25),
+        assignedTo: assignedTo ? String(assignedTo) : null,
       });
       const result = { contacts: found.contacts };
 

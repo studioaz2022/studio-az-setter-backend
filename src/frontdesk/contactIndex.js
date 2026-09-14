@@ -36,6 +36,10 @@ function toRow(c, locationId) {
     email: c.email || null,
     phone: c.phone || null,
     assigned_to: c.assignedTo || null,
+    // The iOS picker filters on "assigned to me OR I follow them", so the
+    // follower half has to be mirrored too or artists quietly stop seeing
+    // clients they follow but were never assigned.
+    followers: Array.isArray(c.followers) ? c.followers : [],
     tags: Array.isArray(c.tags) ? c.tags : [],
     ghl_updated_at: c.dateUpdated || c.dateAdded || null,
     synced_at: new Date().toISOString(),
@@ -180,9 +184,14 @@ async function deleteFromWebhook(payload) {
  * Returns GHL-shaped contacts so callers can treat index and API results
  * identically.
  */
-async function searchIndex({ locationId, tokens, limit = 200 }) {
+async function searchIndex({ locationId, tokens, limit = 200, assignedTo = null }) {
   if (!tokens.length) return [];
   let q = supabase.from(TABLE).select("*").eq("location_id", locationId);
+  if (assignedTo) {
+    // Assigned to them, or followed by them — the same predicate the iOS
+    // picker sent to GHL.
+    q = q.or(`assigned_to.eq.${assignedTo},followers.cs.{${assignedTo}}`);
+  }
   for (const t of tokens) {
     // ilike with %...% — the GIN trigram index makes this a real index scan
     // rather than the sequential scan it would be on a btree.
@@ -198,6 +207,7 @@ async function searchIndex({ locationId, tokens, limit = 200 }) {
     email: r.email,
     phone: r.phone,
     assignedTo: r.assigned_to,
+    followers: r.followers || [],
     tags: r.tags || [],
   }));
 }
@@ -224,16 +234,20 @@ async function fuzzyIndex({ locationId, q, minSim = 0.3, maxRows = 50 }) {
     email: r.email,
     phone: r.phone,
     assignedTo: r.assigned_to,
+    followers: r.followers || [],
     tags: r.tags || [],
   }));
 }
 
 /** How many contacts we hold for a location (for the "showing N of M" line). */
-async function countIndex({ locationId, tokens }) {
+async function countIndex({ locationId, tokens, assignedTo = null }) {
   let q = supabase
     .from(TABLE)
     .select("*", { count: "exact", head: true })
     .eq("location_id", locationId);
+  if (assignedTo) {
+    q = q.or(`assigned_to.eq.${assignedTo},followers.cs.{${assignedTo}}`);
+  }
   for (const t of tokens) q = q.ilike("search_text", `%${t.replace(/[%_]/g, "")}%`);
   const { count, error } = await q;
   if (error) return null;

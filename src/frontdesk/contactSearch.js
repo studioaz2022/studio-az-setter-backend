@@ -295,7 +295,16 @@ async function ghlFilterQuery(sdk, locationId, tokens, pageLimit) {
  *
  * @returns {Promise<{contacts: object[], total: number|null, fuzzy: boolean, degraded: boolean, strategy: string}>}
  */
-async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 }) {
+async function searchContacts({
+  sdk,
+  locationId,
+  q,
+  limit = 25,
+  fetchSize = 100,
+  // Optional: restrict to contacts assigned to, or followed by, this user.
+  // The iOS picker uses it so an artist searches their own book.
+  assignedTo = null,
+}) {
   const tokens = tokenize(q);
   const normQuery = norm(q);
   if (!tokens.length) {
@@ -305,10 +314,12 @@ async function searchContacts({ sdk, locationId, q, limit = 25, fetchSize = 100 
   // ---- 1. the index -------------------------------------------------
   let indexUp = true;
   try {
-    const rows = await searchIndex({ locationId, tokens });
+    const rows = await searchIndex({ locationId, tokens, assignedTo });
     const ranked = rank(rows, tokens, normQuery, false);
     if (ranked.length) {
-      const total = await countIndex({ locationId, tokens }).catch(() => null);
+      const total = await countIndex({ locationId, tokens, assignedTo }).catch(
+        () => null
+      );
       return {
         contacts: ranked.slice(0, limit),
         total: total ?? ranked.length,
