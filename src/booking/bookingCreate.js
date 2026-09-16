@@ -184,8 +184,15 @@ function parseAttribution(raw) {
     };
   }
 
-  if (!leadSource && !gallery) return null;
-  return { leadSource, leadCampaign, leadBarber, gallery };
+  // Meta click ids (_fbp/_fbc cookies) for server-side CAPI matching.
+  // Format-checked, not just clipped: these get replayed to Meta's API.
+  const META_ID_RE = /^fb\.[12]\.\d{1,16}\.[\w.-]{1,128}$/;
+  const fbp = META_ID_RE.test(String(raw.fbp || "")) ? raw.fbp : null;
+  const fbc = META_ID_RE.test(String(raw.fbc || "")) ? raw.fbc : null;
+  const landingPage = clip(raw.landingPage, 200);
+
+  if (!leadSource && !gallery && !fbp && !fbc) return null;
+  return { leadSource, leadCampaign, leadBarber, gallery, fbp, fbc, landingPage };
 }
 
 function validateBody(body) {
@@ -625,6 +632,31 @@ function registerBookingCreateRoute(app) {
     //    Server-side and after the appointment exists, so a conversion row can
     //    never exist for a booking that didn't.
     const appointmentId = appt?.id || null;
+
+    // 8a. attribution ledger — our own queryable copy of the first touch
+    //     (the GHL fields are the CRM record; ad ROAS joins on THIS table)
+    //     plus the Meta click ids CAPI Purchase events match against.
+    //     Best-effort like everything else in attribution: an insert
+    //     failure is a warning, never a failed booking.
+    const attr = clean.attribution;
+    if (attr && (attr.leadSource || attr.fbp || attr.fbc)) {
+      try {
+        const { supabase } = require("../clients/supabaseClient");
+        const { error: attrErr } = await supabase.from("booking_attribution").insert({
+          contact_id: contactId,
+          appointment_id: appointmentId,
+          lead_source: attr.leadSource || null,
+          lead_campaign: attr.leadCampaign || null,
+          fbp: attr.fbp || null,
+          fbc: attr.fbc || null,
+          landing_page: attr.landingPage || null,
+        });
+        if (attrErr) throw new Error(attrErr.message);
+      } catch (err) {
+        console.warn(`[booking] booking_attribution insert failed: ${err.message}`);
+      }
+    }
+
     let conversionRecorded = false;
     if (clean.attribution?.gallery) {
       conversionRecorded = await recordGalleryConversion({

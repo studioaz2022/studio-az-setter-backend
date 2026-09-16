@@ -118,6 +118,35 @@ router.get("/artist/:ghlUserId/ledger", async (req, res) => {
   }
 });
 
+// GET /api/ads/artist/:ghlUserId/roas — attributed ROAS readout (self or
+// owner). ?since=&until= window the revenue; ?prefix= overrides the
+// utm_campaign stem (default: artist first name + "_", e.g. "gilberto_").
+// Tier-2 verdicts (kill/scale) read THIS number, never cost-per-lead.
+router.get("/artist/:ghlUserId/roas", async (req, res) => {
+  try {
+    const requester = await resolveRequester(req);
+    if (!requester) {
+      return res.status(401).json({ success: false, error: "Unauthorized" });
+    }
+    const { ghlUserId } = req.params;
+    if (!canSeeLane(requester, ghlUserId)) {
+      return res.status(403).json({ success: false, error: "Forbidden — not your lane" });
+    }
+    const mapping = await getActiveMapping(ghlUserId);
+    if (!mapping) {
+      return res.status(404).json({ success: false, error: "No active ad mapping for this artist" });
+    }
+    const { getRoasReadout } = require("./roasService");
+    const { since, until, prefix } = req.query;
+    const readout = await getRoasReadout(mapping, { since, until, prefix });
+    return res.json({ success: true, artist: mappingSummary(mapping), ...readout });
+  } catch (err) {
+    const status = err.statusCode || 500;
+    if (status === 500) console.error("❌ GET /api/ads roas error:", err.message || err);
+    return res.status(status).json({ success: false, error: err.message });
+  }
+});
+
 // POST /api/ads/artist/:ghlUserId/ledger/credit — owner/internal only.
 // Body: { amount, source?, externalRef?, note? }. Artists cannot credit themselves.
 router.post("/artist/:ghlUserId/ledger/credit", async (req, res) => {

@@ -8848,6 +8848,20 @@ function createApp() {
       }
 
       console.log(`[API] Bulk confirm for ${barberGhlId}: ${results.confirmed} confirmed, ${results.walkInsRecorded} walk-ins, ${results.reversed} reversed, ${results.errors.length} errors`);
+
+      // Meta CAPI: each confirmed match is a Purchase (value = service+tip).
+      // Fire-and-forget AFTER the response math — a Meta hiccup must never
+      // fail or slow the barber's confirm.
+      const confirmedPaymentIds = matches
+        .filter((m) => !results.errors.some((e) => e.squarePaymentId === m.squarePaymentId))
+        .map((m) => m.squarePaymentId)
+        .filter(Boolean);
+      if (confirmedPaymentIds.length) {
+        const { sendPurchasesForConfirmed } = require("../ads/metaCapi");
+        sendPurchasesForConfirmed({ barberGhlId, squarePaymentIds: confirmedPaymentIds })
+          .catch((err) => console.warn(`[CAPI] bulk-confirm send failed: ${err.message}`));
+      }
+
       res.json({ success: results.errors.length === 0, ...results });
     } catch (error) {
       console.error("[API] Error in bulk confirm:", error.message);
@@ -9015,6 +9029,19 @@ function createApp() {
       }
 
       console.log(`[API] Venmo confirm for ${barberGhlId}: ${results.confirmed} confirmed, ${results.walkInsRecorded} walk-ins, ${results.errors.length} errors`);
+
+      // Meta CAPI Purchase for each confirmed Venmo match — same
+      // fire-and-forget contract as the Square bulk-confirm hook.
+      const confirmedRowIds = matches
+        .filter((m) => !results.errors.some((e) => e.supabaseId === m.supabaseId))
+        .map((m) => m.supabaseId)
+        .filter(Boolean);
+      if (confirmedRowIds.length) {
+        const { sendPurchasesForConfirmed } = require("../ads/metaCapi");
+        sendPurchasesForConfirmed({ barberGhlId, supabaseIds: confirmedRowIds })
+          .catch((err) => console.warn(`[CAPI] venmo-confirm send failed: ${err.message}`));
+      }
+
       res.json({ success: results.errors.length === 0, ...results });
     } catch (error) {
       console.error("[API] Error confirming Venmo payments:", error.message);
