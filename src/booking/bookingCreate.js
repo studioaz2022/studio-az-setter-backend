@@ -260,19 +260,31 @@ async function verifyTurnstile(token, ip) {
   const secret = process.env.TURNSTILE_SECRET_KEY;
   if (!secret) {
     console.error("[booking] TURNSTILE_SECRET_KEY unset — failing closed");
-    return false;
+    return { ok: false, codes: ["secret-unset"] };
   }
   try {
+    // NO remoteip, deliberately. Cloudflare marks it optional, and sending
+    // it adds a failure mode our clients actually hit: a phone whose IP
+    // changes between minting the token and submitting the form (WiFi to
+    // LTE, tower handoff) fails siteverify on a perfectly human token.
+    // 2026-09-16, 13:23-13:33Z: one visitor failed ELEVEN fresh tokens in
+    // ten minutes across three sequential ip_hashes — the signature of a
+    // flapping network, not a bot. The anti-replay value remoteip would
+    // add is already covered better: tokens are single-use and this
+    // endpoint spends each one exactly once.
+    //
+    // Returns {ok, codes} — the error-codes were being thrown away, which
+    // is why that incident could not be diagnosed from the audit log.
     const res = await fetch("https://challenges.cloudflare.com/turnstile/v0/siteverify", {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
-      body: new URLSearchParams({ secret, response: token, remoteip: ip }),
+      body: new URLSearchParams({ secret, response: token }),
     });
     const data = await res.json();
-    return data.success === true;
+    return { ok: data.success === true, codes: data["error-codes"] || [] };
   } catch (err) {
     console.error("[booking] turnstile verify errored:", err?.message);
-    return false;
+    return { ok: false, codes: ["siteverify-fetch-failed"] };
   }
 }
 
@@ -329,11 +341,24 @@ function registerBookingCreateRoute(app) {
   app.post("/api/booking/barbershop/create", async (req, res) => {
     const ip = clientIp(req);
     const body = req.body || {};
+    // Who tried, straight from what they typed — recorded on failure rows.
+    // Before this, a validation or turnstile failure logged only an ip_hash:
+    // two clients lost to the horizon bug on 2026-09-16 left no name, no
+    // phone, nothing to call back. Truncated hard because nothing here is
+    // validated yet; audit table only, never GHL.
+    const trunc = (v, n) => (typeof v === "string" ? v.slice(0, n) : null);
+    const who = {
+      firstName: trunc(body.firstName, 60),
+      lastName: trunc(body.lastName, 60),
+      phone: trunc(body.phone, 24),
+      email: trunc(body.email, 120),
+    };
     const audit = {
       barberSlug: body.barberSlug,
       service: body.service,
       slotISO: body.slotISO,
       ip,
+      who,
     };
 
     if (!ghlBarber || !LOCATION_ID) {
@@ -381,11 +406,12 @@ function registerBookingCreateRoute(app) {
     }
 
     // 3. Turnstile
-    const humanOk = await verifyTurnstile(body.turnstileToken, ip);
-    if (!humanOk) {
+    const turnstile = await verifyTurnstile(body.turnstileToken, ip);
+    if (!turnstile.ok) {
       await logBookingAttempt({
         ...audit, success: false, stepReached: "turnstile", turnstileOk: false,
-        summary: `FAILED turnstile: ${slotLabel}`,
+        turnstileCodes: turnstile.codes,
+        summary: `FAILED turnstile [${turnstile.codes.join(",") || "no-codes"}]: ${slotLabel}`,
       });
       return res.status(403).json({ error: "captcha_failed" });
     }
@@ -700,7 +726,7 @@ function registerBookingCreateRoute(app) {
     ].filter(Boolean);
 
     await logBookingAttempt({
-      ...audit, contactId, appointmentId, success: true,
+      ...audit, who: null, contactId, appointmentId, success: true,
       stepReached: "done", turnstileOk: true,
       summary: `Booked ${slotLabel} (${mins}min)${extras.length ? ` [${extras.join("; ")}]` : ""}`,
     });

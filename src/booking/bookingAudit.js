@@ -33,6 +33,11 @@ function hashIp(ip) {
  * @param {string} [p.ghlError]
  * @param {boolean} [p.turnstileOk]
  * @param {string} [p.ip]             raw IP — hashed before storage, never stored raw
+ * @param {string[]} [p.turnstileCodes] Cloudflare siteverify error-codes, verbatim
+ * @param {object} [p.who]            what the visitor typed — {firstName,lastName,phone,email}.
+ *                                    Recorded on FAILURES so a lost booking leaves a person we
+ *                                    can call back, not just an ip_hash. Audit table only —
+ *                                    never GHL, so bots that fail Turnstile create no contact.
  */
 async function logBookingAttempt(p) {
   if (!supabase) {
@@ -56,6 +61,8 @@ async function logBookingAttempt(p) {
         slot_iso: p.slotISO || null,
         ghl_error: p.ghlError || null,
         turnstile_ok: p.turnstileOk === undefined ? null : String(p.turnstileOk),
+        turnstile_codes: p.turnstileCodes && p.turnstileCodes.length ? p.turnstileCodes : null,
+        who: p.who || null,
         ip_hash: hashIp(p.ip),
       },
       location_id: LOCATION_ID,
