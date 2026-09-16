@@ -290,6 +290,35 @@ async function verifyTurnstile(token, ip) {
 
 // ── slot helpers ─────────────────────────────────────────────────────
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// ── Retrying createAppointment, and why ONLY this one error ────────────
+//
+// GHL's contact service rate-limits per contact and rejects with
+// "Too many requests for a contact". That rejection creates NOTHING, so
+// retrying it is safe and the second attempt almost always lands.
+//
+// It is the ONLY error retried here, deliberately. A TIMEOUT must never be
+// retried: "Command timed out" means we stopped waiting, not that GHL
+// stopped working, so the appointment may well exist and a retry would
+// double-book a real client. A timeout stays a hard failure that alerts
+// Lionel — a needless text is recoverable, a duplicate booking in a
+// barber's chair is not.
+//
+// Seen 2026-09-16: Noah Kunin hit the rate limit on David's 1:20pm, got a
+// hard failure, and only got in because he happened to hit the button
+// again himself. Nothing in the flow retried for him.
+//
+// Two retries at 700ms and 1600ms — long enough for a per-contact window
+// to clear, short enough that a client waiting on the booking screen
+// doesn't give up. Worst case adds ~2.3s to a request that already failed.
+const CONTACT_RATE_LIMIT_BACKOFF_MS = [700, 1600];
+
+function isContactRateLimitError(err) {
+  const msg = err?.response?.data?.message || err?.message || "";
+  return /too many requests for a contact/i.test(String(msg));
+}
+
 function isSlotTakenError(err) {
   const msg =
     err?.response?.data?.message || err?.message || "";
@@ -546,38 +575,59 @@ function registerBookingCreateRoute(app) {
     if (photo?.buffer) descLines.push("Hairstyle photo attached to the contact record.");
 
     let appt;
+    let apptRetries = 0;
     try {
-      appt = await ghlBarber.calendars.createAppointment({
-        calendarId: barber.calendarId,
-        locationId: LOCATION_ID,
-        contactId,
-        startTime: clean.slotISO,
-        endTime: endISO,
-        // NO `title`. Omitting it makes GHL render the CALENDAR's own
-        // `eventTitle` template, which is what every GHL-native booking
-        // gets and what the barbers actually read their day from:
-        //
-        //   "{{contact.silent_appointment_request}} {{contact.type_of_hair}}Haircut: {{contact.name}}"
-        //
-        // Sending a title overrode all of it, so website bookings showed
-        // "Haircut — Lionel Chavez" — the BARBER's name where the CLIENT's
-        // should be, with the hair type, the silent flag and the per-barber
-        // add-on markers (waxing for Elle, eyebrows for David) all gone.
-        // Lionel spotted it because the push notification, which reads the
-        // contact, disagreed with the calendar, which read this title.
-        //
-        // The templates differ per calendar and Lionel edits them, so the
-        // fix is to stop competing with them rather than to replicate one.
-        // Verified against the live API: with `title` omitted, GHL applied
-        // the template. The flags we used to append are all still in the
-        // `description` below.
-        description: descLines.join("\n"),
-        appointmentStatus: "confirmed",
-        ignoreDateRange: false,
-        ignoreFreeSlotValidation: false,
-        toNotify: true,
-        address: SHOP_ADDRESS,
-      });
+      // Retried ONLY on the per-contact rate limit; see the note by
+      // isContactRateLimitError. Everything else throws on the first try.
+      for (let attempt = 0; ; attempt++) {
+        try {
+          appt = await ghlBarber.calendars.createAppointment({
+            calendarId: barber.calendarId,
+            locationId: LOCATION_ID,
+            contactId,
+            startTime: clean.slotISO,
+            endTime: endISO,
+            // NO `title`. Omitting it makes GHL render the CALENDAR's own
+            // `eventTitle` template, which is what every GHL-native booking
+            // gets and what the barbers actually read their day from:
+            //
+            //   "{{contact.silent_appointment_request}} {{contact.type_of_hair}}Haircut: {{contact.name}}"
+            //
+            // Sending a title overrode all of it, so website bookings showed
+            // "Haircut — Lionel Chavez" — the BARBER's name where the CLIENT's
+            // should be, with the hair type, the silent flag and the per-barber
+            // add-on markers (waxing for Elle, eyebrows for David) all gone.
+            // Lionel spotted it because the push notification, which reads the
+            // contact, disagreed with the calendar, which read this title.
+            //
+            // The templates differ per calendar and Lionel edits them, so the
+            // fix is to stop competing with them rather than to replicate one.
+            // Verified against the live API: with `title` omitted, GHL applied
+            // the template. The flags we used to append are all still in the
+            // `description` below.
+            description: descLines.join("\n"),
+            appointmentStatus: "confirmed",
+            ignoreDateRange: false,
+            ignoreFreeSlotValidation: false,
+            toNotify: true,
+            address: SHOP_ADDRESS,
+          });
+          break;
+        } catch (err) {
+          if (
+            attempt < CONTACT_RATE_LIMIT_BACKOFF_MS.length &&
+            isContactRateLimitError(err)
+          ) {
+            apptRetries += 1;
+            console.warn(
+              `[booking] contact rate-limited, retry ${apptRetries}/${CONTACT_RATE_LIMIT_BACKOFF_MS.length} in ${CONTACT_RATE_LIMIT_BACKOFF_MS[attempt]}ms — ${slotLabel}`
+            );
+            await sleep(CONTACT_RATE_LIMIT_BACKOFF_MS[attempt]);
+            continue;
+          }
+          throw err;
+        }
+      }
     } catch (err) {
       const ghlError = err?.response?.data?.message || err?.message;
       if (isSlotTakenError(err)) {
@@ -595,7 +645,9 @@ function registerBookingCreateRoute(app) {
       await logBookingAttempt({
         ...audit, contactId, success: false, stepReached: "create_appointment",
         turnstileOk: true, ghlError: String(ghlError),
-        summary: `FAILED at createAppointment: ${ghlError} — ${slotLabel}`,
+        summary:
+          `FAILED at createAppointment: ${ghlError} — ${slotLabel}` +
+          (apptRetries ? ` [after ${apptRetries} rate-limit retr${apptRetries === 1 ? "y" : "ies"}]` : ""),
       });
       return res.status(502).json({ error: "booking_failed" });
     }
@@ -723,6 +775,10 @@ function registerBookingCreateRoute(app) {
     }
 
     const extras = [
+      // A booking that only landed because of a retry is worth seeing in
+      // the audit trail — it is the difference between "fine" and "fine,
+      // because we caught it".
+      apptRetries ? `recovered after ${apptRetries} rate-limit retr${apptRetries === 1 ? "y" : "ies"}` : null,
       clean.silent ? "silent" : null,
       clean.barberNotes ? "notes" : null,
       clean.videoLink ? "video-link" : null,
