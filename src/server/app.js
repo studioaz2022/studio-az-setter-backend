@@ -15477,6 +15477,13 @@ function createApp() {
    * working for the caller's origin, which is the other way the kiosk goes dark.
    */
   app.get("/api/kiosk/ping", (_req, res) => {
+    // This heartbeat is what kioskOfflineAlert watches for a gap in. It must
+    // never throw and never block: the kiosk calls it every 15 seconds, and a
+    // failure here would take down the very probe the kiosk uses to decide
+    // whether it is online.
+    try {
+      require("../services/kioskOfflineAlert").recordKioskPing();
+    } catch { /* heartbeat bookkeeping must never break the probe */ }
     res.json({ success: true, ok: true });
   });
 
@@ -17043,6 +17050,24 @@ function createApp() {
     } catch (err) {
       console.error(
         "[app] failed to start lost-booking alert loop:",
+        err.message || err
+      );
+    }
+  }
+
+  // Check-in kiosk offline alert — watches for a gap in the kiosk's own
+  // 15-second heartbeat. The kiosk has failed silently for hours at a time
+  // (2026-08-29, 2026-09-11); this turns that into a text while someone is
+  // still standing at the iPad. DISABLE_KIOSK_OFFLINE_ALERT=1 opts out.
+  if (backgroundLoopsAllowed && process.env.DISABLE_KIOSK_OFFLINE_ALERT !== "1") {
+    try {
+      const {
+        startKioskOfflineAlertLoop,
+      } = require("../services/kioskOfflineAlert");
+      startKioskOfflineAlertLoop();
+    } catch (err) {
+      console.error(
+        "[app] failed to start kiosk offline alert loop:",
         err.message || err
       );
     }
