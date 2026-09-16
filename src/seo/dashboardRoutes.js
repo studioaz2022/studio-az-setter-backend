@@ -845,4 +845,186 @@ function emptyRefundResponse(site, days) {
   };
 }
 
+// ──────────────────────────────────────
+// GET /api/seo/dashboard/booking-failures/:site
+// ──────────────────────────────────────
+// Every booking ATTEMPT on the native widget, won and lost.
+//
+// The lost half is the reason this exists. Until 2026-09-16 a failed
+// booking was invisible: two clients hit the read/write horizon mismatch,
+// retried until the IP rate limit stopped them, and the only trace was a
+// row nobody was reading. The SMS alert covers the live case; this covers
+// the pattern — which barber, which step, and whether it is getting worse.
+//
+// `people` is the actionable list: whoever failed and never came back,
+// newest first, with whatever contact details they typed. Failure rows
+// carry `details.who` only from 2026-09-16 onward, so older rows show as
+// unreachable — that is history, not a bug.
+router.get("/booking-failures/:site", async (req, res) => {
+  const site = req.params.site;
+  if (site !== "tattoo" && site !== "barbershop") {
+    return res.status(400).json({ error: "unknown site" });
+  }
+  const days = Math.max(1, Math.min(90, Number(req.query.days) || 7));
+
+  // The native widget is barbershop-only; the tattoo site books through
+  // the consult form, which has its own funnel page.
+  if (site === "tattoo") {
+    return res.json({
+      site, days, generatedAt: new Date().toISOString(),
+      notApplicable: true,
+      totals: { attempts: 0, booked: 0, failed: 0, successRate: null },
+      byStep: [], byBarber: [], daily: [], people: [],
+    });
+  }
+
+  try {
+    const { supabase } = require("../clients/supabaseClient");
+    const day = 24 * 60 * 60 * 1000;
+    const startIso = new Date(Date.now() - days * day).toISOString();
+
+    const { data: rows, error } = await supabase
+      .from("audit_events")
+      .select("created_at, action, contact_id, summary, details")
+      .eq("source", "booking-widget")
+      .gte("created_at", startIso)
+      .order("created_at", { ascending: false });
+    if (error) {
+      console.error("[dashboard booking-failures] supabase error:", error.message);
+      return res.status(500).json({ error: error.message });
+    }
+
+    // The hidden test barber is ours, not a customer — it would flatter
+    // the success rate and pollute the lost list.
+    const all = (rows || []).filter((r) => (r.details || {}).barber_slug !== "test");
+    const booked = all.filter((r) => r.action === "appointment_book");
+    const failed = all.filter((r) => r.action !== "appointment_book");
+
+    const reasonOf = (d, summary) => {
+      const s = String(summary || "");
+      if (/too far out/.test(s)) return "slot beyond booking window";
+      if (/slot is in the past/.test(s)) return "slot in the past";
+      if (/does not offer/.test(s)) return "barber/service mismatch";
+      if (/deposit/.test(s) && d.step_reached === "validation") return "deposit token missing";
+      switch (d.step_reached) {
+        case "turnstile": return "bot check rejected";
+        case "rate_limited": return "rate limited";
+        case "create_appointment": return "GHL refused the appointment";
+        case "deposit_charge": return "deposit card failed";
+        case "upsert_contact": return "contact write failed";
+        case "validation": return "form validation";
+        default: return d.step_reached || "unknown";
+      }
+    };
+    // Our fault vs theirs. Drives the red/amber split in the UI: a
+    // validation slip is noise, a create_appointment failure is money lost
+    // through our own path.
+    const SITE_FAULT = new Set(["create_appointment", "deposit_charge", "upsert_contact"]);
+
+    const tally = (arr, keyFn) => {
+      const m = new Map();
+      for (const r of arr) {
+        const k = keyFn(r) || "unknown";
+        m.set(k, (m.get(k) || 0) + 1);
+      }
+      return [...m.entries()].map(([key, count]) => ({ key, count }))
+        .sort((a, b) => b.count - a.count);
+    };
+
+    const byStep = tally(failed, (r) => reasonOf(r.details || {}, r.summary)).map((x) => ({
+      ...x,
+      siteFault: [...SITE_FAULT].some((st) =>
+        failed.some((f) => (f.details || {}).step_reached === st &&
+          reasonOf(f.details || {}, f.summary) === x.key)),
+    }));
+
+    const barberRows = new Map();
+    for (const r of all) {
+      const slug = (r.details || {}).barber_slug || "unknown";
+      if (!barberRows.has(slug)) barberRows.set(slug, { key: slug, booked: 0, failed: 0 });
+      barberRows.get(slug)[r.action === "appointment_book" ? "booked" : "failed"] += 1;
+    }
+    const byBarber = [...barberRows.values()].sort((a, b) => b.failed - a.failed);
+
+    const dayMap = new Map();
+    for (const r of all) {
+      const d = r.created_at.slice(0, 10);
+      if (!dayMap.has(d)) dayMap.set(d, { date: d, booked: 0, failed: 0 });
+      dayMap.get(d)[r.action === "appointment_book" ? "booked" : "failed"] += 1;
+    }
+    const daily = [...dayMap.values()].sort((a, b) => a.date.localeCompare(b.date));
+
+    // ── the actionable list ──
+    // Group failures by person, drop anyone who booked afterwards.
+    const keyOf = (r) => {
+      const who = (r.details || {}).who || {};
+      const digits = String(who.phone || "").replace(/\D/g, "");
+      if (digits.length >= 10) return `phone:${digits.slice(-10)}`;
+      const em = String(who.email || "").trim().toLowerCase();
+      if (em.includes("@")) return `email:${em}`;
+      const ip = (r.details || {}).ip_hash;
+      return ip ? `ip:${ip}` : null;
+    };
+    const wonAt = new Map();
+    for (const b of booked) {
+      const k = keyOf(b) || (b.contact_id ? `contact:${b.contact_id}` : null);
+      if (!k) continue;
+      const t = new Date(b.created_at).getTime();
+      if (!wonAt.has(k) || t > wonAt.get(k)) wonAt.set(k, t);
+    }
+    const peopleMap = new Map();
+    for (const f of failed) {
+      const k = keyOf(f);
+      if (!k) continue;
+      if (!peopleMap.has(k)) peopleMap.set(k, []);
+      peopleMap.get(k).push(f);
+    }
+    const people = [];
+    for (const [k, attempts] of peopleMap) {
+      const firstMs = new Date(attempts[attempts.length - 1].created_at).getTime();
+      if (wonAt.has(k) && wonAt.get(k) > firstMs) continue; // recovered
+      const latest = attempts[0];
+      const d = latest.details || {};
+      const who = d.who || {};
+      people.push({
+        key: k,
+        name: [who.firstName, who.lastName].filter(Boolean).join(" ") || null,
+        phone: who.phone || null,
+        email: who.email || null,
+        reachable: Boolean(who.phone || who.email),
+        attempts: attempts.length,
+        barber: d.barber_slug || null,
+        service: d.service || null,
+        slotISO: d.slot_iso || null,
+        reason: reasonOf(d, latest.summary),
+        siteFault: SITE_FAULT.has(d.step_reached) || Boolean(d.ghl_error),
+        lastAttemptAt: latest.created_at,
+      });
+    }
+    people.sort((a, b) => b.lastAttemptAt.localeCompare(a.lastAttemptAt));
+
+    const attempts = all.length;
+    res.json({
+      site, days, generatedAt: new Date().toISOString(),
+      notApplicable: false,
+      totals: {
+        attempts,
+        booked: booked.length,
+        failed: failed.length,
+        successRate: attempts ? Math.round((booked.length / attempts) * 1000) / 10 : null,
+        lostPeople: people.length,
+        reachableLost: people.filter((p) => p.reachable).length,
+        siteFaultFailures: failed.filter(
+          (r) => SITE_FAULT.has((r.details || {}).step_reached) || (r.details || {}).ghl_error
+        ).length,
+      },
+      byStep, byBarber, daily,
+      people: people.slice(0, 50),
+    });
+  } catch (err) {
+    console.error("[dashboard booking-failures] error:", err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
 module.exports = router;
