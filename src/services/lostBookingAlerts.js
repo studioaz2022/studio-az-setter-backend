@@ -257,6 +257,16 @@ async function runScan() {
       const name = displayName(who);
       const phone = who.phone ? ` ${who.phone}` : "";
       const barber = d.barber_slug ? d.barber_slug[0].toUpperCase() + d.barber_slug.slice(1) : "a barber";
+      // Deposit calendars get no automatic client outreach (a text can't
+      // take a card), so this alert is the ONLY thing that happens — say
+      // so, otherwise it reads like a duplicate of a message that went out.
+      let depositNote = "";
+      try {
+        const { depositFor } = require("../booking/depositConfig");
+        if (d.barber_slug && d.service && depositFor(d.barber_slug, d.service)?.required) {
+          depositNote = " Deposit chair — no auto-text was sent, this one's yours.";
+        }
+      } catch { /* never let the note break the alert */ }
       const msg =
         kind === "BROKE"
           ? `⚠️ Studio AZ: a booking FAILED on our side. ${name}${phone} — ${barber}, ` +
@@ -264,7 +274,7 @@ async function runScan() {
             `They were not booked and got no confirmation.`
           : `⚠️ Studio AZ: lost booking. ${name}${phone} tried ${attempts.length}× for ` +
             `${barber} at ${whenLabel(d.slot_iso)} and never got through — ` +
-            `${reasonLabel(d.step_reached, src.summary)}. Worth a call.`;
+            `${reasonLabel(d.step_reached, src.summary)}. Worth a call.${depositNote}`;
 
       if (await sendSMS(msg)) sent++;
     }

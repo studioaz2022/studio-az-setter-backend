@@ -24,10 +24,11 @@
 //
 // Deliberate limits, each one load-bearing:
 //
-//   • DEPOSIT BARBERS GET A LINK, NOT AN OFFER. Lionel's calendar takes a
-//     50% deposit and you cannot take a card over SMS. Promising to "lock
-//     it in" and then not being able to is worse than not offering, so
-//     his clients get the booking link and no YES prompt.
+//   • DEPOSIT BARBERS GET NO CLIENT MESSAGE. Lionel's calendar takes a
+//     50% deposit, which a text cannot collect, so there is nothing this
+//     loop can honestly promise. He handles those himself — and already
+//     has the name, number and slot, because lostBookingAlerts texts him
+//     on the same trigger. (Lionel's call, 2026-09-16.)
 //   • QUIET HOURS. One of the lost bookings we found happened at 00:14.
 //     Texting someone in the middle of the night to rescue a haircut is
 //     how a helpful message becomes a complaint.
@@ -268,6 +269,22 @@ async function runScan() {
       if (!getBarber(slug) || !SERVICES[service]) continue;
       if (new Date(slotISO).getTime() <= Date.now()) continue;   // already past
 
+      // DEPOSIT CALENDARS: no client message, at all.
+      //
+      // Lionel's chair takes 50% up front, which a text cannot collect, so
+      // there is nothing this loop can honestly promise. He handles those
+      // himself and already has the name, number and slot, because
+      // lostBookingAlerts texts him on exactly the same trigger.
+      //
+      // Checked HERE, before the availability lookup and the contact
+      // upsert: it is a cheap local rule and there is no reason to spend a
+      // GHL round trip — or create a contact record — for someone we have
+      // already decided not to text. (Lionel's call, 2026-09-16.)
+      if (depositFor(slug, service)?.required) {
+        console.log(`[bookingRecovery] ${slug} takes a deposit — no client outreach; lostBookingAlerts has Lionel covered`);
+        continue;
+      }
+
       // already offered recently?
       const { data: prior, error: pErr } = await supabase
         .from("booking_recovery_offers")
@@ -296,16 +313,11 @@ async function runScan() {
 
       const barber = getBarber(slug);
       const first = who.firstName || "there";
-      const deposit = depositFor(slug, service);
       const when = slotLabel(slotISO);
 
-      // Deposit calendars can't be booked from a text — send the link.
-      const message = deposit?.required
-        ? `Hey ${first} — it's Studio AZ. Looks like your booking with ${barber.name} for ${when} didn't go through. ` +
-          `That time is still open. ${barber.name.split(" ")[0]}'s chair takes a deposit to hold it, so grab it here and you're set: ` +
-          `${SITE_URL}/book?barber=${slug}&service=${service}`
-        : `Hey ${first} — it's Studio AZ. Looks like your booking with ${barber.name} for ${when} didn't go through on our end. ` +
-          `That time is still open. Reply YES and I'll lock it in for you.`;
+      const message =
+        `Hey ${first} — it's Studio AZ. Looks like your booking with ${barber.name} for ${when} didn't go through on our end. ` +
+        `That time is still open. Reply YES and I'll lock it in for you.`;
 
       const ttl = new Date(Date.now() + OFFER_TTL_MS).toISOString();
       // Write the offer BEFORE sending. If the write fails we don't text —
@@ -315,8 +327,7 @@ async function runScan() {
         contact_id: contactId, phone_key: key, barber_slug: slug, service,
         slot_iso: slotISO, duration_minutes: durationMinutes(slug, service),
         expires_at: ttl,
-        status: deposit?.required ? "link_sent" : "offered",
-        note: deposit?.required ? "deposit calendar — link instead of auto-book" : null,
+        status: "offered",
       });
       if (wErr) { console.warn("[bookingRecovery] offer insert failed — not texting:", wErr.message); continue; }
 
