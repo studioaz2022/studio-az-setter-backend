@@ -499,12 +499,6 @@ function registerBookingCreateRoute(app) {
     if (clean.videoLink) descLines.push(`Hairstyle video: ${clean.videoLink}`);
     if (photo?.buffer) descLines.push("Hairstyle photo attached to the contact record.");
 
-    const titleFlags = [
-      clean.silent ? "SILENT" : null,
-      addOnLines.length ? "+add-ons" : null,
-      clean.barberNotes || clean.note ? "see notes" : null,
-    ].filter(Boolean);
-
     let appt;
     try {
       appt = await ghlBarber.calendars.createAppointment({
@@ -513,9 +507,24 @@ function registerBookingCreateRoute(app) {
         contactId,
         startTime: clean.slotISO,
         endTime: endISO,
-        title: `${serviceDef.label} — ${barber.name}${
-          titleFlags.length ? ` (${titleFlags.join(", ")})` : ""
-        }`,
+        // NO `title`. Omitting it makes GHL render the CALENDAR's own
+        // `eventTitle` template, which is what every GHL-native booking
+        // gets and what the barbers actually read their day from:
+        //
+        //   "{{contact.silent_appointment_request}} {{contact.type_of_hair}}Haircut: {{contact.name}}"
+        //
+        // Sending a title overrode all of it, so website bookings showed
+        // "Haircut — Lionel Chavez" — the BARBER's name where the CLIENT's
+        // should be, with the hair type, the silent flag and the per-barber
+        // add-on markers (waxing for Elle, eyebrows for David) all gone.
+        // Lionel spotted it because the push notification, which reads the
+        // contact, disagreed with the calendar, which read this title.
+        //
+        // The templates differ per calendar and Lionel edits them, so the
+        // fix is to stop competing with them rather than to replicate one.
+        // Verified against the live API: with `title` omitted, GHL applied
+        // the template. The flags we used to append are all still in the
+        // `description` below.
         description: descLines.join("\n"),
         appointmentStatus: "confirmed",
         ignoreDateRange: false,
