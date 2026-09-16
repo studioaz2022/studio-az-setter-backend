@@ -17016,6 +17016,24 @@ function createApp() {
     }
   }
 
+  // Lost-booking alerts — turns a failed booking into a text while the
+  // client is still deciding. Same opt-in gate as every other loop, so a
+  // dev box with a local .env never texts Lionel.
+  // DISABLE_LOST_BOOKING_ALERTS=1 opts out.
+  if (backgroundLoopsAllowed && process.env.DISABLE_LOST_BOOKING_ALERTS !== "1") {
+    try {
+      const {
+        startLostBookingAlertLoop,
+      } = require("../services/lostBookingAlerts");
+      startLostBookingAlertLoop();
+    } catch (err) {
+      console.error(
+        "[app] failed to start lost-booking alert loop:",
+        err.message || err
+      );
+    }
+  }
+
   // 30-min pre-consultation reminder push to the assigned artist. Debounced
   // via appointments.consult_reminder_sent_at (claim-before-send). Gated by
   // backgroundLoopsAllowed so a laptop dev server can never push artists.
