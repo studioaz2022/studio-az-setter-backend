@@ -1084,6 +1084,20 @@ function createApp() {
 
       // Barbershop messages: push notification is all we need — skip AI setter + pipeline
       if (isBarbershopMessage) {
+        // …except a reply to a failed-booking recovery offer. That one has
+        // an open row waiting for it, and an affirmative books the slot.
+        // Everything else falls straight through to the push-only path.
+        try {
+          const { handleRecoveryReply } = require("../services/bookingRecovery");
+          const handled = await handleRecoveryReply(contactId, combinedMessageText);
+          if (handled) {
+            console.log(`💈 [MSG] Barbershop message from ${contactName} — handled as a booking-recovery reply`);
+            return;
+          }
+        } catch (err) {
+          // Never let recovery break the push-notification path.
+          console.error("[bookingRecovery] reply handling errored:", err?.message || err);
+        }
         console.log(`💈 [MSG] Barbershop message from ${contactName} — push sent, skipping AI setter`);
         return;
       }
@@ -17029,6 +17043,24 @@ function createApp() {
     } catch (err) {
       console.error(
         "[app] failed to start lost-booking alert loop:",
+        err.message || err
+      );
+    }
+  }
+
+  // Booking recovery — texts a client whose booking failed and books the
+  // slot if they say yes. OFF unless BOOKING_RECOVERY_ENABLED=true; the
+  // loop still runs and logs what it WOULD send.
+  // DISABLE_BOOKING_RECOVERY=1 stops it entirely.
+  if (backgroundLoopsAllowed && process.env.DISABLE_BOOKING_RECOVERY !== "1") {
+    try {
+      const {
+        startBookingRecoveryLoop,
+      } = require("../services/bookingRecovery");
+      startBookingRecoveryLoop();
+    } catch (err) {
+      console.error(
+        "[app] failed to start booking recovery loop:",
         err.message || err
       );
     }
