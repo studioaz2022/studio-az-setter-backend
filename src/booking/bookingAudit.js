@@ -34,6 +34,8 @@ function hashIp(ip) {
  * @param {boolean} [p.turnstileOk]
  * @param {string} [p.ip]             raw IP — hashed before storage, never stored raw
  * @param {string[]} [p.turnstileCodes] Cloudflare siteverify error-codes, verbatim
+ * @param {string} [p.phoneKey]       last 10 digits — on EVERY row, so a later
+ *                                    success can be matched to an earlier failure.
  * @param {object} [p.who]            what the visitor typed — {firstName,lastName,phone,email}.
  *                                    Recorded on FAILURES so a lost booking leaves a person we
  *                                    can call back, not just an ip_hash. Audit table only —
@@ -63,6 +65,9 @@ async function logBookingAttempt(p) {
         turnstile_ok: p.turnstileOk === undefined ? null : String(p.turnstileOk),
         turnstile_codes: p.turnstileCodes && p.turnstileCodes.length ? p.turnstileCodes : null,
         who: p.who || null,
+        // Present on successes too — it is how "they failed, then booked"
+        // is detected. See the note in bookingCreate.
+        phone_key: p.phoneKey || null,
         ip_hash: hashIp(p.ip),
       },
       location_id: LOCATION_ID,

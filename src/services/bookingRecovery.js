@@ -242,7 +242,10 @@ async function runScan() {
       fails.push(r);
     }
 
-    const keyOf = (r) => phoneKey((r.details?.who || {}).phone);
+    // phone_key rides on successes too; `who` does not. Without this the
+    // "did they come back?" check never matched and we could have texted
+    // someone who had already booked.
+    const keyOf = (r) => r.details?.phone_key || phoneKey((r.details?.who || {}).phone);
     const wonKeys = new Set(wins.map(keyOf).filter(Boolean));
 
     const groups = new Map();

@@ -77,6 +77,11 @@ function phoneKey(raw) {
 }
 
 function personKey(details) {
+  // phone_key is written on EVERY row (success and failure); `who` only on
+  // failures. Reading it first is what lets a later success cancel an
+  // alert — keying failures by phone and successes by ip_hash silently
+  // never matched.
+  if (details?.phone_key) return `phone:${details.phone_key}`;
   const who = details?.who || {};
   const p = phoneKey(who.phone);
   if (p) return `phone:${p}`;

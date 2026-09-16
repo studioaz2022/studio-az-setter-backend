@@ -353,12 +353,30 @@ function registerBookingCreateRoute(app) {
       phone: trunc(body.phone, 24),
       email: trunc(body.email, 120),
     };
+    // A stable identity key on EVERY row, successes included.
+    //
+    // `who` is deliberately failure-only (no duplicate PII on rows that
+    // already carry a contact_id) — but that broke the one thing the
+    // alerting needs: knowing a person who failed came back and booked.
+    // Failure rows keyed on the phone in `who`; success rows had no `who`
+    // and fell through to the ip_hash, so the two never matched and a
+    // client who retried successfully still looked lost. That is exactly
+    // what happened to Noah Kunin and Ron Siron on 2026-09-16 — both
+    // recovered within three minutes and both still raised an alert.
+    //
+    // Last ten digits only, on both outcomes, so "did they eventually get
+    // in?" is answerable without re-reading full contact details.
+    const phone_key = (() => {
+      const d = String(body.phone || "").replace(/\D/g, "");
+      return d.length >= 10 ? d.slice(-10) : null;
+    })();
     const audit = {
       barberSlug: body.barberSlug,
       service: body.service,
       slotISO: body.slotISO,
       ip,
       who,
+      phoneKey: phone_key,
     };
 
     if (!ghlBarber || !LOCATION_ID) {
