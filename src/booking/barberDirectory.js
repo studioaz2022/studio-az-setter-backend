@@ -128,6 +128,25 @@ const SERVICES = {
   "hot-towel": { label: "Hot Towel Shave", duration: "native" },
 };
 
+// How far ahead the booking flow works, in days. ONE number, shared by the
+// read path (how many days of slots the widget shows) and the write path
+// (how far out a submitted slot may be). They MUST be the same number.
+//
+// They weren't. The widget showed 60 days while create hard-rejected
+// anything past 31 with "slot too far out", so a client who picked a slot
+// in that gap got a failure they could do nothing about — then hit the IP
+// rate limit for retrying. Measured on 2026-09-16: one client lost on
+// Liam at 35 days, another on Drew at 58 days after TEN attempts across
+// 90 minutes. Live since launch.
+//
+// 31 was not arbitrary — it matched every calendar's allowBookingFor when
+// it was written. Lionel's is still 31; the other eight are now 61. That
+// is exactly why this is not hardcoded per-barber here: GHL is the
+// authority. The widget can only ever offer slots GHL returned, and GHL
+// self-limits each calendar by its own allowBookingFor, so this constant
+// only has to be a sane outer bound that matches what we display.
+const BOOKING_HORIZON_DAYS = 60;
+
 const SERVICE_ORDER = ["haircut", "haircut-beard", "beard", "hot-towel"];
 
 function getBarber(slug) {
@@ -166,6 +185,7 @@ function durationMinutes(barberSlug, serviceSlug) {
 
 module.exports = {
   BARBERS,
+  BOOKING_HORIZON_DAYS,
   SERVICES,
   SERVICE_ORDER,
   getBarber,

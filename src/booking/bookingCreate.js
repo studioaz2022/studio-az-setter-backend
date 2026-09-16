@@ -20,6 +20,7 @@ const {
   getBarber,
   serviceOffered,
   durationMinutes,
+  BOOKING_HORIZON_DAYS,
 } = require("./barberDirectory");
 const { logBookingAttempt } = require("./bookingAudit");
 const { depositFor, formatCents } = require("./depositConfig");
@@ -42,7 +43,8 @@ const { recordGalleryConversion } = require("../barberGallery/galleryConversions
 
 const LOCATION_ID = process.env.GHL_BARBER_LOCATION_ID;
 const SHOP_ADDRESS = "333 Washington Ave N, Suite 100";
-const MAX_BOOKAHEAD_DAYS = 31; // matches GHL calendar allowBookingFor
+// Shared with the read path so the widget can never offer a slot this
+// rejects. See BOOKING_HORIZON_DAYS in barberDirectory.js.
 
 // The hairstyle photo rides along as a data URL in the JSON body. The widget
 // downscales before sending; this is the backstop, not the expected size.
@@ -217,7 +219,7 @@ function validateBody(body) {
   if (!Number.isFinite(slotMs)) errors.push("invalid slot time");
   else {
     if (slotMs <= Date.now()) errors.push("slot is in the past");
-    if (slotMs > Date.now() + MAX_BOOKAHEAD_DAYS * 24 * 3600 * 1000) errors.push("slot too far out");
+    if (slotMs > Date.now() + BOOKING_HORIZON_DAYS * 24 * 3600 * 1000) errors.push("slot too far out");
   }
   if (!body.turnstileToken) errors.push("missing captcha token");
 

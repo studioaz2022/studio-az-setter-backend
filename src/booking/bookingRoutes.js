@@ -29,6 +29,7 @@ const {
   eligibleBarbers,
   durationMinutes,
   serviceNote,
+  BOOKING_HORIZON_DAYS,
 } = require("./barberDirectory");
 const { addOnsForBarber } = require("./bookingFields");
 const { depositFor } = require("./depositConfig");
@@ -42,7 +43,7 @@ const supabaseAdmin = createClient(
 
 const SHOP_TZ = "America/Chicago";
 const SLOTS_CACHE_TTL_MS = 60 * 1000; // time-picker needs fresher data than the 15-min "Next:" tiles
-const HORIZON_DAYS = 60; // how far out the widget shows
+const HORIZON_DAYS = BOOKING_HORIZON_DAYS; // one number, shared with create
 const CHUNK_DAYS = 30; // per getSlots call — MUST stay ≤ 31 (GHL hard cap)
 const MAX_RETRIES = 3;
 const RETRY_BASE_MS = 700; // 700 / 1400 / 2800
