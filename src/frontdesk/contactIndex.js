@@ -48,7 +48,7 @@ function toRow(c, locationId) {
 
 /** Upsert a batch. Chunked because a backfill sends thousands. */
 async function upsertContacts(contacts, locationId) {
-  const rows = contacts.map((c) => toRow(c, locationId)).filter(Boolean);
+  const rows = dedupeById(contacts.map((c) => toRow(c, locationId)).filter(Boolean));
   if (!rows.length) return 0;
   let written = 0;
   for (let i = 0; i < rows.length; i += 500) {
@@ -58,6 +58,24 @@ async function upsertContacts(contacts, locationId) {
     written += chunk.length;
   }
   return written;
+}
+
+/**
+ * Collapse repeated ids, keeping the LAST occurrence.
+ *
+ * Postgres rejects an INSERT ... ON CONFLICT DO UPDATE that touches the same
+ * row twice ("cannot affect row a second time"), and that error aborts the
+ * whole statement — so one duplicate id anywhere in a 500-row chunk throws
+ * away the chunk, the rest of the upsert, and the delete pass behind it. GHL
+ * hands us duplicates routinely: paging a list that is being edited underneath
+ * us will show the same contact on two pages. Seen live 2026-09-16 15:21.
+ *
+ * Last wins because later pages are read later, so they carry the newer copy.
+ */
+function dedupeById(rows) {
+  const byId = new Map();
+  for (const r of rows) byId.set(r.id, r);
+  return [...byId.values()];
 }
 
 /**
@@ -108,32 +126,44 @@ async function reconcileLocation({ sdk, locationId, dryRun = false }) {
   const live = await fetchAllFromGhl(sdk, locationId);
   const liveIds = new Set(live.map((c) => c.id).filter(Boolean));
 
-  const { count: heldBefore } = await supabase
-    .from(TABLE)
-    .select("*", { count: "exact", head: true })
-    .eq("location_id", locationId);
+  // One read serves both halves: deciding what changed, and deciding what is
+  // gone. It has to be paginated — see fetchHeldRows.
+  const heldRows = await fetchHeldRows(locationId);
+  const held = heldRows.length;
+  const heldById = new Map(heldRows.map((r) => [r.id, r]));
 
   // Guard: if the fetch came back far smaller than what we already hold, it
   // is far likelier that GHL paged badly than that most clients vanished.
-  const held = heldBefore || 0;
   const suspicious = held > 100 && liveIds.size < held * 0.5;
   if (suspicious) {
     console.warn(
       `[contactIndex] refusing to reconcile ${locationId}: GHL returned ${liveIds.size} but we hold ${held}. Treating as a partial fetch, not a mass deletion.`
     );
-    const upserted = await upsertContacts(live, locationId);
-    return { upserted, deleted: 0, held, fetched: liveIds.size, refusedDelete: true, ms: Date.now() - started };
+    const { changed } = diffAgainstHeld(live, locationId, heldById);
+    const upserted = dryRun ? 0 : await upsertContacts(changed, locationId);
+    return {
+      upserted,
+      skipped: liveIds.size - changed.length,
+      deleted: 0,
+      held,
+      fetched: liveIds.size,
+      refusedDelete: true,
+      ms: Date.now() - started,
+    };
   }
 
-  const upserted = dryRun ? 0 : await upsertContacts(live, locationId);
+  // Only write rows that actually differ. GHL returns every contact every
+  // sweep, but a handful change between sweeps, and re-upserting ~9k
+  // unchanged rows four times a day was the single largest chunk of this
+  // service's outbound bandwidth (Render bills egress; Hobby includes 5 GB).
+  // The comparison is over every mirrored column rather than ghl_updated_at
+  // alone, because a change GHL declines to timestamp — a follower added, a
+  // tag moved — must still land, or artists quietly stop seeing clients.
+  const { changed } = diffAgainstHeld(live, locationId, heldById);
+  const upserted = dryRun ? 0 : await upsertContacts(changed, locationId);
 
   // Anything we hold that GHL did not return is gone.
-  const { data: ours, error } = await supabase
-    .from(TABLE)
-    .select("id")
-    .eq("location_id", locationId);
-  if (error) throw new Error(`contactIndex read-back: ${error.message}`);
-  const stale = (ours || []).map((r) => r.id).filter((id) => !liveIds.has(id));
+  const stale = heldRows.map((r) => r.id).filter((id) => !liveIds.has(id));
 
   let deleted = 0;
   if (stale.length && !dryRun) {
@@ -146,12 +176,97 @@ async function reconcileLocation({ sdk, locationId, dryRun = false }) {
   }
   return {
     upserted,
+    skipped: liveIds.size - changed.length,
     deleted: dryRun ? stale.length : deleted,
     held,
     fetched: liveIds.size,
     dryRun,
     ms: Date.now() - started,
   };
+}
+
+/** The columns we mirror. `search_text` is generated; `synced_at` is bookkeeping. */
+const MIRRORED_COLUMNS = [
+  "id",
+  "contact_name",
+  "first_name",
+  "last_name",
+  "email",
+  "phone",
+  "assigned_to",
+  "followers",
+  "tags",
+  "ghl_updated_at",
+];
+
+/**
+ * Every row we hold for a location, paginated.
+ *
+ * PostgREST caps a response at 1000 rows and says nothing about it — no error,
+ * no flag, just a short array. The previous read-back took that silently, so
+ * for the barbershop (8.8k contacts) the delete pass only ever considered the
+ * first 1000 and `deleted` was structurally 0. It failed in the safe
+ * direction, which is why it survived: a stale row that should have been
+ * removed simply stayed. Tattoo (~500) is under the cap and was always fine.
+ *
+ * Ordered by id so the pages tile exactly instead of drifting under writes.
+ */
+async function fetchHeldRows(locationId, { pageSize = 1000 } = {}) {
+  const cols = MIRRORED_COLUMNS.join(", ");
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await supabase
+      .from(TABLE)
+      .select(cols)
+      .eq("location_id", locationId)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`contactIndex read-back: ${error.message}`);
+    const page = data || [];
+    out.push(...page);
+    if (page.length < pageSize) break;
+  }
+  return out;
+}
+
+/** timestamptz round-trips as a different string than GHL sent; compare instants. */
+function sameInstant(a, b) {
+  if (!a && !b) return true;
+  if (!a || !b) return false;
+  const ta = Date.parse(a);
+  const tb = Date.parse(b);
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return String(a) === String(b);
+  return ta === tb;
+}
+
+/** text[] comes back as an array; order is not meaningful to us. */
+function sameSet(a, b) {
+  const xa = Array.isArray(a) ? [...a].sort() : [];
+  const xb = Array.isArray(b) ? [...b].sort() : [];
+  return xa.length === xb.length && xa.every((v, i) => v === xb[i]);
+}
+
+/** Does the row we would write differ from the row already there? */
+function rowChanged(next, prev) {
+  if (!prev) return true;
+  if (!sameInstant(next.ghl_updated_at, prev.ghl_updated_at)) return true;
+  if (!sameSet(next.followers, prev.followers)) return true;
+  if (!sameSet(next.tags, prev.tags)) return true;
+  for (const k of ["contact_name", "first_name", "last_name", "email", "phone", "assigned_to"]) {
+    if ((next[k] ?? null) !== (prev[k] ?? null)) return true;
+  }
+  return false;
+}
+
+/** Split GHL's contacts into the ones worth writing. Returns GHL-shaped contacts. */
+function diffAgainstHeld(live, locationId, heldById) {
+  const changed = [];
+  for (const c of live) {
+    const next = toRow(c, locationId);
+    if (!next) continue;
+    if (rowChanged(next, heldById.get(next.id))) changed.push(c);
+  }
+  return { changed };
 }
 
 /** A contact webhook told us something changed. */
@@ -258,8 +373,11 @@ module.exports = {
   TABLE,
   toRow,
   upsertContacts,
+  dedupeById,
   writeThrough,
   fetchAllFromGhl,
+  fetchHeldRows,
+  rowChanged,
   reconcileLocation,
   upsertFromWebhook,
   deleteFromWebhook,

@@ -132,7 +132,8 @@ async function maybeReconcileContacts() {
       if (!sdk || !locationId) continue;
       const r = await reconcileLocation({ sdk, locationId });
       console.log(
-        `[contactIndex] ${name} reconciled — fetched=${r.fetched} upserted=${r.upserted} deleted=${r.deleted}` +
+        `[contactIndex] ${name} reconciled — fetched=${r.fetched} upserted=${r.upserted} ` +
+          `unchanged=${r.skipped} deleted=${r.deleted} held=${r.held} ${r.ms}ms` +
           (r.refusedDelete ? " (REFUSED DELETE: partial fetch)" : "")
       );
     }
