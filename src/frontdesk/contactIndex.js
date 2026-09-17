@@ -93,14 +93,78 @@ async function writeThrough(contact, locationId) {
   }
 }
 
-/** Pull every contact for a location out of GHL, page by page. */
-async function fetchAllFromGhl(sdk, locationId, { pageLimit = 100, maxPages = 200 } = {}) {
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * A 4xx that isn't 429 means the request itself is wrong — wrong location,
+ * dead token — and will be just as wrong next time. Everything else (timeout,
+ * 429, 5xx, socket reset) is worth another go.
+ */
+function isRetryableFetchError(err) {
+  const status = err?.status ?? err?.response?.status ?? err?.statusCode;
+  if (typeof status === "number") return status === 429 || status >= 500;
+  return true; // timeouts and transport errors arrive with no status
+}
+
+/**
+ * Pull every contact for a location out of GHL, page by page.
+ *
+ * RETRIES ARE SAFE HERE BECAUSE THIS IS A READ. The opposite rule governs
+ * createAppointment, where a timeout is never retried — there "Command timed
+ * out" means we stopped waiting, not that GHL stopped, so the appointment may
+ * already exist and a retry would double-book a chair. Nothing is created
+ * here, so a repeated page costs latency and nothing else.
+ *
+ * Worth doing because one bad page discarded the whole sweep: ~89 pages of
+ * work, and with it six hours of delete coverage, since the 6h window is
+ * claimed before the work runs. Observed 2026-09-14 19:11 and 2026-09-17
+ * 19:03, both "Command timed out" on a single page while the rest averaged
+ * well under a second.
+ *
+ * The budget is shared across the whole fetch, not per page, so a brief
+ * hiccup is absorbed while a real GHL outage still fails fast instead of
+ * spending an hour retrying 89 pages in turn.
+ */
+async function fetchAllFromGhl(
+  sdk,
+  locationId,
+  { pageLimit = 100, maxPages = 200, retryBudget = 6, backoffMs = [1000, 3000] } = {}
+) {
   const all = [];
+  let budget = retryBudget;
+
   for (let page = 1; page <= maxPages; page++) {
-    const r = await sdk.contacts.searchContactsAdvanced(
-      { locationId, pageLimit, page },
-      { timeout: 30000 }
-    );
+    let r;
+    for (let attempt = 0; ; attempt++) {
+      try {
+        r = await sdk.contacts.searchContactsAdvanced(
+          { locationId, pageLimit, page },
+          { timeout: 30000 }
+        );
+        if (attempt > 0) {
+          console.log(
+            `[contactIndex] page ${page} recovered after ${attempt} retr${attempt === 1 ? "y" : "ies"}`
+          );
+        }
+        break;
+      } catch (err) {
+        const last = attempt >= backoffMs.length;
+        if (last || budget <= 0 || !isRetryableFetchError(err)) {
+          if (budget <= 0) {
+            throw new Error(
+              `contactIndex fetch: retry budget exhausted at page ${page} (${err.message})`
+            );
+          }
+          throw err;
+        }
+        budget--;
+        console.warn(
+          `[contactIndex] page ${page} failed (${err.message}) — retrying in ${backoffMs[attempt]}ms, ${budget} left in budget`
+        );
+        await sleep(backoffMs[attempt]);
+      }
+    }
+
     const cs = r?.contacts || [];
     all.push(...cs);
     if (cs.length < pageLimit) break;
@@ -376,6 +440,7 @@ module.exports = {
   dedupeById,
   writeThrough,
   fetchAllFromGhl,
+  isRetryableFetchError,
   fetchHeldRows,
   rowChanged,
   reconcileLocation,
